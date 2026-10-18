@@ -114,39 +114,24 @@ class DBAdapter:
             return module_id
 
     def list_courses(self) -> List[Dict[str, Any]]:
-        """Returns courses from Supabase with fallback to local store."""
+        """Returns courses strictly from Supabase."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
                 res = requests.get(
-                    f"{self.supabase_url}/rest/v1/courses?select=id,title,category,thumbnail,instructor_name,total_lessons",
+                    f"{self.supabase_url}/rest/v1/courses?select=*&order=created_at.desc",
                     headers=headers,
-                    timeout=6
+                    timeout=8
                 )
                 if res.ok:
                     courses = res.json()
-                    if courses:
+                    if isinstance(courses, list):
                         return courses
             except Exception as e:
-                print(f"[Supabase] list_courses fallback: {e}")
+                print(f"[Supabase] list_courses error: {e}")
 
-        # Local fallback
-        return [
-            {
-                "id": "course-applied-ai-rag",
-                "title": "Applied AI & GenAI with RAG Architectures",
-                "category": "Artificial Intelligence",
-                "instructor_name": "Prof. AI Systems",
-                "total_lessons": 4
-            },
-            {
-                "id": "course-os-kernel",
-                "title": "Operating Systems: Kernel & CPU Scheduling",
-                "category": "Computer Science",
-                "instructor_name": "Prof. OS Engineering",
-                "total_lessons": 2
-            }
-        ]
+        store = self._read_local_store()
+        return list(store.get("courses", {}).values())
 
     def create_course(
         self,
@@ -356,41 +341,98 @@ class DBAdapter:
         top_k: int = 4
     ) -> List[Dict[str, Any]]:
         """
-        Retrieves top-k most semantically relevant chunks using cosine similarity.
-        Provides sub-millisecond local caching alongside cloud Supabase sync.
+        Retrieves top-k most semantically relevant chunks from Supabase transcript_chunks_vector.
         """
-        store = self._read_local_store()
-        all_chunks = store.get("chunks", [])
+        chunks_to_search = []
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/transcript_chunks_vector?select=*"
+                if lesson_id:
+                    url += f"&lesson_id=eq.{lesson_id}"
+                res = requests.get(url, headers=headers, timeout=8)
+                if res.ok:
+                    chunks_to_search = res.json()
+            except Exception as e:
+                print(f"[Supabase] search_similar_chunks fetch error: {e}")
 
-        if lesson_id:
-            all_chunks = [c for c in all_chunks if c.get("lesson_id") == lesson_id]
+        if not chunks_to_search:
+            store = self._read_local_store()
+            chunks_to_search = store.get("chunks", [])
+            if lesson_id:
+                chunks_to_search = [c for c in chunks_to_search if c.get("lesson_id") == lesson_id]
 
-        if not all_chunks:
+        if not chunks_to_search:
             return []
 
         scored_chunks = []
-        for chunk in all_chunks:
+        for chunk in chunks_to_search:
             emb = chunk.get("embedding", [])
-            score = VectorEmbedder.cosine_similarity(query_embedding, emb)
-            scored_chunks.append({
-                **chunk,
-                "similarity_score": round(score, 4)
-            })
+            if emb:
+                score = VectorEmbedder.cosine_similarity(query_embedding, emb)
+                scored_chunks.append({
+                    **chunk,
+                    "similarity_score": round(score, 4)
+                })
 
-        # Sort descending by similarity
         scored_chunks.sort(key=lambda x: x["similarity_score"], reverse=True)
         return scored_chunks[:top_k]
 
     def get_lesson(self, lesson_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a single lesson from Supabase."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = requests.get(
+                    f"{self.supabase_url}/rest/v1/course_lessons?id=eq.{lesson_id}&select=*",
+                    headers=headers,
+                    timeout=6
+                )
+                if res.ok and len(res.json()) > 0:
+                    return res.json()[0]
+            except Exception as e:
+                print(f"[Supabase] get_lesson error: {e}")
+
         store = self._read_local_store()
         return store.get("lessons", {}).get(lesson_id)
 
     def list_lessons(self) -> List[Dict[str, Any]]:
+        """Retrieves all lessons from Supabase course_lessons."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = requests.get(
+                    f"{self.supabase_url}/rest/v1/course_lessons?select=*&order=created_at.asc",
+                    headers=headers,
+                    timeout=8
+                )
+                if res.ok:
+                    lessons = res.json()
+                    if isinstance(lessons, list):
+                        return lessons
+            except Exception as e:
+                print(f"[Supabase] list_lessons error: {e}")
+
         store = self._read_local_store()
-        lessons = list(store.get("lessons", {}).values())
-        return lessons
+        return list(store.get("lessons", {}).values())
 
     def get_lesson_chunks(self, lesson_id: str) -> List[Dict[str, Any]]:
+        """Retrieves vector transcript chunks directly from Supabase transcript_chunks_vector."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = requests.get(
+                    f"{self.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}&order=chunk_index.asc&select=*",
+                    headers=headers,
+                    timeout=8
+                )
+                if res.ok:
+                    chunks = res.json()
+                    if isinstance(chunks, list):
+                        return chunks
+            except Exception as e:
+                print(f"[Supabase] get_lesson_chunks error: {e}")
+
         store = self._read_local_store()
         return [c for c in store.get("chunks", []) if c.get("lesson_id") == lesson_id]
 
@@ -497,7 +539,7 @@ class DBAdapter:
         return rec
 
     def get_course_resources(self, course_id: str) -> List[Dict[str, Any]]:
-        """Retrieves all resources, notes, assignments for a course from Supabase with local fallback."""
+        """Retrieves all resources, notes, assignments for a course directly from Supabase."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
@@ -507,7 +549,9 @@ class DBAdapter:
                     timeout=8
                 )
                 if res.ok:
-                    return res.json()
+                    resources = res.json()
+                    if isinstance(resources, list):
+                        return resources
             except Exception as e:
                 print(f"[Supabase] get_course_resources warning: {e}")
 
@@ -552,15 +596,13 @@ class DBAdapter:
                             "status": "Completed" if enr.get("is_completed") else "Active"
                         })
 
-                    if students:
-                        store = self._read_local_store()
-                        store["students"] = students
-                        self._write_local_store(store)
-                        return students
+                    store = self._read_local_store()
+                    store["students"] = students
+                    self._write_local_store(store)
+                    return students
             except Exception as e:
-                print(f"[Supabase] get_students live fetch notice: {e}")
+                print(f"[Supabase] get_students live fetch error: {e}")
 
-        # Fallback to local store
         store = self._read_local_store()
         students = store.get("students", [])
         if course_id:

@@ -273,84 +273,22 @@ document.addEventListener("DOMContentLoaded", () => {
   // ==========================================
   // 1C. STUDENTS MANAGEMENT (Tab 2)
   // ==========================================
-  const DEFAULT_STUDENTS = [
-    {
-      id: "std_101",
-      name: "Aarav Sharma",
-      email: "aarav.sharma@university.edu",
-      course_id: "course-applied-ai-rag",
-      course_title: "Applied AI & GenAI with RAG Architectures",
-      enrolled_date: "2026-09-15",
-      progress: "85%",
-      doubts_asked: 6,
-      status: "Active"
-    },
-    {
-      id: "std_102",
-      name: "Priya Patel",
-      email: "priya.p@university.edu",
-      course_id: "course-applied-ai-rag",
-      course_title: "Applied AI & GenAI with RAG Architectures",
-      enrolled_date: "2026-09-18",
-      progress: "92%",
-      doubts_asked: 4,
-      status: "Active"
-    },
-    {
-      id: "std_103",
-      name: "Rohan Verma",
-      email: "rohan.v@university.edu",
-      course_id: "course-cloud-computing-kubernete-5d6b",
-      course_title: "Cloud Computing & Kubernetes Architecture",
-      enrolled_date: "2026-09-20",
-      progress: "60%",
-      doubts_asked: 9,
-      status: "Active"
-    },
-    {
-      id: "std_104",
-      name: "Sneha Gupta",
-      email: "sneha.g@university.edu",
-      course_id: "course-applied-ai-rag",
-      course_title: "Applied AI & GenAI with RAG Architectures",
-      enrolled_date: "2026-10-01",
-      progress: "74%",
-      doubts_asked: 2,
-      status: "Active"
-    },
-    {
-      id: "std_105",
-      name: "Devansh Kulkarni",
-      email: "devansh.k@university.edu",
-      course_id: "course-cloud-computing-kubernete-5d6b",
-      course_title: "Cloud Computing & Kubernetes Architecture",
-      enrolled_date: "2026-10-05",
-      progress: "45%",
-      doubts_asked: 11,
-      status: "Active"
-    }
-  ];
-
   async function loadStudents() {
     try {
       const res = await fetch("/api/students");
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           studentsCache = data;
-        } else if (!studentsCache || studentsCache.length === 0) {
-          studentsCache = [...DEFAULT_STUDENTS];
+        } else {
+          studentsCache = [];
         }
       } else {
-        if (!studentsCache || studentsCache.length === 0) {
-          studentsCache = [...DEFAULT_STUDENTS];
-        }
+        studentsCache = [];
       }
     } catch (err) {
-      console.warn("Could not fetch students from API, using fallback store:", err);
-      if (!studentsCache || studentsCache.length === 0) {
-        studentsCache = [...DEFAULT_STUDENTS];
-      }
+      console.warn("Could not fetch students from API:", err);
+      studentsCache = [];
     }
 
     updateStudentKPIs();
@@ -628,59 +566,14 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const res = await fetch("/api/courses");
       if (res.ok) {
-        coursesCache = await res.json();
+        const data = await res.json();
+        coursesCache = Array.isArray(data) ? data : [];
+      } else {
+        coursesCache = [];
       }
     } catch (err) {
-      console.warn("Could not load courses from backend, using default courses:", err);
-    }
-
-    if (!coursesCache || coursesCache.length === 0) {
-      coursesCache = [
-        {
-          id: "course-nextjs-fullstack",
-          title: "Full-Stack Next.js 16 & Modern Web Mastery",
-          category: "Full-Stack Web Dev",
-          level: "Intermediate",
-          instructor_name: "Course Instructor",
-          tagline: "Modern full-stack web applications with Next.js 16, React server components, and Tailwind.",
-          thumbnail: "https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=800",
-          total_lessons: 24,
-          students_enrolled: 6
-        },
-        {
-          id: "course-applied-ai-rag",
-          title: "Applied AI & GenAI with RAG Architectures",
-          category: "AI & Machine Learning",
-          level: "Intermediate",
-          instructor_name: "Dr. Maya Chen",
-          tagline: "Master high-accuracy vector RAG, Deepgram Nova-2 diarization, and multimodal concept indexing.",
-          thumbnail: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800",
-          total_lessons: 28,
-          students_enrolled: 4
-        },
-        {
-          id: "course-dsa-system-design",
-          title: "Data Structures, Algorithms & System Design Bootcamp",
-          category: "System Design & DSA",
-          level: "Advanced",
-          instructor_name: "Prof. Cloud",
-          tagline: "Enterprise distributed systems, high-scale algorithmic patterns, and architectural trade-offs.",
-          thumbnail: "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800",
-          total_lessons: 34,
-          students_enrolled: 8
-        },
-        {
-          id: "course-cloud-computing-kubernete-5d6b",
-          title: "Cloud Computing & Kubernetes Architecture",
-          category: "DevOps & Cloud",
-          level: "Advanced",
-          instructor_name: "Prof. Cloud",
-          tagline: "Enterprise microservices, container orchestration, and multi-region deployment architectures.",
-          thumbnail: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800",
-          total_lessons: 0,
-          students_enrolled: 2
-        }
-      ];
+      console.warn("Could not load courses from backend:", err);
+      coursesCache = [];
     }
 
     if (badgeCoursesCount) badgeCoursesCount.textContent = coursesCache.length;
@@ -998,18 +891,8 @@ document.addEventListener("DOMContentLoaded", () => {
       console.warn("Could not load all lessons:", e);
     }
 
-    if (!allLessonsCache || allLessonsCache.length === 0) {
-      allLessonsCache = [
-        {
-          id: "sample_os_scheduling",
-          course_id: "course-applied-ai-rag",
-          title: "Operating Systems: CPU Scheduling & Round Robin Algorithm",
-          duration_seconds: 810,
-          video_url: "/uploads/berkeley_cs61c.mp4",
-          total_chunks: 14,
-          total_utterances: 18
-        }
-      ];
+    if (!Array.isArray(allLessonsCache)) {
+      allLessonsCache = [];
     }
 
     if (kpiTotalLectures) kpiTotalLectures.textContent = allLessonsCache.length;
