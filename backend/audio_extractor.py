@@ -1,11 +1,17 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 import imageio_ffmpeg
 
 def get_ffmpeg_binary() -> str:
-    """Returns the bundled ffmpeg binary from imageio-ffmpeg."""
-    return imageio_ffmpeg.get_ffmpeg_exe()
+    """Returns system ffmpeg if available, otherwise bundled imageio-ffmpeg."""
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    try:
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
 
 def extract_and_clean_audio(input_media_path: str, output_wav_path: str = None) -> str:
     """

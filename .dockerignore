@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+__pycache__
+*.pyc
+data/uploads/*.mp4
+data/uploads/*.wav
+data/uploads/*.mp3
+tests/
+scratch/
+*.log
