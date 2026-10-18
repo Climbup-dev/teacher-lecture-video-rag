@@ -48,6 +48,7 @@
 
 ```
 ├── backend/
+│   ├── __init__.py              # Python package definition
 │   ├── app.py                   # FastAPI server & endpoints
 │   ├── config.py                # Environment configuration
 │   ├── audio_extractor.py       # FFmpeg audio pipeline
@@ -63,6 +64,9 @@
 ├── data/
 │   ├── chunks/local_store.json  # Pre-indexed lecture vector database
 │   └── uploads/                 # Video storage directory
+├── tests/
+│   ├── __init__.py              # Test suite initialization
+│   └── test_accuracy.py         # Multi-hour benchmark accuracy test suite
 ├── .env.example                 # Environment variables template
 ├── requirements.txt             # Python dependencies
 └── README.md
@@ -105,6 +109,12 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
 
 Open your browser at `http://127.0.0.1:8000/`.
+
+### 4. Run Accuracy Benchmark Tests
+
+```bash
+python -m unittest tests/test_accuracy.py
+```
 
 ---
 
