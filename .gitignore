@@ -1,0 +1,33 @@
+# Environments and sensitive API Keys
+.env
+.env.local
+.env.*.local
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Large media files (audio/video binaries)
+*.mp3
+*.mp4
+*.wav
+data/uploads/*.mp4
+data/uploads/*.wav
+data/uploads/*.mp3
+data/uploads/*.m4a
+!data/uploads/.gitkeep
+
+# Operating System & IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
