@@ -305,3 +305,97 @@ class DBAdapter:
             self._write_local_store(store)
         except Exception as e:
             print(f"[Warning] Could not record chat message: {e}")
+
+    def upload_course_resource(
+        self,
+        course_id: str,
+        title: str,
+        file_bytes: bytes,
+        filename: str,
+        file_type: str = "pdf",
+        description: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Uploads course resource/note to Supabase Storage ('course_resources')
+        and persists record in Supabase table 'public.course_resources'.
+        """
+        import re
+        import time
+
+        clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        storage_path = f"{course_id}/{int(time.time())}_{clean_name}"
+
+        file_size_mb = f"{round(len(file_bytes) / (1024 * 1024), 2)} MB" if len(file_bytes) > 1024 * 1024 else f"{round(len(file_bytes) / 1024, 1)} KB"
+        download_url = f"{self.supabase_url}/storage/v1/object/public/course_resources/{storage_path}"
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                # 1. Supabase Storage API upload
+                upload_endpoint = f"{self.supabase_url}/storage/v1/object/course_resources/{storage_path}"
+                headers = {
+                    "apikey": self.supabase_key,
+                    "Authorization": f"Bearer {self.supabase_key}",
+                    "Content-Type": "application/octet-stream",
+                    "x-upsert": "true"
+                }
+                upload_res = requests.post(upload_endpoint, headers=headers, data=file_bytes, timeout=30)
+                if not upload_res.ok:
+                    print(f"[Supabase Storage] Note upload HTTP {upload_res.status_code}: {upload_res.text}")
+
+                # 2. Insert into public.course_resources table
+                record_id = str(uuid.uuid4())
+                table_endpoint = f"{self.supabase_url}/rest/v1/course_resources"
+                table_headers = self._get_headers()
+                table_headers["Prefer"] = "return=representation"
+                payload = {
+                    "id": record_id,
+                    "course_id": course_id,
+                    "title": title,
+                    "file_type": file_type.lower(),
+                    "file_size": file_size_mb,
+                    "download_url": download_url,
+                    "description": description or f"Official course material: {title}"
+                }
+                db_res = requests.post(table_endpoint, headers=table_headers, json=payload, timeout=10)
+                if db_res.ok and db_res.json():
+                    return db_res.json()[0]
+            except Exception as e:
+                print(f"[Supabase] upload_course_resource error: {e}")
+
+        # Local fallback
+        store = self._read_local_store()
+        if "resources" not in store:
+            store["resources"] = []
+        rec = {
+            "id": str(uuid.uuid4()),
+            "course_id": course_id,
+            "title": title,
+            "file_type": file_type.lower(),
+            "file_size": file_size_mb,
+            "download_url": download_url,
+            "description": description or f"Course material: {title}",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        }
+        store["resources"].append(rec)
+        self._write_local_store(store)
+        return rec
+
+    def get_course_resources(self, course_id: str) -> List[Dict[str, Any]]:
+        """Retrieves all resources, notes, assignments for a course from Supabase with local fallback."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = requests.get(
+                    f"{self.supabase_url}/rest/v1/course_resources?course_id=eq.{course_id}&order=created_at.desc",
+                    headers=headers,
+                    timeout=8
+                )
+                if res.ok:
+                    return res.json()
+            except Exception as e:
+                print(f"[Supabase] get_course_resources warning: {e}")
+
+        store = self._read_local_store()
+        resources = store.get("resources", [])
+        return [r for r in resources if r.get("course_id") == course_id]
+

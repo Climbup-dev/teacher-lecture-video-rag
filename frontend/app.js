@@ -147,6 +147,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Load courses from Supabase
+  // Load courses from Supabase
   async function loadCourses() {
     if (!courseSelect) return;
     try {
@@ -160,10 +161,140 @@ document.addEventListener("DOMContentLoaded", () => {
         opt.textContent = c.title;
         courseSelect.appendChild(opt);
       });
+      if (courses.length > 0) {
+        loadCourseResources(courseSelect.value);
+      }
     } catch (e) {
       console.warn("Could not load courses:", e);
     }
   }
+
+  // Load Course Resources (Notes, Assignments, Slides) from Supabase
+  async function loadCourseResources(courseId) {
+    const listContainer = document.getElementById("resources-list-container");
+    const countBadge = document.getElementById("resources-count-badge");
+    if (!listContainer) return;
+
+    try {
+      const res = await fetch(`/api/courses/${courseId}/resources`);
+      if (!res.ok) return;
+      const resources = await res.json();
+
+      if (countBadge) {
+        countBadge.textContent = `${resources ? resources.length : 0} Files`;
+      }
+
+      listContainer.innerHTML = "";
+      if (!resources || resources.length === 0) {
+        listContainer.innerHTML = `<div class="empty-state">No notes or assignments uploaded yet for this course. Click "+ Upload Material" above to upload directly to Supabase.</div>`;
+        return;
+      }
+
+      resources.forEach(r => {
+        const card = document.createElement("div");
+        card.className = "resource-card";
+        const typeClass = (r.file_type || "pdf").toLowerCase();
+        
+        card.innerHTML = `
+          <div class="resource-card-left">
+            <div class="resource-icon-badge ${typeClass}">
+              ${typeClass.substring(0, 3)}
+            </div>
+            <div class="resource-meta">
+              <span class="resource-title" title="${r.title}">${r.title}</span>
+              <span class="resource-sub">${r.file_size || "PDF"} &bull; Supabase Storage</span>
+            </div>
+          </div>
+          <a href="${r.download_url}" target="_blank" rel="noopener noreferrer" class="btn-download-resource">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Open
+          </a>
+        `;
+        listContainer.appendChild(card);
+      });
+    } catch (err) {
+      console.warn("Failed to load course resources:", err);
+    }
+  }
+
+  // Course Selector change listener
+  if (courseSelect) {
+    courseSelect.addEventListener("change", (e) => {
+      loadCourseResources(e.target.value);
+    });
+  }
+
+  // Toggle Resource Upload Form
+  const btnToggleResource = document.getElementById("btn-toggle-resource-form");
+  const resourceUploadForm = document.getElementById("resource-upload-form");
+  const resourceStatus = document.getElementById("resource-upload-status");
+
+  if (btnToggleResource && resourceUploadForm) {
+    btnToggleResource.addEventListener("click", () => {
+      if (resourceUploadForm.style.display === "none" || !resourceUploadForm.style.display) {
+        resourceUploadForm.style.display = "block";
+        btnToggleResource.textContent = "✕ Close Form";
+      } else {
+        resourceUploadForm.style.display = "none";
+        btnToggleResource.textContent = "+ Upload Material";
+      }
+    });
+
+    resourceUploadForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const titleInput = document.getElementById("resource-title");
+      const typeSelect = document.getElementById("resource-type");
+      const fileInput = document.getElementById("resource-file");
+      const submitBtn = document.getElementById("btn-submit-resource");
+
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert("Please select a file to upload.");
+        return;
+      }
+
+      const activeCourseId = courseSelect ? courseSelect.value : "course-applied-ai-rag";
+      const formData = new FormData();
+      formData.append("course_id", activeCourseId);
+      formData.append("title", titleInput.value.trim());
+      formData.append("file_type", typeSelect.value);
+      formData.append("file", fileInput.files[0]);
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Uploading to Supabase...";
+      resourceStatus.innerHTML = `<span style="color: var(--accent-cyan);">Uploading file to Supabase Storage ('course_resources')...</span>`;
+
+      try {
+        const res = await fetch("/api/resources/upload", {
+          method: "POST",
+          body: formData
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Upload failed");
+        }
+
+        const data = await res.json();
+        resourceStatus.innerHTML = `<span style="color: var(--accent-emerald);">✓ Successfully uploaded to Supabase Storage & Database!</span>`;
+        titleInput.value = "";
+        fileInput.value = "";
+
+        setTimeout(() => {
+          resourceStatus.innerHTML = "";
+          resourceUploadForm.style.display = "none";
+          btnToggleResource.textContent = "+ Upload Material";
+        }, 2000);
+
+        loadCourseResources(activeCourseId);
+      } catch (err) {
+        resourceStatus.innerHTML = `<span style="color: var(--accent-red);">Upload failed: ${err.message}</span>`;
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Upload to Supabase";
+      }
+    });
+  }
+
 
   // Load Drive files from Google Drive folder (1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d)
   async function loadDriveFiles() {

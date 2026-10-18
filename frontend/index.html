@@ -179,6 +179,57 @@
           <!-- Tab 3: Lecture Study Guide & Key Concepts -->
           <div class="tab-content" id="tab-lecture-notes">
             <div class="study-guide-container" id="study-guide-container">
+              
+              <!-- Direct Notes & Assignment Upload to Supabase Storage -->
+              <div class="resource-upload-card">
+                <div class="resource-upload-header">
+                  <div>
+                    <h4>⚡ Upload Course Notes & Assignment (Supabase Storage)</h4>
+                    <p class="resource-desc">Upload lecture PDFs, assignment guides, and cheatsheets directly into Supabase bucket (<code>course_resources</code>). Instant sync for student portal.</p>
+                  </div>
+                  <button type="button" class="btn btn-sm btn-primary" id="btn-toggle-resource-form">+ Upload Material</button>
+                </div>
+
+                <form id="resource-upload-form" class="resource-form" style="display: none;">
+                  <div class="form-row">
+                    <div class="form-group flex-2">
+                      <label for="resource-title">Material Title:</label>
+                      <input type="text" id="resource-title" class="form-input" placeholder="e.g. Unit 3: CPU Scheduling & Round Robin Cheatsheet.pdf" required>
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="resource-type">Type:</label>
+                      <select id="resource-type" class="form-input styled-dropdown">
+                        <option value="pdf">Lecture Notes (PDF)</option>
+                        <option value="assignment">Assignment / HW</option>
+                        <option value="slides">Slides (PPT/PDF)</option>
+                        <option value="zip">Code / Templates (ZIP)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="form-group flex-2">
+                      <label for="resource-file">Choose File (PDF, DOCX, ZIP, TXT):</label>
+                      <input type="file" id="resource-file" class="form-input" accept=".pdf,.docx,.doc,.zip,.txt,.ppt,.pptx,.ipynb" required>
+                    </div>
+                    <div class="form-group flex-1 form-btn-align">
+                      <button type="submit" class="btn btn-primary" id="btn-submit-resource">Upload to Supabase</button>
+                    </div>
+                  </div>
+                  <div id="resource-upload-status" class="upload-status-text"></div>
+                </form>
+              </div>
+
+              <!-- List of Uploaded Materials for active course -->
+              <div class="guide-section">
+                <div class="section-title-wrap">
+                  <h3>📁 Course Resources & Notes Vault</h3>
+                  <span class="badge-mini" id="resources-count-badge">0 Files</span>
+                </div>
+                <div class="resources-grid" id="resources-list-container">
+                  <div class="empty-state">No notes uploaded yet for this course. Click "+ Upload Material" above.</div>
+                </div>
+              </div>
+
               <div class="guide-section">
                 <h3>📖 Professor's Lecture Summary</h3>
                 <p id="guide-summary">This lecture provides in-depth instruction on CPU Scheduling, Preemptive vs Non-Preemptive algorithms, Context Switching overheads, and Round Robin time quantum dynamics. All concepts are indexed with 768-dim embeddings in Supabase for student Q&A.</p>

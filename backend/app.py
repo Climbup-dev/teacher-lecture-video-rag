@@ -83,6 +83,49 @@ def list_drive_files():
         "files": files
     }
 
+@app.get("/api/courses/{course_id}/resources")
+def get_course_resources(course_id: str):
+    reload_config()
+    return db.get_course_resources(course_id)
+
+@app.post("/api/resources/upload")
+async def upload_resource(
+    file: UploadFile = File(...),
+    course_id: str = Form("course-applied-ai-rag"),
+    title: str = Form(...),
+    file_type: str = Form("pdf"),
+    description: Optional[str] = Form("")
+):
+    """
+    Uploads official teacher lecture notes, assignments, or slides directly
+    into Supabase Storage ('course_resources') and persists record into 'public.course_resources'.
+    """
+    reload_config()
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file uploaded")
+    
+    detected_type = file_type
+    if file.filename:
+        ext = file.filename.split(".")[-1].lower()
+        if ext in ["pdf", "zip", "doc", "docx", "ppt", "pptx", "txt", "ipynb"]:
+            detected_type = ext
+
+    result = db.upload_course_resource(
+        course_id=course_id,
+        title=title,
+        file_bytes=file_bytes,
+        filename=file.filename or "notes.pdf",
+        file_type=detected_type,
+        description=description or f"Official course material for {title}"
+    )
+    return {
+        "status": "success",
+        "message": f"Resource '{title}' uploaded to Supabase Storage & Database successfully.",
+        "resource": result
+    }
+
+
 @app.post("/api/update-config")
 def update_config(req: ConfigUpdateRequest):
     env_lines = []
