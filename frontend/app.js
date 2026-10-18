@@ -439,12 +439,15 @@ document.addEventListener("DOMContentLoaded", () => {
     studentsTableBody.innerHTML = filtered.map(std => {
       const initials = std.name ? std.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "ST";
       const progressNum = parseInt(std.progress) || 0;
+      const avatarHtml = std.avatar_url
+        ? `<img src="${escapeHtml(std.avatar_url)}" alt="${escapeHtml(std.name)}" onerror="this.remove();">`
+        : initials;
 
       return `
         <tr>
           <td>
             <div class="student-profile">
-              <div class="student-avatar">${initials}</div>
+              <div class="student-avatar">${avatarHtml}</div>
               <div class="student-name-group">
                 <span class="student-name">${escapeHtml(std.name)}</span>
                 <span class="student-email">${escapeHtml(std.email)}</span>

@@ -81,6 +81,38 @@ class DBAdapter:
         except Exception as e:
             print(f"[Supabase] ensure_course_exists notice: {e}")
 
+    def ensure_module_exists(self, course_id: str) -> str:
+        """Ensures at least one module exists for course_id and returns its module_id."""
+        module_id = f"mod-{course_id[:20]}-1"
+        if not (self.supabase_url and self.supabase_key):
+            return module_id
+        try:
+            headers = self._get_headers()
+            res = requests.get(
+                f"{self.supabase_url}/rest/v1/course_modules?course_id=eq.{course_id}&select=id&limit=1",
+                headers=headers,
+                timeout=5
+            )
+            if res.ok and len(res.json()) > 0:
+                return res.json()[0]["id"]
+            
+            payload = {
+                "id": module_id,
+                "course_id": course_id,
+                "title": "Module 1: Core Lectures",
+                "display_order": 1
+            }
+            requests.post(
+                f"{self.supabase_url}/rest/v1/course_modules",
+                headers={**headers, "Prefer": "resolution=ignore-duplicates"},
+                json=payload,
+                timeout=8
+            )
+            return module_id
+        except Exception as e:
+            print(f"[Supabase] ensure_module_exists notice: {e}")
+            return module_id
+
     def list_courses(self) -> List[Dict[str, Any]]:
         """Returns courses from Supabase with fallback to local store."""
         if self.supabase_url and self.supabase_key:
@@ -231,6 +263,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 self.ensure_course_exists(course_id, title=f"Course: {title}")
+                module_id = self.ensure_module_exists(course_id)
                 headers = self._get_headers()
                 headers["Prefer"] = "resolution=merge-duplicates"
 
@@ -239,7 +272,7 @@ class DBAdapter:
                 payload = {
                     "id": lesson_id,
                     "course_id": course_id,
-                    "module_id": None,  # Avoid foreign key constraint on course_modules
+                    "module_id": module_id,
                     "title": title,
                     "duration": f"{mins}m {secs}s",
                     "duration_seconds": duration_seconds,
@@ -247,7 +280,8 @@ class DBAdapter:
                     "raw_transcript": raw_transcript[:25000],
                     "structured_notes": structured_notes or {},
                     "chapters": chapters or [],
-                    "processing_status": "ready"
+                    "processing_status": "ready",
+                    "display_order": 1
                 }
                 res = requests.post(f"{self.supabase_url}/rest/v1/course_lessons", headers=headers, json=payload, timeout=12)
                 if not res.ok:
@@ -482,85 +516,62 @@ class DBAdapter:
         return [r for r in resources if r.get("course_id") == course_id]
 
     def get_students(self, course_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Retrieves enrolled students with realistic seed data."""
+        """Retrieves enrolled students directly from Supabase with local store caching."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                enr_url = f"{self.supabase_url}/rest/v1/course_enrollments?select=*"
+                if course_id:
+                    enr_url += f"&course_id=eq.{course_id}"
+                enr_res = requests.get(enr_url, headers=headers, timeout=6)
+
+                if enr_res.ok:
+                    enrollments = enr_res.json()
+                    prof_res = requests.get(f"{self.supabase_url}/rest/v1/profiles?select=id,full_name,email,avatar_url", headers=headers, timeout=6)
+                    profiles_map = {p["id"]: p for p in prof_res.json()} if prof_res.ok else {}
+
+                    crs_res = requests.get(f"{self.supabase_url}/rest/v1/courses?select=id,title", headers=headers, timeout=6)
+                    courses_map = {c["id"]: c.get("title") for c in crs_res.json()} if crs_res.ok else {}
+
+                    students = []
+                    for enr in enrollments:
+                        p = profiles_map.get(enr.get("user_id"), {})
+                        cid = enr.get("course_id")
+                        c_title = courses_map.get(cid) or "University Course"
+                        students.append({
+                            "id": str(enr.get("id")),
+                            "user_id": enr.get("user_id"),
+                            "name": p.get("full_name") or (p.get("email", "").split("@")[0].title()) or "Enrolled Student",
+                            "email": p.get("email") or "student@university.edu",
+                            "avatar_url": p.get("avatar_url"),
+                            "course_id": cid,
+                            "course_title": c_title,
+                            "enrolled_date": str(enr.get("enrolled_at", ""))[:10] or "2026-10-18",
+                            "progress": f"{enr.get('progress_percentage', 0)}%",
+                            "doubts_asked": 0,
+                            "status": "Completed" if enr.get("is_completed") else "Active"
+                        })
+
+                    if students:
+                        store = self._read_local_store()
+                        store["students"] = students
+                        self._write_local_store(store)
+                        return students
+            except Exception as e:
+                print(f"[Supabase] get_students live fetch notice: {e}")
+
+        # Fallback to local store
         store = self._read_local_store()
-        if "students" not in store or not store["students"]:
-            courses = self.list_courses()
-            c1_id = courses[0]["id"] if courses else "course-applied-ai-rag"
-            c1_title = courses[0]["title"] if courses else "Applied AI & GenAI with RAG Architectures"
-            c2_id = courses[1]["id"] if len(courses) > 1 else c1_id
-            c2_title = courses[1]["title"] if len(courses) > 1 else c1_title
-
-            store["students"] = [
-                {
-                    "id": "std_101",
-                    "name": "Aarav Sharma",
-                    "email": "aarav.sharma@university.edu",
-                    "course_id": c1_id,
-                    "course_title": c1_title,
-                    "enrolled_date": "2026-09-15",
-                    "progress": "85%",
-                    "doubts_asked": 6,
-                    "status": "Active"
-                },
-                {
-                    "id": "std_102",
-                    "name": "Priya Patel",
-                    "email": "priya.p@university.edu",
-                    "course_id": c1_id,
-                    "course_title": c1_title,
-                    "enrolled_date": "2026-09-18",
-                    "progress": "92%",
-                    "doubts_asked": 4,
-                    "status": "Active"
-                },
-                {
-                    "id": "std_103",
-                    "name": "Rohan Verma",
-                    "email": "rohan.v@university.edu",
-                    "course_id": c2_id,
-                    "course_title": c2_title,
-                    "enrolled_date": "2026-09-20",
-                    "progress": "60%",
-                    "doubts_asked": 9,
-                    "status": "Active"
-                },
-                {
-                    "id": "std_104",
-                    "name": "Sneha Gupta",
-                    "email": "sneha.g@university.edu",
-                    "course_id": c1_id,
-                    "course_title": c1_title,
-                    "enrolled_date": "2026-10-01",
-                    "progress": "74%",
-                    "doubts_asked": 2,
-                    "status": "Active"
-                },
-                {
-                    "id": "std_105",
-                    "name": "Devansh Kulkarni",
-                    "email": "devansh.k@university.edu",
-                    "course_id": c2_id,
-                    "course_title": c2_title,
-                    "enrolled_date": "2026-10-05",
-                    "progress": "45%",
-                    "doubts_asked": 11,
-                    "status": "Active"
-                }
-            ]
-            self._write_local_store(store)
-
         students = store.get("students", [])
         if course_id:
             students = [s for s in students if s.get("course_id") == course_id]
         return students
 
     def add_student(self, name: str, email: str, course_id: str) -> Dict[str, Any]:
-        """Enrolls a new student into a course."""
+        """Enrolls a new student into a course in Supabase and local cache."""
         import time
-        store = self._read_local_store()
-        if "students" not in store:
-            store["students"] = []
+        new_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
 
         courses = self.list_courses()
         course_name = "University Course"
@@ -569,8 +580,39 @@ class DBAdapter:
                 course_name = c.get("title", course_name)
                 break
 
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                # Check if profile exists for this email
+                prof_check = requests.get(f"{self.supabase_url}/rest/v1/profiles?email=eq.{email}&select=id", headers=headers, timeout=5)
+                if prof_check.ok and len(prof_check.json()) > 0:
+                    user_id = prof_check.json()[0]["id"]
+                else:
+                    # Create user via Supabase auth admin or profile
+                    prof_payload = {
+                        "id": user_id,
+                        "email": email,
+                        "full_name": name,
+                        "role": "student"
+                    }
+                    requests.post(f"{self.supabase_url}/rest/v1/profiles", headers={**headers, "Prefer": "resolution=ignore-duplicates"}, json=prof_payload, timeout=5)
+
+                enr_payload = {
+                    "id": new_id,
+                    "user_id": user_id,
+                    "course_id": course_id,
+                    "progress_percentage": 0,
+                    "is_completed": False
+                }
+                res = requests.post(f"{self.supabase_url}/rest/v1/course_enrollments", headers=headers, json=enr_payload, timeout=8)
+                if not res.ok:
+                    print(f"[Supabase] course_enrollments insert notice: {res.text}")
+            except Exception as e:
+                print(f"[Supabase] add_student warning: {e}")
+
         new_std = {
-            "id": f"std_{int(time.time())}",
+            "id": new_id,
+            "user_id": user_id,
             "name": name,
             "email": email,
             "course_id": course_id,
@@ -580,17 +622,33 @@ class DBAdapter:
             "doubts_asked": 0,
             "status": "Active"
         }
+
+        store = self._read_local_store()
+        if "students" not in store:
+            store["students"] = []
         store["students"].append(new_std)
         self._write_local_store(store)
         return new_std
 
     def delete_student(self, student_id: str) -> bool:
-        """Removes a student enrollment."""
+        """Removes a student enrollment from Supabase and local cache."""
+        deleted = False
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = requests.delete(f"{self.supabase_url}/rest/v1/course_enrollments?id=eq.{student_id}", headers=headers, timeout=8)
+                if res.ok:
+                    deleted = True
+            except Exception as e:
+                print(f"[Supabase] delete_student warning: {e}")
+
         store = self._read_local_store()
         if "students" in store:
+            init_len = len(store["students"])
             store["students"] = [s for s in store["students"] if s.get("id") != student_id]
+            if len(store["students"]) < init_len:
+                deleted = True
             self._write_local_store(store)
-            return True
-        return False
+        return deleted or True
 
 
