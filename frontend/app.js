@@ -1,7 +1,8 @@
-// EduRAG Frontend Application Logic
+// EduRAG Teacher Studio - Frontend Logic
 document.addEventListener("DOMContentLoaded", () => {
   // DOM Elements
   const video = document.getElementById("lecture-video");
+  const driveIframe = document.getElementById("drive-iframe");
   const videoOverlay = document.getElementById("video-overlay");
   const btnOverlayPlay = document.getElementById("btn-overlay-play");
   const ctrlPlayPause = document.getElementById("ctrl-play-pause");
@@ -12,20 +13,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const timeDuration = document.getElementById("time-duration");
   const playbackSpeed = document.getElementById("playback-speed");
   
+  const courseSelect = document.getElementById("course-select");
   const lectureTitle = document.getElementById("lecture-title");
   const lectureCategory = document.getElementById("lecture-category");
   const lectureSelect = document.getElementById("lecture-select");
   const currentConceptName = document.getElementById("current-concept-name");
+  const lectureStorageBadge = document.getElementById("lecture-storage-badge");
   const uttCount = document.getElementById("utt-count");
   const chunkCount = document.getElementById("chunk-count");
   const utterancesContainer = document.getElementById("utterances-container");
   const chunksContainer = document.getElementById("chunks-container");
+  const driveFileList = document.getElementById("drive-file-list");
+  const driveModalList = document.getElementById("drive-modal-list");
+  const driveFilesBadge = document.getElementById("drive-files-badge");
+  const btnRefreshDrive = document.getElementById("btn-refresh-drive");
 
   const chatMessages = document.getElementById("chat-messages");
   const chatForm = document.getElementById("chat-form");
   const chatInput = document.getElementById("chat-input");
   const btnClearChat = document.getElementById("btn-clear-chat");
-  const btnLoadSample = document.getElementById("btn-load-sample");
   const chipsScroll = document.querySelector(".chips-scroll");
 
   // Modals
@@ -43,6 +49,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const selectedFileName = document.getElementById("selected-file-name");
   const stepperProgress = document.getElementById("stepper-progress");
 
+  const driveModal = document.getElementById("drive-modal");
+  const btnOpenDriveModal = document.getElementById("btn-open-drive-modal");
+  const btnCloseDriveModal = document.getElementById("btn-close-drive-modal");
+
   const settingsModal = document.getElementById("settings-modal");
   const btnSettings = document.getElementById("btn-settings");
   const btnCloseSettings = document.getElementById("btn-close-settings");
@@ -55,7 +65,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentChunks = [];
   let isVideoPlaying = false;
   let selectedFile = null;
-  let uploadMode = "file"; // 'file' or 'url'
+  let uploadMode = "file";
+  let driveFilesCache = [];
 
   // Format seconds to HH:MM:SS or MM:SS
   function formatTime(seconds) {
@@ -81,19 +92,33 @@ document.addEventListener("DOMContentLoaded", () => {
     return 0;
   }
 
-  // Check system status & populate lectures dropdown
+  // Initialize System Status, Courses & Lectures
   async function checkStatus() {
     try {
       const res = await fetch("/api/status");
       const data = await res.json();
       
+      const pSup = document.getElementById("pill-supabase");
+      const pDrive = document.getElementById("pill-drive");
       const pDeep = document.getElementById("pill-deepgram");
-      const pGem = document.getElementById("pill-gemini");
       const pVec = document.getElementById("pill-vector");
 
-      if (data.deepgram_configured) pDeep.classList.add("active"); else pDeep.classList.remove("active");
-      if (data.gemini_configured) pGem.classList.add("active"); else pGem.classList.remove("active");
-      pVec.classList.add("active");
+      if (pSup) {
+        if (data.supabase_configured) pSup.classList.add("active"); else pSup.classList.remove("active");
+      }
+      if (pDrive) {
+        if (data.google_drive_configured) pDrive.classList.add("active"); else pDrive.classList.remove("active");
+      }
+      if (pDeep) {
+        if (data.deepgram_configured) pDeep.classList.add("active"); else pDeep.classList.remove("active");
+      }
+      if (pVec) pVec.classList.add("active");
+
+      // Load Courses from Supabase
+      loadCourses();
+
+      // Load Drive Files
+      loadDriveFiles();
 
       // Populate lecture selector dropdown
       const lessonsRes = await fetch("/api/lessons");
@@ -101,7 +126,6 @@ document.addEventListener("DOMContentLoaded", () => {
       
       lectureSelect.innerHTML = "";
       if (lessons && lessons.length > 0) {
-        // Filter out empty lessons if any
         const validLessons = lessons.filter(l => (l.utterances && l.utterances.length > 0) || l.title);
         validLessons.forEach(l => {
           const opt = document.createElement("option");
@@ -111,7 +135,6 @@ document.addEventListener("DOMContentLoaded", () => {
           lectureSelect.appendChild(opt);
         });
 
-        // Default to 3-hour masterclass or first valid lesson
         const preferred = validLessons.find(l => l.id === "masterclass_os_3hours") || validLessons.find(l => l.id === "online_lecture_real") || validLessons[0];
         lectureSelect.value = preferred.id;
         loadLesson(preferred.id);
@@ -121,6 +144,164 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       console.warn("Status check failed:", err);
     }
+  }
+
+  // Load courses from Supabase
+  async function loadCourses() {
+    if (!courseSelect) return;
+    try {
+      const res = await fetch("/api/courses");
+      if (!res.ok) return;
+      const courses = await res.json();
+      courseSelect.innerHTML = "";
+      courses.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.title;
+        courseSelect.appendChild(opt);
+      });
+    } catch (e) {
+      console.warn("Could not load courses:", e);
+    }
+  }
+
+  // Load Drive files from Google Drive folder (1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d)
+  async function loadDriveFiles() {
+    try {
+      const res = await fetch("/api/drive/files");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.configured) return;
+
+      driveFilesCache = data.files || [];
+      if (driveFilesBadge) driveFilesBadge.textContent = driveFilesCache.length;
+
+      renderDriveFiles(driveFileList, driveFilesCache);
+      renderDriveFiles(driveModalList, driveFilesCache);
+    } catch (e) {
+      console.warn("Could not load Google Drive files:", e);
+    }
+  }
+
+  function renderDriveFiles(container, files) {
+    if (!container) return;
+    container.innerHTML = "";
+    if (!files || files.length === 0) {
+      container.innerHTML = `<div class="empty-state">No files found in Google Drive folder.</div>`;
+      return;
+    }
+
+    files.forEach(f => {
+      const item = document.createElement("div");
+      item.className = "drive-file-item";
+      const sizeMb = f.size ? (parseInt(f.size, 10) / (1024 * 1024)).toFixed(1) : "Unknown";
+      
+      item.innerHTML = `
+        <div class="drive-file-info">
+          <div class="drive-file-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+          </div>
+          <div class="drive-file-text">
+            <span class="drive-file-name" title="${f.name}">${f.name}</span>
+            <span class="drive-file-size">${sizeMb} MB &bull; ${f.mimeType || 'media'}</span>
+          </div>
+        </div>
+        <button class="btn-drive-ingest" data-id="${f.id}" data-name="${f.name}">
+          Ingest for RAG
+        </button>
+      `;
+
+      item.querySelector(".btn-drive-ingest").addEventListener("click", () => {
+        ingestDriveFile(f.id, f.name);
+      });
+
+      container.appendChild(item);
+    });
+  }
+
+  // Ingest video directly from Google Drive
+  async function ingestDriveFile(fileId, fileName) {
+    const title = prompt("Enter lecture title for indexing:", fileName.replace(/\.[^/.]+$/, ""));
+    if (!title) return;
+
+    if (driveModal) driveModal.style.display = "none";
+    if (uploadModal) uploadModal.style.display = "flex";
+    stepperProgress.style.display = "block";
+
+    const step1 = document.getElementById("step-1");
+    const step2 = document.getElementById("step-2");
+    const step3 = document.getElementById("step-3");
+    const step4 = document.getElementById("step-4");
+
+    step1.classList.add("processing");
+    setTimeout(() => {
+      step1.classList.remove("processing"); step1.classList.add("completed");
+      step2.classList.add("processing");
+    }, 2500);
+
+    setTimeout(() => {
+      step2.classList.remove("processing"); step2.classList.add("completed");
+      step3.classList.add("processing");
+    }, 6000);
+
+    setTimeout(() => {
+      step3.classList.remove("processing"); step3.classList.add("completed");
+      step4.classList.add("processing");
+    }, 9500);
+
+    try {
+      const selectedCourseId = courseSelect ? courseSelect.value : "course-applied-ai-rag";
+      const selectedCourseName = courseSelect ? courseSelect.options[courseSelect.selectedIndex].text : "Applied AI & GenAI";
+
+      const res = await fetch("/api/drive/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_id: fileId,
+          title: title,
+          course_id: selectedCourseId,
+          course_name: selectedCourseName
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`Ingestion error: ${err.detail || "Failed to ingest from Drive."}`);
+        stepperProgress.style.display = "none";
+        return;
+      }
+
+      const result = await res.json();
+      step4.classList.remove("processing"); step4.classList.add("completed");
+
+      setTimeout(async () => {
+        uploadModal.style.display = "none";
+        stepperProgress.style.display = "none";
+        
+        // Refresh lecture dropdown
+        const lessonsRes = await fetch("/api/lessons");
+        const lessons = await lessonsRes.json();
+        lectureSelect.innerHTML = "";
+        lessons.forEach(l => {
+          const opt = document.createElement("option");
+          opt.value = l.id;
+          opt.textContent = `${l.title} (${l.utterances ? l.utterances.length : 0} utterances)`;
+          lectureSelect.appendChild(opt);
+        });
+
+        loadLesson(result.lesson_id);
+      }, 1000);
+
+    } catch (e) {
+      alert(`Drive ingestion request error: ${e.message}`);
+      stepperProgress.style.display = "none";
+    }
+  }
+
+  if (btnRefreshDrive) {
+    btnRefreshDrive.addEventListener("click", () => {
+      loadDriveFiles();
+    });
   }
 
   // Change lecture on dropdown selection
@@ -150,11 +331,26 @@ document.addEventListener("DOMContentLoaded", () => {
       timeDuration.textContent = formatTime(durationSec);
       seekBar.max = durationSec;
 
-      // Update video source if real URL is provided
+      // Update video player (Direct video vs Google Drive iframe preview)
       const videoSrc = document.getElementById("video-source");
-      if (videoSrc && lesson.video_url) {
-        videoSrc.src = lesson.video_url;
-        video.load();
+      if (lesson.video_url && lesson.video_url.includes("drive.google.com")) {
+        video.style.display = "none";
+        driveIframe.style.display = "block";
+        driveIframe.src = lesson.video_url;
+        videoOverlay.style.display = "none";
+        if (lectureStorageBadge) {
+          lectureStorageBadge.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg> Stored in Google Drive (Stateless Cloud Server)`;
+        }
+      } else {
+        driveIframe.style.display = "none";
+        video.style.display = "block";
+        if (videoSrc && lesson.video_url) {
+          videoSrc.src = lesson.video_url;
+          video.load();
+        }
+        if (lectureStorageBadge) {
+          lectureStorageBadge.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon></svg> High-Performance Local Stream`;
+        }
       }
 
       // Sync selector dropdown
@@ -169,7 +365,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else if (lesson.id === "online_lecture_real") {
           lectureCategory.textContent = "Distributed Systems & Cryptography";
         } else {
-          lectureCategory.textContent = "Computer Science • 4th Semester";
+          lectureCategory.textContent = "Applied AI & Computer Science";
         }
       }
 
@@ -300,7 +496,6 @@ document.addEventListener("DOMContentLoaded", () => {
         seekVideoTo(chunk.start_seconds);
       });
 
-      // Clicking any hyde query asks it in the chatbot
       card.querySelectorAll(".hyde-query").forEach(li => {
         li.addEventListener("click", () => {
           submitChatQuery(li.textContent.trim());
@@ -313,11 +508,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Seek video and highlight
   function seekVideoTo(seconds) {
-    if (video.duration && !isNaN(video.duration) && video.duration > 0) {
+    if (video.style.display !== "none" && video.duration && !isNaN(video.duration) && video.duration > 0) {
       if (seconds <= video.duration) {
         video.currentTime = seconds;
       } else {
-        // If testing multi-hour lecture with sample video, loop position smoothly
         video.currentTime = seconds % video.duration;
       }
     } else {
@@ -334,7 +528,6 @@ document.addEventListener("DOMContentLoaded", () => {
     let activeUtt = null;
     let activeChunk = null;
 
-    // Check utterances
     document.querySelectorAll(".utterance-item").forEach((el) => {
       const start = parseFloat(el.dataset.start);
       const end = parseFloat(el.dataset.end);
@@ -346,12 +539,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
-    // Auto-scroll active utterance into view smoothly
     if (activeUtt) {
       activeUtt.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
-    // Check chunks for current concept name
     for (const c of currentChunks) {
       if (timeSec >= c.start_seconds && timeSec <= c.end_seconds) {
         activeChunk = c;
@@ -366,19 +557,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Video playback controls
   function playVideo() {
-    video.play().then(() => {
-      isVideoPlaying = true;
-      iconPlay.style.display = "none";
-      iconPause.style.display = "block";
-      videoOverlay.style.display = "none";
-    }).catch(() => {
-      // If autoplay blocked or no real source, simulate video progress timer!
+    if (video.style.display !== "none") {
+      video.play().then(() => {
+        isVideoPlaying = true;
+        iconPlay.style.display = "none";
+        iconPause.style.display = "block";
+        videoOverlay.style.display = "none";
+      }).catch(() => {
+        startSimulationTimer();
+      });
+    } else {
       startSimulationTimer();
-    });
+    }
   }
 
   function pauseVideo() {
-    video.pause();
+    if (video.style.display !== "none") {
+      video.pause();
+    }
     isVideoPlaying = false;
     iconPlay.style.display = "block";
     iconPause.style.display = "none";
@@ -386,7 +582,6 @@ document.addEventListener("DOMContentLoaded", () => {
     stopSimulationTimer();
   }
 
-  // Simulation timer in case an uploaded video doesn't have an MP4 stream yet
   let simTimer = null;
   function startSimulationTimer() {
     if (simTimer) return;
@@ -447,14 +642,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Quick chips
-  document.querySelectorAll(".chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      const q = chip.dataset.query;
-      submitChatQuery(q);
-    });
-  });
-
   // Chat Submission
   async function submitChatQuery(query) {
     if (!query || !query.trim()) return;
@@ -463,11 +650,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Append student message
     appendMessage("user", query);
     chatInput.value = "";
 
-    // Show temporary AI thinking placeholder
     const thinkingId = appendThinkingBubble();
 
     try {
@@ -510,7 +695,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnClearChat.addEventListener("click", () => {
     chatMessages.innerHTML = "";
-    appendMessage("ai", "Chat cleared. Ask any doubt about this lecture!");
+    appendMessage("ai", "Chat cleared. Ask or test any student doubts for this lecture!");
   });
 
   function appendMessage(sender, text, evidence = null) {
@@ -527,11 +712,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const bubble = document.createElement("div");
     bubble.className = "msg-bubble";
 
-    // Format Markdown and Clickable Timestamp Badges
     const formattedHtml = formatChatMarkdown(text);
     bubble.innerHTML = formattedHtml;
 
-    // Attach click handlers to any timestamp buttons inside the answer
     bubble.querySelectorAll(".ts-badge").forEach(badge => {
       badge.addEventListener("click", () => {
         const targetSec = parseTimestamp(badge.dataset.time);
@@ -543,13 +726,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     content.appendChild(bubble);
 
-    // If evidence chunks returned, show expandable drawer
     if (evidence && evidence.length > 0) {
       const evidenceCard = document.createElement("div");
       evidenceCard.className = "evidence-card";
       evidenceCard.innerHTML = `
         <div class="evidence-header">
-          <span>📚 Retrieved Lecture Evidence (${evidence.length} Chunks)</span>
+          <span>📚 Ground Truth Evidence (${evidence.length} Chunks in Supabase)</span>
           <span class="evidence-toggle">▾</span>
         </div>
         <div class="evidence-list">
@@ -613,15 +795,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function formatChatMarkdown(text) {
-    // 1. Replace [HH:MM:SS] or [MM:SS] or [MMM:SS] with interactive timestamp badge
     let html = text.replace(/\[(\d{1,2}:\d{2}:\d{2}|\d{1,3}:\d{2})\]/g, (match, p1) => {
       return `<button class="ts-badge" data-time="${p1}">[${p1}]</button>`;
     });
 
-    // 2. Bold text **word**
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-    // 3. Newlines to paragraphs
     html = html.split('\n\n').map(p => {
       if (p.startsWith('###')) {
         return `<h4 style="margin: 8px 0 4px; color: var(--accent-cyan);">${p.replace('###', '')}</h4>`;
@@ -636,30 +815,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return html;
   }
 
-  // Load OS Sample lecture
-  btnLoadSample.addEventListener("click", async () => {
-    await loadSampleLecture();
-  });
-
-  async function loadSampleLecture() {
-    btnLoadSample.disabled = true;
-    btnLoadSample.textContent = "Loading Sample...";
-    try {
-      const res = await fetch("/api/load-sample", { method: "POST" });
-      const data = await res.json();
-      await loadLesson(data.lesson_id);
-    } catch (err) {
-      console.error("Failed to load sample:", err);
-    } finally {
-      btnLoadSample.disabled = false;
-      btnLoadSample.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-        Load OS Lecture Sample
-      `;
-    }
-  }
-
-  // Upload Modal handling
+  // Modals handling
   btnOpenUpload.addEventListener("click", () => {
     uploadModal.style.display = "flex";
   });
@@ -670,7 +826,18 @@ document.addEventListener("DOMContentLoaded", () => {
     uploadModal.style.display = "none";
   });
 
-  // Source Mode Toggle (File vs Online URL)
+  if (btnOpenDriveModal) {
+    btnOpenDriveModal.addEventListener("click", () => {
+      driveModal.style.display = "flex";
+      loadDriveFiles();
+    });
+  }
+  if (btnCloseDriveModal) {
+    btnCloseDriveModal.addEventListener("click", () => {
+      driveModal.style.display = "none";
+    });
+  }
+
   btnModeFile.addEventListener("click", () => {
     uploadMode = "file";
     btnModeFile.classList.add("active");
@@ -687,7 +854,6 @@ document.addEventListener("DOMContentLoaded", () => {
     urlContainer.style.display = "block";
   });
 
-  // Preset Buttons for 1-Click Online Testing
   const preset1hr = document.getElementById("preset-1hr");
   const preset2hr = document.getElementById("preset-2hr");
 
@@ -735,9 +901,12 @@ document.addEventListener("DOMContentLoaded", () => {
     
     const title = document.getElementById("lecture-name-input").value;
     const course = document.getElementById("course-name-input").value;
+    const selectedCourseId = courseSelect ? courseSelect.value : "course-applied-ai-rag";
+
     const formData = new FormData();
     formData.append("title", title);
     formData.append("course_name", course);
+    formData.append("course_id", selectedCourseId);
 
     if (uploadMode === "file") {
       if (!selectedFile) {
@@ -754,7 +923,6 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("media_url", urlVal);
     }
 
-    // Show stepper
     stepperProgress.style.display = "block";
     const step1 = document.getElementById("step-1");
     const step2 = document.getElementById("step-2");
@@ -763,7 +931,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     step1.classList.add("processing");
 
-    // Advance stepper visual states as stages proceed
     setTimeout(() => {
       step1.classList.remove("processing"); step1.classList.add("completed");
       step2.classList.add("processing");
@@ -795,11 +962,23 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await res.json();
       step4.classList.remove("processing"); step4.classList.add("completed");
 
-      setTimeout(() => {
+      setTimeout(async () => {
         uploadModal.style.display = "none";
         stepperProgress.style.display = "none";
         selectedFile = null;
-        selectedFileName.textContent = "Supports MP4, WebM, MKV, MP3, WAV (up to 3 hours)";
+        selectedFileName.textContent = "Supports MP4, WebM, MKV, MP3, WAV (Direct to Google Drive)";
+        
+        // Refresh lectures list
+        const lessonsRes = await fetch("/api/lessons");
+        const lessons = await lessonsRes.json();
+        lectureSelect.innerHTML = "";
+        lessons.forEach(l => {
+          const opt = document.createElement("option");
+          opt.value = l.id;
+          opt.textContent = `${l.title} (${l.utterances ? l.utterances.length : 0} utterances)`;
+          lectureSelect.appendChild(opt);
+        });
+
         loadLesson(result.lesson_id);
       }, 1000);
 
@@ -824,14 +1003,10 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     const deepKey = document.getElementById("set-deepgram").value;
     const gemKey = document.getElementById("set-gemini").value;
-    const supUrl = document.getElementById("set-supabase-url").value;
-    const supKey = document.getElementById("set-supabase-key").value;
 
     const payload = {};
     if (deepKey) payload.deepgram_key = deepKey;
     if (gemKey) payload.gemini_key = gemKey;
-    if (supUrl) payload.supabase_url = supUrl;
-    if (supKey) payload.supabase_key = supKey;
 
     try {
       const res = await fetch("/api/update-config", {

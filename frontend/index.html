@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EduRAG | High-Quality Lecture Video RAG & AI Assistant</title>
+  <title>EduRAG Instructor Studio | High-Quality Lecture Video RAG</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -13,7 +13,7 @@
   <!-- App Container -->
   <div class="app-container">
     
-    <!-- Top Navbar -->
+    <!-- Top Navbar: Teacher Studio -->
     <header class="navbar">
       <div class="nav-left">
         <div class="logo-icon">
@@ -23,45 +23,61 @@
           </svg>
         </div>
         <div class="logo-text">
-          <h1>EduRAG <span class="badge-pro">Studio</span></h1>
-          <p class="tagline">Teacher Uploads Once &bull; 1,000+ Students &bull; High-Quality Lecture RAG</p>
+          <h1>EduRAG <span class="badge-pro">Teacher Studio</span></h1>
+          <p class="tagline">Professor Course Operations &bull; Stateless Google Drive Ingest &bull; 768-dim Supabase RAG</p>
         </div>
       </div>
 
       <div class="nav-center">
-        <div class="lecture-selector-wrap">
-          <label for="lecture-select" class="selector-label">
+        <!-- Course Selector -->
+        <div class="selector-wrap">
+          <label for="course-select" class="selector-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-            Active Lecture:
+            Course:
           </label>
-          <select id="lecture-select" class="lecture-select-dropdown">
+          <select id="course-select" class="styled-dropdown">
+            <option value="course-applied-ai-rag">Applied AI & GenAI with RAG Architectures</option>
+          </select>
+        </div>
+
+        <!-- Lecture Selector -->
+        <div class="selector-wrap">
+          <label for="lecture-select" class="selector-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            Lecture:
+          </label>
+          <select id="lecture-select" class="styled-dropdown">
             <option value="">Loading lectures...</option>
           </select>
         </div>
 
+        <!-- Live System Cloud Status Badges -->
         <div class="system-pills">
-          <span class="status-pill active" id="pill-deepgram">
-            <span class="dot"></span> Deepgram Nova-2
+          <span class="status-pill active" id="pill-supabase" title="Connected to Supabase PostgreSQL & pgvector">
+            <span class="dot"></span> Supabase Cloud
           </span>
-          <span class="status-pill active" id="pill-gemini">
-            <span class="dot"></span> Gemini 2.5 Flash
+          <span class="status-pill active" id="pill-drive" title="Google Drive Video Vault Active (Folder: 1VDrNYA5...)">
+            <span class="dot"></span> Google Drive Vault
           </span>
-          <span class="status-pill active" id="pill-vector">
-            <span class="dot"></span> 768-dim Vector Store
+          <span class="status-pill active" id="pill-deepgram" title="Deepgram Nova-2 Diarization">
+            <span class="dot"></span> Nova-2 STT
+          </span>
+          <span class="status-pill active" id="pill-vector" title="Gemini 768-dim Vector Embeddings">
+            <span class="dot"></span> 768-dim Vectors
           </span>
         </div>
       </div>
 
       <div class="nav-right">
-        <button class="btn btn-secondary" id="btn-load-sample">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-          Load OS Lecture Sample
+        <button class="btn btn-secondary" id="btn-open-drive-modal" title="Browse and ingest videos from Google Drive Folder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+          Drive Vault (<span id="drive-files-badge">50</span>)
         </button>
         <button class="btn btn-primary" id="btn-open-upload">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-          Upload Lecture
+          Upload to Drive & Index
         </button>
-        <button class="btn btn-icon" id="btn-settings" title="Settings">
+        <button class="btn btn-icon" id="btn-settings" title="Cloud Settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         </button>
       </div>
@@ -70,14 +86,19 @@
     <!-- Main Workspace -->
     <main class="main-workspace">
       
-      <!-- Left Column: Video Player & Transcripts / Chunks -->
+      <!-- Left Column: Video Player & Transcripts / Chunks / Teacher Studio -->
       <section class="stage-column">
         <div class="video-card glass-panel">
-          <div class="video-container">
+          
+          <!-- Teacher Video Stage: Supports HTML5 & Google Drive Stream -->
+          <div class="video-container" id="video-wrapper">
             <video id="lecture-video" preload="metadata" playsinline poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'><rect width='800' height='450' fill='%230f141c'/><circle cx='400' cy='225' r='48' fill='%236366f1' fill-opacity='0.2'/><polygon points='390,205 425,225 390,245' fill='%23818cf8'/><text x='400' y='310' font-family='sans-serif' font-size='16' fill='%2394a3b8' text-anchor='middle'>Load or Select a Lecture to Play</text></svg>">
               <source id="video-source" src="" type="video/mp4">
               Your browser does not support HTML5 video.
             </video>
+            
+            <iframe id="drive-iframe" src="" style="display: none; width: 100%; height: 100%; border: none;" allow="autoplay" allowfullscreen></iframe>
+
             <div class="video-overlay" id="video-overlay">
               <button class="btn-big-play" id="btn-overlay-play">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
@@ -85,7 +106,7 @@
             </div>
           </div>
 
-          <!-- Video Custom Bar -->
+          <!-- Video Custom Controls Bar -->
           <div class="player-controls">
             <button class="ctrl-btn" id="ctrl-play-pause" title="Play/Pause">
               <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
@@ -104,26 +125,40 @@
             </div>
           </div>
 
-          <!-- Lecture Header info -->
+          <!-- Lecture Header info & Stateless Storage Badge -->
           <div class="lecture-meta">
-            <div class="lecture-badge" id="lecture-category">Computer Science</div>
-            <h2 class="lecture-title" id="lecture-title">Operating Systems: CPU Scheduling & Round Robin</h2>
+            <div class="lecture-meta-top">
+              <div class="lecture-badge" id="lecture-category">Applied AI & Machine Learning</div>
+              <div class="storage-badge" id="lecture-storage-badge">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+                Stored in Google Drive (Stateless Cloud Server)
+              </div>
+            </div>
+            <h2 class="lecture-title" id="lecture-title">Applied AI: Vector RAG Architectures</h2>
             <div class="current-concept-pill" id="current-concept-pill">
               <span class="sparkle">✦</span> Current Concept: <strong id="current-concept-name">00:00 - Introduction to Process Scheduling</strong>
             </div>
           </div>
         </div>
 
-        <!-- Tabbed Transcript & RAG Chunks View -->
+        <!-- Teacher Studio 4-Tab Panel -->
         <div class="transcript-card glass-panel">
           <div class="tab-header">
             <button class="tab-btn active" data-tab="live-transcript">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-              Synced Spoken Utterances (<span id="utt-count">0</span>)
+              Diarized Speech (<span id="utt-count">0</span>)
             </button>
             <button class="tab-btn" data-tab="rag-chunks">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
-              Indexed RAG Chunks (<span id="chunk-count">0</span>)
+              Semantic Chunks & HyDE (<span id="chunk-count">0</span>)
+            </button>
+            <button class="tab-btn" data-tab="lecture-notes">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+              Study Guide & Summary
+            </button>
+            <button class="tab-btn" data-tab="drive-vault-tab">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+              Drive Video Vault
             </button>
           </div>
 
@@ -140,10 +175,45 @@
               <div class="empty-state">Chunks will appear here after lecture processing.</div>
             </div>
           </div>
+
+          <!-- Tab 3: Lecture Study Guide & Key Concepts -->
+          <div class="tab-content" id="tab-lecture-notes">
+            <div class="study-guide-container" id="study-guide-container">
+              <div class="guide-section">
+                <h3>📖 Professor's Lecture Summary</h3>
+                <p id="guide-summary">This lecture provides in-depth instruction on CPU Scheduling, Preemptive vs Non-Preemptive algorithms, Context Switching overheads, and Round Robin time quantum dynamics. All concepts are indexed with 768-dim embeddings in Supabase for student Q&A.</p>
+              </div>
+              <div class="guide-section">
+                <h3>🎯 Core Formulas & Rules</h3>
+                <ul class="guide-list" id="guide-formulas">
+                  <li><strong>Turnaround Time (TAT):</strong> Completion Time &minus; Arrival Time</li>
+                  <li><strong>Waiting Time (WT):</strong> Turnaround Time &minus; Burst Time</li>
+                  <li><strong>80% Rule of Thumb:</strong> 80% of CPU bursts should be shorter than the Round Robin time quantum</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 4: Google Drive Video Vault Browser -->
+          <div class="tab-content" id="tab-drive-vault-tab">
+            <div class="drive-vault-wrapper">
+              <div class="drive-vault-header">
+                <div>
+                  <h4>Google Drive Connected Folder</h4>
+                  <p class="drive-folder-text">Folder ID: <code>1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d</code></p>
+                </div>
+                <button class="btn btn-sm btn-secondary" id="btn-refresh-drive">Refresh Files</button>
+              </div>
+              <div class="drive-file-list" id="drive-file-list">
+                <div class="empty-state">Loading Drive files...</div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </section>
 
-      <!-- Right Column: High-Quality RAG AI Chatbot -->
+      <!-- Right Column: AI Teaching Assistant Simulator -->
       <section class="chat-column">
         <div class="chat-card glass-panel">
           <div class="chat-header">
@@ -152,18 +222,21 @@
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
               </div>
               <div>
-                <h3 class="bot-title">Lecture Teaching Assistant</h3>
+                <h3 class="bot-title">AI Teaching Assistant Simulator</h3>
                 <p class="bot-status">
-                  <span class="online-indicator"></span> Grounded in Indexed Video Transcripts
+                  <span class="online-indicator"></span> Grounded in Indexed Video Transcripts (Supabase RAG)
                 </p>
               </div>
             </div>
-            <button class="btn btn-sm btn-ghost" id="btn-clear-chat" title="Clear Chat">Clear</button>
+            <div class="chat-header-actions">
+              <span class="badge-verified">Teacher Verified</span>
+              <button class="btn btn-sm btn-ghost" id="btn-clear-chat" title="Clear Chat">Clear</button>
+            </div>
           </div>
 
           <!-- Quick Doubt Chips -->
           <div class="quick-chips-wrapper">
-            <span class="chips-label">Popular Doubts:</span>
+            <span class="chips-label">Professor Test Doubts:</span>
             <div class="chips-scroll">
               <button class="chip" data-query="Explain Round Robin scheduling with time quantum.">Round Robin & Time Quantum</button>
               <button class="chip" data-query="What is the difference between preemptive and non-preemptive scheduling?">Preemptive vs Non-Preemptive</button>
@@ -178,8 +251,7 @@
               <div class="msg-avatar">AI</div>
               <div class="msg-content">
                 <div class="msg-bubble">
-                  <p>Hello! I am your AI Teaching Assistant for this lecture. I have indexed the professor's spoken words, definitions, and equations.</p>
-                  <p>Ask me any doubt! I will answer with deep accuracy and <strong>clickable video timestamps</strong> so you can jump right to that moment in class.</p>
+                  <p>Welcome, Professor! This is your <strong>AI Teaching Assistant Simulator</strong>. You can test any student questions here to verify that the RAG model returns exact explanations with <strong>clickable timestamp badges</strong> grounded in your lecture words.</p>
                 </div>
               </div>
             </div>
@@ -187,7 +259,7 @@
 
           <!-- Chat Input -->
           <form class="chat-input-bar" id="chat-form">
-            <textarea id="chat-input" rows="1" placeholder="Ask any question about this lecture..." required></textarea>
+            <textarea id="chat-input" rows="1" placeholder="Test a student doubt on this lecture..." required></textarea>
             <button type="submit" class="btn-send" id="btn-send" title="Send Question">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
             </button>
@@ -200,13 +272,16 @@
     <div class="modal-backdrop" id="upload-modal" style="display: none;">
       <div class="modal-dialog glass-panel">
         <div class="modal-header">
-          <h2>Upload & Process Lecture Video</h2>
+          <h2>Upload Lecture Video to Google Drive</h2>
           <button class="btn-close" id="btn-close-modal">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="modal-desc">
-            Upload any lecture video or audio (MP4, MKV, WebM, MP3, WAV). Our pipeline extracts audio, transcribes with Deepgram Nova-2, enriches with Gemini 2.5 Flash, and creates 768-dim vector embeddings for instant student Q&A.
-          </p>
+          <div class="stateless-callout">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            <div>
+              <strong>Stateless Video Architecture:</strong> Video is directly uploaded to your Google Drive folder (<code>1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d</code>). The Cloud Run server is purely used for the RAG pipeline and does not consume heavy video storage!
+            </div>
+          </div>
 
           <form id="upload-form">
             <div class="form-group">
@@ -215,20 +290,20 @@
             </div>
 
             <div class="form-group">
-              <label for="course-name-input">Course / Subject Name</label>
-              <input type="text" id="course-name-input" class="form-input" placeholder="e.g. CS-301 Operating Systems" value="CS-302 Computer Systems" required>
+              <label for="course-name-input">Course Assignment</label>
+              <input type="text" id="course-name-input" class="form-input" placeholder="e.g. CS-301 Operating Systems" value="Applied AI & GenAI with RAG Architectures" required>
             </div>
 
             <div class="source-mode-toggle">
-              <button type="button" class="mode-btn active" id="btn-mode-file">📁 Upload File</button>
-              <button type="button" class="mode-btn" id="btn-mode-url">🌐 Online URL (1 to 3 Hours)</button>
+              <button type="button" class="mode-btn active" id="btn-mode-file">📁 Upload to Google Drive</button>
+              <button type="button" class="mode-btn" id="btn-mode-url">🌐 Direct URL Stream</button>
             </div>
 
             <!-- Mode 1: Local File Drop Zone -->
             <div class="drop-zone" id="drop-zone">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
               <p class="drop-text">Drag & drop lecture video/audio here or <span class="browse-link">browse file</span></p>
-              <span class="file-info" id="selected-file-name">Supports MP4, WebM, MKV, MP3, WAV (up to 3 hours)</span>
+              <span class="file-info" id="selected-file-name">Supports MP4, WebM, MKV, MP3, WAV (Direct to Google Drive)</span>
               <input type="file" id="file-input" accept="video/*,audio/*" style="display: none;">
             </div>
 
@@ -253,29 +328,29 @@
               <div class="step-item" id="step-1">
                 <div class="step-icon"><span class="step-num">1</span></div>
                 <div class="step-details">
-                  <strong>FFmpeg Audio Extraction</strong>
-                  <p>Extracting 16kHz mono audio & stripping noise</p>
+                  <strong>Direct Upload to Google Drive</strong>
+                  <p>Saving video file safely to Drive vault without burdening server disk</p>
                 </div>
               </div>
               <div class="step-item" id="step-2">
                 <div class="step-icon"><span class="step-num">2</span></div>
                 <div class="step-details">
-                  <strong>Deepgram Nova-2 Transcription</strong>
-                  <p>Diarizing speakers (Teacher vs Students) & timestamps</p>
+                  <strong>Deepgram Nova-2 Audio Transcription</strong>
+                  <p>Diarizing teacher vs student speech and sub-second word timestamps</p>
                 </div>
               </div>
               <div class="step-item" id="step-3">
                 <div class="step-icon"><span class="step-num">3</span></div>
                 <div class="step-details">
                   <strong>Gemini 2.5 Flash Concept Chunking</strong>
-                  <p>Injecting hierarchical context & cleaning speech disfluency</p>
+                  <p>Partitioning by semantic transitions & cleaning speech disfluency</p>
                 </div>
               </div>
               <div class="step-item" id="step-4">
                 <div class="step-icon"><span class="step-num">4</span></div>
                 <div class="step-details">
-                  <strong>Reverse-Question Indexing & 768-dim Vector Embeddings</strong>
-                  <p>Generating hypothetical student queries & saving to vector DB</p>
+                  <strong>Supabase Vector Store Sync</strong>
+                  <p>Writing 768-dim embeddings into <code>transcript_chunks_vector</code></p>
                 </div>
               </div>
             </div>
@@ -291,33 +366,48 @@
       </div>
     </div>
 
+    <!-- Google Drive Folder Browser Modal -->
+    <div class="modal-backdrop" id="drive-modal" style="display: none;">
+      <div class="modal-dialog glass-panel" style="max-width: 680px;">
+        <div class="modal-header">
+          <h2>Google Drive Video Vault</h2>
+          <button class="btn-close" id="btn-close-drive-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">
+            Directly select any lecture video or audio from your Google Drive folder (<code>1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d</code>) to index into the RAG system.
+          </p>
+          <div class="drive-files-container" id="drive-modal-list">
+            <div class="empty-state">Loading Drive files...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings Modal -->
     <div class="modal-backdrop" id="settings-modal" style="display: none;">
       <div class="modal-dialog glass-panel">
         <div class="modal-header">
-          <h2>API & Database Settings</h2>
+          <h2>Cloud Infrastructure & Keys</h2>
           <button class="btn-close" id="btn-close-settings">&times;</button>
         </div>
         <div class="modal-body">
           <form id="settings-form">
             <div class="form-group">
-              <label for="set-deepgram">Deepgram API Key</label>
-              <input type="password" id="set-deepgram" class="form-input" placeholder="c91fe...">
-              <small class="form-hint">Used for Nova-2 fast speech-to-text with diarization.</small>
+              <label for="set-supabase-url">Supabase Project URL</label>
+              <input type="text" id="set-supabase-url" class="form-input" value="https://jueoglgbseoxszygpjdb.supabase.co" readonly>
+            </div>
+            <div class="form-group">
+              <label for="set-drive-folder">Google Drive Vault Folder ID</label>
+              <input type="text" id="set-drive-folder" class="form-input" value="1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d" readonly>
             </div>
             <div class="form-group">
               <label for="set-gemini">Google Gemini API Key</label>
               <input type="password" id="set-gemini" class="form-input" placeholder="AQ.Ab8RN...">
-              <small class="form-hint">Used for Gemini 2.5 Flash and 768-dim vector embeddings.</small>
             </div>
             <div class="form-group">
-              <label for="set-supabase-url">Supabase Project URL (Optional)</label>
-              <input type="text" id="set-supabase-url" class="form-input" placeholder="https://your-project.supabase.co">
-            </div>
-            <div class="form-group">
-              <label for="set-supabase-key">Supabase Service Key (Optional)</label>
-              <input type="password" id="set-supabase-key" class="form-input" placeholder="eyJhbGciOi...">
-              <small class="form-hint">If left empty, system automatically uses high-performance local vector engine.</small>
+              <label for="set-deepgram">Deepgram API Key</label>
+              <input type="password" id="set-deepgram" class="form-input" placeholder="c91fe...">
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" id="btn-cancel-settings">Close</button>

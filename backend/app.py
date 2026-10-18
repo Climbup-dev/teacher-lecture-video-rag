@@ -2,7 +2,7 @@ import os
 import uuid
 import shutil
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +15,7 @@ from backend.semantic_chunker import SemanticChunker
 from backend.vector_embedder import VectorEmbedder
 from backend.db_adapter import DBAdapter
 from backend.rag_engine import RAGEngine
+from backend.google_drive import GoogleDriveManager
 
 app = FastAPI(title="Teacher Lecture Video RAG & Chatbot Engine")
 
@@ -28,6 +29,7 @@ app.add_middleware(
 )
 
 db = DBAdapter()
+drive_mgr = GoogleDriveManager()
 
 class ChatRequest(BaseModel):
     query: str
@@ -39,16 +41,46 @@ class ConfigUpdateRequest(BaseModel):
     gemini_key: Optional[str] = None
     supabase_url: Optional[str] = None
     supabase_key: Optional[str] = None
+    drive_folder_id: Optional[str] = None
+
+class DriveIngestRequest(BaseModel):
+    file_id: str
+    title: str
+    course_name: Optional[str] = "Applied AI & GenAI with RAG Architectures"
+    course_id: Optional[str] = "course-applied-ai-rag"
 
 @app.get("/api/status")
 def get_status():
     reload_config()
+    gdm = GoogleDriveManager()
     return {
         "deepgram_configured": bool(Config.DEEPGRAM_API_KEY),
         "gemini_configured": bool(Config.GEMINI_API_KEY),
         "supabase_configured": bool(Config.SUPABASE_URL and Config.SUPABASE_KEY),
+        "google_drive_configured": gdm.is_configured(),
+        "google_drive_folder_id": Config.GOOGLE_DRIVE_FOLDER_ID,
         "total_lessons_indexed": len(db.list_lessons()),
         "total_chunks_indexed": len(db._read_local_store().get("chunks", []))
+    }
+
+@app.get("/api/courses")
+def get_courses():
+    reload_config()
+    return db.list_courses()
+
+@app.get("/api/drive/files")
+def list_drive_files():
+    reload_config()
+    gdm = GoogleDriveManager()
+    if not gdm.is_configured():
+        return {"configured": False, "files": [], "message": "Google Drive credentials not set"}
+    
+    files = gdm.list_files()
+    return {
+        "configured": True,
+        "folder_id": Config.GOOGLE_DRIVE_FOLDER_ID,
+        "total": len(files),
+        "files": files
     }
 
 @app.post("/api/update-config")
@@ -62,7 +94,8 @@ def update_config(req: ConfigUpdateRequest):
         "DEEPGRAM_API_KEY": req.deepgram_key,
         "GEMINI_API_KEY": req.gemini_key,
         "SUPABASE_URL": req.supabase_url,
-        "SUPABASE_KEY": req.supabase_key
+        "SUPABASE_SERVICE_ROLE_KEY": req.supabase_key,
+        "GOOGLE_DRIVE_FOLDER_ID": req.drive_folder_id
     }
 
     updated_keys = set()
@@ -106,16 +139,20 @@ def get_lesson(lesson_id: str):
 @app.post("/api/process-video")
 async def process_video(
     file: Optional[UploadFile] = File(None),
-    title: str = Form("Operating Systems: CPU Scheduling"),
-    course_name: str = Form("Computer Science - 4th Semester"),
+    title: str = Form("Applied AI: Vector RAG Architectures"),
+    course_name: str = Form("Applied AI & GenAI with RAG Architectures"),
+    course_id: str = Form("course-applied-ai-rag"),
     media_url: Optional[str] = Form(None)
 ):
     """
-    Complete 4-Stage Ingestion Pipeline:
-    1. Extract 16kHz mono audio from video (FFmpeg)
-    2. Deepgram Nova-2 speech-to-text with diarization & word timestamps
-    3. Gemini 2.5 Flash concept chunking & reverse-question enrichment
-    4. 768-dim vector embedding & persistence into transcript_chunks_vector
+    Stateless RAG Ingestion Pipeline:
+    1. Direct upload of video file to Google Drive (Cloud Run server is NOT used as video storage)
+    2. Temporary audio extraction via FFmpeg
+    3. Immediate deletion of local video file to free container memory/disk
+    4. Deepgram Nova-2 transcription with diarization & word timestamps
+    5. Immediate deletion of local audio file
+    6. Gemini 2.5 Flash concept chunking & reverse-question enrichment
+    7. 768-dim vector embeddings persisted into Supabase (course_lessons & transcript_chunks_vector)
     """
     reload_config()
     if not Config.DEEPGRAM_API_KEY:
@@ -124,35 +161,70 @@ async def process_video(
         raise HTTPException(status_code=400, detail="Gemini API key is not configured.")
 
     lesson_id = f"lesson_{uuid.uuid4().hex[:8]}"
-    course_id = "cs-os-401"
     saved_media_path = None
     clean_audio_path = None
+    video_url = ""
+    drive_file_id = None
 
     try:
-        # Step 1: Ingestion
         if file and file.filename:
-            file_ext = Path(file.filename).suffix
-            saved_media_path = Config.UPLOADS_DIR / f"{lesson_id}{file_ext}"
+            file_ext = Path(file.filename).suffix or ".mp4"
+            temp_name = f"temp_{lesson_id}{file_ext}"
+            saved_media_path = Config.UPLOADS_DIR / temp_name
+            
             with open(saved_media_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
-            # Audio extraction
+            # 1. Direct Upload to Google Drive (Offload heavy video storage from Cloud Run!)
+            gdm = GoogleDriveManager()
+            if gdm.is_configured():
+                print(f"[Upload] Uploading {file.filename} directly to Google Drive...")
+                mime = file.content_type or "video/mp4"
+                drive_res = gdm.upload_file(saved_media_path, filename=file.filename, mime_type=mime)
+                if drive_res:
+                    drive_file_id = drive_res.get("id")
+                    video_url = drive_res.get("stream_url") or drive_res.get("webViewLink")
+                    print(f"[Upload] Successfully uploaded to Google Drive. ID: {drive_file_id}")
+            
+            if not video_url:
+                # Fallback if Drive is unconfigured or failed: serve locally
+                permanent_media_path = Config.UPLOADS_DIR / f"{lesson_id}{file_ext}"
+                shutil.copy(saved_media_path, permanent_media_path)
+                video_url = f"/uploads/{permanent_media_path.name}"
+
+            # 2. Extract 16kHz audio for RAG
             clean_audio_path = extract_and_clean_audio(str(saved_media_path))
+            
+            # 3. Clean up the temporary local video file if uploaded to Drive
+            if drive_file_id and saved_media_path.exists():
+                try:
+                    saved_media_path.unlink()
+                except Exception:
+                    pass
+
+            # 4. Transcribe audio with Deepgram Nova-2
             transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
             transcription_result = transcriber.transcribe_file(clean_audio_path)
-            video_url = f"/uploads/{saved_media_path.name}"
+
+            # 5. Clean up temporary audio file immediately
+            if clean_audio_path and Path(clean_audio_path).exists():
+                try:
+                    Path(clean_audio_path).unlink()
+                except Exception:
+                    pass
+
         elif media_url:
             transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
             transcription_result = transcriber.transcribe_url(media_url)
             video_url = media_url
         else:
-            raise HTTPException(status_code=400, detail="Please upload a video/audio file or provide a media URL.")
+            raise HTTPException(status_code=400, detail="Please upload a video file or provide a URL.")
 
         raw_transcript = transcription_result["full_transcript"]
         utterances = transcription_result["utterances"]
         duration_seconds = int(transcription_result.get("duration_seconds", 0))
 
-        # Step 2: Semantic Chunking & Enrichment
+        # 6. Semantic Chunking & Enrichment
         chunker = SemanticChunker(Config.GEMINI_API_KEY)
         enriched_chunks = chunker.chunk_and_enrich(
             utterances=utterances,
@@ -160,13 +232,13 @@ async def process_video(
             subject_name=title
         )
 
-        # Step 3: Vector Embeddings
+        # 7. 768-dim Vector Embeddings
         embedder = VectorEmbedder(Config.GEMINI_API_KEY)
         for chunk in enriched_chunks:
             search_text = embedder.get_chunk_search_text(chunk)
             chunk["embedding"] = embedder.get_embedding(search_text, dimension=768)
 
-        # Step 4: Persist in Database
+        # 8. Persist to Supabase and Local Store
         db.save_lesson(
             lesson_id=lesson_id,
             course_id=course_id,
@@ -183,6 +255,8 @@ async def process_video(
             "lesson_id": lesson_id,
             "title": title,
             "duration_seconds": duration_seconds,
+            "video_url": video_url,
+            "storage_location": "Google Drive" if drive_file_id else "Server",
             "total_utterances": len(utterances),
             "total_chunks_indexed": len(enriched_chunks),
             "preview_chunks": [
@@ -196,7 +270,100 @@ async def process_video(
             ]
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+@app.post("/api/drive/ingest")
+async def ingest_from_drive(req: DriveIngestRequest):
+    """
+    Directly processes a video file residing in Google Drive:
+    Streams the media into memory/temp, extracts audio, transcribes, chunks,
+    embeds into Supabase, and cleans disk.
+    """
+    reload_config()
+    gdm = GoogleDriveManager()
+    if not gdm.is_configured():
+        raise HTTPException(status_code=400, detail="Google Drive is not configured.")
+
+    lesson_id = f"lesson_drive_{uuid.uuid4().hex[:8]}"
+    temp_video = Config.UPLOADS_DIR / f"drive_{req.file_id}.tmp"
+
+    try:
+        # 1. Stream file from Google Drive
+        meta = gdm.get_file_metadata(req.file_id)
+        file_name = meta.get("name") if meta else req.title
+        success = gdm.download_file(req.file_id, temp_video)
+        if not success:
+            raise HTTPException(status_code=404, detail="Could not retrieve file from Google Drive.")
+
+        # 2. Extract 16kHz audio
+        clean_audio_path = extract_and_clean_audio(str(temp_video))
+
+        # 3. Immediately delete temp video from server
+        if temp_video.exists():
+            try:
+                temp_video.unlink()
+            except Exception:
+                pass
+
+        # 4. Transcribe with Deepgram
+        transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
+        transcription_result = transcriber.transcribe_file(clean_audio_path)
+
+        # 5. Delete temp audio
+        if clean_audio_path and Path(clean_audio_path).exists():
+            try:
+                Path(clean_audio_path).unlink()
+            except Exception:
+                pass
+
+        raw_transcript = transcription_result["full_transcript"]
+        utterances = transcription_result["utterances"]
+        duration_seconds = int(transcription_result.get("duration_seconds", 0))
+
+        # 6. Semantic Chunking
+        chunker = SemanticChunker(Config.GEMINI_API_KEY)
+        enriched_chunks = chunker.chunk_and_enrich(
+            utterances=utterances,
+            course_title=req.course_name or "Applied AI",
+            subject_name=req.title
+        )
+
+        # 7. Vector Embeddings
+        embedder = VectorEmbedder(Config.GEMINI_API_KEY)
+        for chunk in enriched_chunks:
+            search_text = embedder.get_chunk_search_text(chunk)
+            chunk["embedding"] = embedder.get_embedding(search_text, dimension=768)
+
+        # Google Drive stream preview URL
+        drive_stream_url = f"https://drive.google.com/file/d/{req.file_id}/preview"
+
+        # 8. Save to Supabase
+        db.save_lesson(
+            lesson_id=lesson_id,
+            course_id=req.course_id or "course-applied-ai-rag",
+            title=req.title or file_name,
+            duration_seconds=duration_seconds,
+            video_url=drive_stream_url,
+            raw_transcript=raw_transcript,
+            utterances=utterances
+        )
+        db.save_chunks(lesson_id=lesson_id, course_id=req.course_id or "course-applied-ai-rag", chunks=enriched_chunks)
+
+        return {
+            "status": "success",
+            "lesson_id": lesson_id,
+            "title": req.title or file_name,
+            "duration_seconds": duration_seconds,
+            "video_url": drive_stream_url,
+            "storage": "Google Drive Folder",
+            "total_chunks_indexed": len(enriched_chunks)
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Google Drive ingestion failed: {str(e)}")
 
 @app.post("/api/chat")
 def chat_query(req: ChatRequest):
@@ -220,16 +387,14 @@ def chat_query(req: ChatRequest):
 @app.post("/api/load-sample")
 def load_sample_lecture():
     """
-    Loads a comprehensive, realistic university Operating Systems lecture
-    with timestamps, teacher dialogue, student questions, and embeddings
-    so the user can immediately test the RAG chatbot & video player.
+    Loads realistic university Operating Systems lecture with timestamps,
+    teacher dialogue, student questions, and embeddings.
     """
     reload_config()
     lesson_id = "sample_os_scheduling"
-    course_id = "cs-os-401"
+    course_id = "course-applied-ai-rag"
     title = "Operating Systems: CPU Scheduling & Round Robin Algorithm"
 
-    # Pre-crafted realistic lecture utterances
     sample_utterances = [
         {
             "speaker_id": 0,
@@ -290,90 +455,79 @@ def load_sample_lecture():
     ]
 
     embedder = VectorEmbedder(Config.GEMINI_API_KEY) if Config.GEMINI_API_KEY else None
-    chunker = SemanticChunker(Config.GEMINI_API_KEY) if Config.GEMINI_API_KEY else None
 
-    # Process into chunks
-    if chunker:
-        enriched_chunks = chunker.chunk_and_enrich(
-            utterances=sample_utterances,
-            course_title="Computer Science - OS",
-            subject_name=title
-        )
-    else:
-        # Fallback pre-structured chunks
-        enriched_chunks = [
-            {
-                "chunk_index": 1,
-                "start_seconds": 0.0,
-                "end_seconds": 125.0,
-                "timestamp_label": "00:00 - 02:05",
-                "speaker_label": "Teacher",
-                "topic_name": "Introduction to CPU Scheduling & Preemption",
-                "cleaned_text": "CPU Scheduling determines which process gets CPU time. Preemptive scheduling allows the OS to interrupt a running process (e.g., Round Robin, SRTF), whereas Non-preemptive scheduling holds the CPU until the process terminates or yields for I/O (e.g., FCFS).",
-                "context_header": "[Computer Science > OS > CPU Scheduling Concepts]",
-                "chunk_text": "[Computer Science > OS > CPU Scheduling Concepts]\nPreemptive vs Non-Preemptive scheduling. In non-preemptive, process keeps CPU until termination. In preemptive, OS can interrupt process.",
-                "key_concepts": ["CPU Scheduling", "Preemptive", "Non-Preemptive", "FCFS"],
-                "hypothetical_questions": [
-                    "What is the difference between preemptive and non-preemptive scheduling?",
-                    "What is FCFS scheduling?",
-                    "Why does the OS need CPU scheduling?"
-                ]
-            },
-            {
-                "chunk_index": 2,
-                "start_seconds": 126.0,
-                "end_seconds": 260.0,
-                "timestamp_label": "02:06 - 04:20",
-                "speaker_label": "Teacher",
-                "topic_name": "Context Switching Overhead in Preemptive Systems",
-                "cleaned_text": "Context switching requires saving the CPU registers, program counter, and stack pointer of the current process and restoring the state of the new process. Excessive context switches reduce CPU throughput.",
-                "context_header": "[Computer Science > OS > Context Switching]",
-                "chunk_text": "[Computer Science > OS > Context Switching]\nContext switching overhead: saving registers and program counter takes CPU time and bus cycles.",
-                "key_concepts": ["Context Switch", "Overhead", "Program Counter", "Registers", "Throughput"],
-                "hypothetical_questions": [
-                    "What overhead is associated with preemptive scheduling?",
-                    "What happens during a context switch?",
-                    "Does context switching reduce CPU performance?"
-                ]
-            },
-            {
-                "chunk_index": 3,
-                "start_seconds": 261.0,
-                "end_seconds": 630.0,
-                "timestamp_label": "04:21 - 10:30",
-                "speaker_label": "Teacher",
-                "topic_name": "Round Robin (RR) Algorithm & Time Quantum Effects",
-                "cleaned_text": "Round Robin uses a fixed time quantum (10-100ms) with a circular FIFO ready queue. If a process does not complete before quantum expires, a timer interrupt occurs and it moves to the tail of the queue. If quantum is too large, RR behaves like FCFS. If too small, context switch overhead dominates.",
-                "context_header": "[Computer Science > OS > Round Robin Algorithm]",
-                "chunk_text": "[Computer Science > OS > Round Robin Algorithm]\nRound Robin algorithm and Time Quantum. If time quantum expires, timer interrupt moves process to tail. Large quantum becomes FCFS; small quantum causes high context switch overhead.",
-                "key_concepts": ["Round Robin", "Time Quantum", "Time Slice", "Circular Queue", "Timer Interrupt"],
-                "hypothetical_questions": [
-                    "What is Round Robin scheduling?",
-                    "What happens if time quantum is too large in Round Robin?",
-                    "What happens if time quantum is too small?",
-                    "What is a time quantum?"
-                ]
-            },
-            {
-                "chunk_index": 4,
-                "start_seconds": 631.0,
-                "end_seconds": 810.0,
-                "timestamp_label": "10:31 - 13:30",
-                "speaker_label": "Teacher",
-                "topic_name": "Optimal Time Quantum Rule of Thumb & Turnaround Time",
-                "cleaned_text": "Exam rule of thumb: 80 percent of CPU bursts should be shorter than the time quantum. Turnaround Time = Completion Time - Arrival Time. Minimizes context switches while maintaining interactive responsiveness.",
-                "context_header": "[Computer Science > OS > Turnaround Time & 80% Rule]",
-                "chunk_text": "[Computer Science > OS > Turnaround Time & 80% Rule]\n80% rule: 80% of CPU bursts should be shorter than time quantum. Turnaround Time = Completion Time - Arrival Time.",
-                "key_concepts": ["80% Rule of Thumb", "Turnaround Time", "Arrival Time", "Completion Time"],
-                "hypothetical_questions": [
-                    "What is the 80% rule of thumb for choosing time quantum?",
-                    "How is turnaround time calculated in CPU scheduling?",
-                    "How to balance response time and context switch overhead?"
-                ]
-            }
-        ]
+    enriched_chunks = [
+        {
+            "chunk_index": 1,
+            "start_seconds": 0.0,
+            "end_seconds": 125.0,
+            "timestamp_label": "00:00 - 02:05",
+            "speaker_label": "Teacher",
+            "topic_name": "Introduction to CPU Scheduling & Preemption",
+            "cleaned_text": "CPU Scheduling determines which process gets CPU time. Preemptive scheduling allows the OS to interrupt a running process (e.g., Round Robin, SRTF), whereas Non-preemptive scheduling holds the CPU until the process terminates or yields for I/O (e.g., FCFS).",
+            "context_header": "[Computer Science > OS > CPU Scheduling Concepts]",
+            "chunk_text": "[Computer Science > OS > CPU Scheduling Concepts]\nPreemptive vs Non-Preemptive scheduling. In non-preemptive, process keeps CPU until termination. In preemptive, OS can interrupt process.",
+            "key_concepts": ["CPU Scheduling", "Preemptive", "Non-Preemptive", "FCFS"],
+            "hypothetical_questions": [
+                "What is the difference between preemptive and non-preemptive scheduling?",
+                "What is FCFS scheduling?",
+                "Why does the OS need CPU scheduling?"
+            ]
+        },
+        {
+            "chunk_index": 2,
+            "start_seconds": 126.0,
+            "end_seconds": 260.0,
+            "timestamp_label": "02:06 - 04:20",
+            "speaker_label": "Teacher",
+            "topic_name": "Context Switching Overhead in Preemptive Systems",
+            "cleaned_text": "Context switching requires saving the CPU registers, program counter, and stack pointer of the current process and restoring the state of the new process. Excessive context switches reduce CPU throughput.",
+            "context_header": "[Computer Science > OS > Context Switching]",
+            "chunk_text": "[Computer Science > OS > Context Switching]\nContext switching overhead: saving registers and program counter takes CPU time and bus cycles.",
+            "key_concepts": ["Context Switch", "Overhead", "Program Counter", "Registers", "Throughput"],
+            "hypothetical_questions": [
+                "What overhead is associated with preemptive scheduling?",
+                "What happens during a context switch?",
+                "Does context switching reduce CPU performance?"
+            ]
+        },
+        {
+            "chunk_index": 3,
+            "start_seconds": 261.0,
+            "end_seconds": 630.0,
+            "timestamp_label": "04:21 - 10:30",
+            "speaker_label": "Teacher",
+            "topic_name": "Round Robin (RR) Algorithm & Time Quantum Effects",
+            "cleaned_text": "Round Robin uses a fixed time quantum (10-100ms) with a circular FIFO ready queue. If a process does not complete before quantum expires, a timer interrupt occurs and it moves to the tail of the queue. If quantum is too large, RR behaves like FCFS. If too small, context switch overhead dominates.",
+            "context_header": "[Computer Science > OS > Round Robin Algorithm]",
+            "chunk_text": "[Computer Science > OS > Round Robin Algorithm]\nRound Robin algorithm and Time Quantum. If time quantum expires, timer interrupt moves process to tail. Large quantum becomes FCFS; small quantum causes high context switch overhead.",
+            "key_concepts": ["Round Robin", "Time Quantum", "Time Slice", "Circular Queue", "Timer Interrupt"],
+            "hypothetical_questions": [
+                "What is Round Robin scheduling?",
+                "What happens if time quantum is too large in Round Robin?",
+                "What happens if time quantum is too small?",
+                "What is a time quantum?"
+            ]
+        },
+        {
+            "chunk_index": 4,
+            "start_seconds": 631.0,
+            "end_seconds": 810.0,
+            "timestamp_label": "10:31 - 13:30",
+            "speaker_label": "Teacher",
+            "topic_name": "Optimal Time Quantum Rule of Thumb & Turnaround Time",
+            "cleaned_text": "Exam rule of thumb: 80 percent of CPU bursts should be shorter than the time quantum. Turnaround Time = Completion Time - Arrival Time. Minimizes context switches while maintaining interactive responsiveness.",
+            "context_header": "[Computer Science > OS > Turnaround Time & 80% Rule]",
+            "chunk_text": "[Computer Science > OS > Turnaround Time & 80% Rule]\n80% rule: 80% of CPU bursts should be shorter than time quantum. Turnaround Time = Completion Time - Arrival Time.",
+            "key_concepts": ["80% Rule of Thumb", "Turnaround Time", "Arrival Time", "Completion Time"],
+            "hypothetical_questions": [
+                "What is the 80% rule of thumb for choosing time quantum?",
+                "How is turnaround time calculated in CPU scheduling?",
+                "How to balance response time and context switch overhead?"
+            ]
+        }
+    ]
 
-    # Generate real embeddings using verified Gemini key
     if embedder:
         for c in enriched_chunks:
             search_text = embedder.get_chunk_search_text(c)
@@ -400,7 +554,7 @@ def load_sample_lecture():
         "title": title
     }
 
-# Mount uploads directory for video streaming
+# Mount uploads directory for fallback video streaming
 uploads_path = Config.UPLOADS_DIR
 uploads_path.mkdir(exist_ok=True, parents=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")

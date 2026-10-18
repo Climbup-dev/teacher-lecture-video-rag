@@ -12487,6 +12487,38 @@
         "f55432aa-621a-4f6e-9413-6020cc7714cd",
         "f802911f-2aaa-4bd5-aee0-c9e7b2388664"
       ]
+    },
+    {
+      "id": "7c8ae532-3806-4aa4-b114-8d28695ee94a",
+      "session_id": "default-session",
+      "sender": "student",
+      "message": "What is a Process Control Block (PCB) and what exact hardware state is saved during a context switch?",
+      "timestamp_ref": null,
+      "retrieved_chunk_ids": []
+    },
+    {
+      "id": "451be978-8b59-4d88-89b1-862251c7e0fc",
+      "session_id": "default-session",
+      "sender": "ai",
+      "message": "Hello! I'd be happy to help clarify the concept of the Process Control Block and the hardware state saved during a context switch based on today's masterclass.\n\n### Process Control Block (PCB) and Context Switch State\n\nAccording to the lecture, a **Process Control Block (PCB)** is a vital kernel data structure used to maintain a process's execution state [24:00]. \n\nDuring a context switch, the exact hardware state saved by the kernel into the outgoing process's PCB includes:\n* **Program Counter (PC):** The address of the next instruction to execute [24:00].\n* **General Registers:** The CPU's general-purpose register values [24:00].\n* **Stack Pointer (ESP/RSP):** The stack pointer tracking the execution stack [24:00].\n* **Process Identification & Attributes:** The Process ID (PID) and scheduling priority [24:00].\n\nAs the professor highlighted, beyond simply copying these register values, a major hidden cost during this process switch is cold CPU cache invalidation, which leads to L1 and L2 cache misses [24:00].\n\n***\n\n### Suggested Questions\n1. How does an excessively small time quantum in Round Robin scheduling impact context switch overhead and overall CPU throughput [74:35]?\n2. What is the 80% rule of thumb regarding CPU bursts and time quantum selection [102:20]?",
+      "timestamp_ref": {
+        "timestamps": [
+          "24:00",
+          "24:00",
+          "24:00",
+          "24:00",
+          "24:00",
+          "24:00",
+          "74:35",
+          "102:20"
+        ]
+      },
+      "retrieved_chunk_ids": [
+        "f802911f-2aaa-4bd5-aee0-c9e7b2388664",
+        "fd99a0dc-98f4-4947-8a10-305a0c9cc9e0",
+        "751573ba-3b1a-4e35-8d8f-6355dde0dd31",
+        "e3cefced-2578-424d-9afa-6908cd21b5dc"
+      ]
     }
   ]
 }
