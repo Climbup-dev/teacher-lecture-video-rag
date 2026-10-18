@@ -214,9 +214,45 @@ async def process_video(
                     pass
 
         elif media_url:
-            transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
-            transcription_result = transcriber.transcribe_url(media_url)
-            video_url = media_url
+            clean_url = media_url.strip()
+            gdm = GoogleDriveManager()
+            drive_fid = gdm.extract_file_id(clean_url)
+
+            # Check if input is a Google Drive URL or File ID
+            if drive_fid and ("drive.google.com" in clean_url or len(clean_url) < 60):
+                print(f"[Ingest] Google Drive link detected. File ID: {drive_fid}")
+                if gdm.is_configured():
+                    gdm.make_file_public_readable(drive_fid)
+
+                video_url = f"https://drive.google.com/file/d/{drive_fid}/preview"
+                stream_url = f"https://drive.google.com/uc?export=download&id={drive_fid}"
+                
+                transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
+                try:
+                    # Strategy 1: Direct Deepgram URL Stream (0 bytes downloaded on our server!)
+                    print("[Ingest] Sending direct stream link to Deepgram Nova-2...")
+                    transcription_result = transcriber.transcribe_url(stream_url)
+                    print("[Ingest] Deepgram successfully transcribed directly from Google Drive stream!")
+                except Exception as stream_err:
+                    print(f"[Ingest] Direct URL stream notice: {stream_err}. Falling back to lightweight audio extraction...")
+                    temp_media = Config.UPLOADS_DIR / f"temp_stream_{lesson_id}.tmp"
+                    gdm.download_file(drive_fid, temp_media)
+                    clean_audio = extract_and_clean_audio(str(temp_media))
+                    if temp_media.exists():
+                        try:
+                            temp_media.unlink()
+                        except Exception:
+                            pass
+                    transcription_result = transcriber.transcribe_file(clean_audio)
+                    if clean_audio and Path(clean_audio).exists():
+                        try:
+                            Path(clean_audio).unlink()
+                        except Exception:
+                            pass
+            else:
+                transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
+                transcription_result = transcriber.transcribe_url(clean_url)
+                video_url = clean_url
         else:
             raise HTTPException(status_code=400, detail="Please upload a video file or provide a URL.")
 

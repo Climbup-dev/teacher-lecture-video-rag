@@ -18,8 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code and credentials
-COPY service_account.json* ./
+# Copy application code
 COPY backend/ ./backend/
 COPY data/ ./data/
 COPY frontend/ ./frontend/
