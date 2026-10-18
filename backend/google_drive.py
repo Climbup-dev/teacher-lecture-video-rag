@@ -3,9 +3,15 @@ import io
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+    GOOGLE_LIBS_AVAILABLE = True
+except ImportError:
+    GOOGLE_LIBS_AVAILABLE = False
+
 from backend.config import Config
 
 SCOPES = [
@@ -20,7 +26,7 @@ class GoogleDriveManager:
         self.service = self._init_service()
 
     def _init_service(self):
-        if not self.raw_creds:
+        if not GOOGLE_LIBS_AVAILABLE or not self.raw_creds:
             return None
         try:
             if isinstance(self.raw_creds, dict):

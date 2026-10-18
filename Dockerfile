@@ -27,4 +27,4 @@ COPY frontend/ ./frontend/
 EXPOSE 8080
 
 # Run Uvicorn server using Cloud Run's injected $PORT
-CMD exec uvicorn backend.app:app --host 0.0.0.0 --port ${PORT}
+CMD ["sh", "-c", "exec uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8080}"]
