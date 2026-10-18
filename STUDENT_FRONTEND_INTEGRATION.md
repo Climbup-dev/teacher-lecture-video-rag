@@ -81,6 +81,7 @@ NEXT_PUBLIC_RAG_SERVER_URL=http://127.0.0.1:8000
 
 ---
 
+
 ## 4. Production-Ready Next.js React Hook
 
 Save this file as `src/hooks/useLectureRAG.ts` (or `.js`):

@@ -17,7 +17,7 @@ from backend.db_adapter import DBAdapter
 from backend.rag_engine import RAGEngine
 from backend.google_drive import GoogleDriveManager
 
-app = FastAPI(title="Teacher Lecture Video RAG & Chatbot Engine")
+app = FastAPI(title="ClimbUp Mentor Engine | Teacher Video RAG & Studio")
 
 # Enable CORS
 app.add_middleware(
@@ -49,6 +49,20 @@ class DriveIngestRequest(BaseModel):
     course_name: Optional[str] = "Applied AI & GenAI with RAG Architectures"
     course_id: Optional[str] = "course-applied-ai-rag"
 
+class CourseCreateRequest(BaseModel):
+    title: str
+    category: Optional[str] = "Computer Science"
+    level: Optional[str] = "All Levels"
+    description: Optional[str] = ""
+    instructor_name: Optional[str] = "Course Instructor"
+    thumbnail: Optional[str] = ""
+    tagline: Optional[str] = ""
+
+class StudentEnrollRequest(BaseModel):
+    name: str
+    email: str
+    course_id: str
+
 @app.get("/api/status")
 def get_status():
     reload_config()
@@ -67,6 +81,78 @@ def get_status():
 def get_courses():
     reload_config()
     return db.list_courses()
+
+@app.post("/api/courses")
+def create_course(req: CourseCreateRequest):
+    reload_config()
+    if not req.title or not req.title.strip():
+        raise HTTPException(status_code=400, detail="Course title is required")
+    course = db.create_course(
+        title=req.title.strip(),
+        category=req.category or "Computer Science",
+        level=req.level or "All Levels",
+        description=req.description or "",
+        instructor_name=req.instructor_name or "Course Instructor",
+        thumbnail=req.thumbnail or "",
+        tagline=req.tagline or ""
+    )
+    return {"status": "success", "message": f"Course '{req.title}' created successfully.", "course": course}
+
+@app.delete("/api/courses/{course_id}")
+def delete_course(course_id: str):
+    reload_config()
+    success = db.delete_course(course_id)
+    return {"status": "success", "message": f"Course {course_id} deleted.", "deleted": success}
+
+@app.delete("/api/resources/{resource_id}")
+def delete_resource(resource_id: str):
+    reload_config()
+    store = db._read_local_store()
+    if "resources" in store:
+        store["resources"] = [r for r in store["resources"] if r.get("id") != resource_id]
+        db._write_local_store(store)
+    if db.supabase_url and db.supabase_key:
+        try:
+            requests.delete(f"{db.supabase_url}/rest/v1/course_resources?id=eq.{resource_id}", headers=db._get_headers(), timeout=6)
+        except Exception as e:
+            print(f"[Supabase] delete_resource notice: {e}")
+    return {"status": "success", "message": "Resource deleted successfully."}
+
+@app.delete("/api/lessons/{lesson_id}")
+def delete_lesson(lesson_id: str):
+    reload_config()
+    store = db._read_local_store()
+    if lesson_id in store.get("lessons", {}):
+        del store["lessons"][lesson_id]
+    store["chunks"] = [c for c in store.get("chunks", []) if c.get("lesson_id") != lesson_id]
+    db._write_local_store(store)
+    if db.supabase_url and db.supabase_key:
+        try:
+            requests.delete(f"{db.supabase_url}/rest/v1/course_lessons?id=eq.{lesson_id}", headers=db._get_headers(), timeout=6)
+            requests.delete(f"{db.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}", headers=db._get_headers(), timeout=6)
+        except Exception as e:
+            print(f"[Supabase] delete_lesson notice: {e}")
+    return {"status": "success", "message": "Lesson deleted successfully."}
+
+@app.get("/api/students")
+def list_students(course_id: Optional[str] = None):
+    reload_config()
+    return db.get_students(course_id)
+
+@app.post("/api/students")
+def enroll_student(req: StudentEnrollRequest):
+    reload_config()
+    if not req.name or not req.name.strip():
+        raise HTTPException(status_code=400, detail="Student name is required")
+    if not req.email or not req.email.strip():
+        raise HTTPException(status_code=400, detail="Student email is required")
+    return db.add_student(req.name.strip(), req.email.strip(), req.course_id)
+
+@app.delete("/api/students/{student_id}")
+def delete_student(student_id: str):
+    reload_config()
+    success = db.delete_student(student_id)
+    return {"status": "success", "deleted": success}
 
 @app.get("/api/drive/files")
 def list_drive_files():

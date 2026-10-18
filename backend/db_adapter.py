@@ -116,6 +116,88 @@ class DBAdapter:
             }
         ]
 
+    def create_course(
+        self,
+        title: str,
+        category: str = "Computer Science",
+        level: str = "All Levels",
+        description: str = "",
+        instructor_name: str = "Course Instructor",
+        thumbnail: str = "",
+        tagline: str = ""
+    ) -> Dict[str, Any]:
+        """Creates a new course in Supabase and local store."""
+        import re
+        slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')
+        course_id = f"course-{slug[:25]}-{uuid.uuid4().hex[:4]}"
+        
+        course_payload = {
+            "id": course_id,
+            "slug": slug,
+            "title": title,
+            "tagline": tagline or f"Comprehensive mastery of {title}",
+            "description": description or f"Learn {title} with curated video lectures and AI doubt assistance.",
+            "category": category,
+            "level": level,
+            "thumbnail": thumbnail or "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800",
+            "instructor_name": instructor_name,
+            "instructor_title": "Lead Instructor",
+            "duration": "0 Hours",
+            "total_lessons": 0
+        }
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "return=representation"
+                res = requests.post(
+                    f"{self.supabase_url}/rest/v1/courses",
+                    headers=headers,
+                    json=course_payload,
+                    timeout=10
+                )
+                if res.ok and res.json():
+                    created = res.json()[0]
+                    store = self._read_local_store()
+                    store["courses"][course_id] = created
+                    self._write_local_store(store)
+                    return created
+            except Exception as e:
+                print(f"[Supabase] create_course warning: {e}")
+
+        store = self._read_local_store()
+        store["courses"][course_id] = course_payload
+        self._write_local_store(store)
+        return course_payload
+
+    def delete_course(self, course_id: str) -> bool:
+        """Deletes course and associated lessons, vector chunks, and resources."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                requests.delete(f"{self.supabase_url}/rest/v1/transcript_chunks_vector?course_id=eq.{course_id}", headers=headers, timeout=8)
+                requests.delete(f"{self.supabase_url}/rest/v1/course_resources?course_id=eq.{course_id}", headers=headers, timeout=8)
+                requests.delete(f"{self.supabase_url}/rest/v1/course_lessons?course_id=eq.{course_id}", headers=headers, timeout=8)
+                requests.delete(f"{self.supabase_url}/rest/v1/courses?id=eq.{course_id}", headers=headers, timeout=8)
+            except Exception as e:
+                print(f"[Supabase] delete_course warning: {e}")
+
+        store = self._read_local_store()
+        if course_id in store.get("courses", {}):
+            del store["courses"][course_id]
+        
+        lessons_to_del = [lid for lid, l in store.get("lessons", {}).items() if l.get("course_id") == course_id]
+        for lid in lessons_to_del:
+            del store["lessons"][lid]
+        
+        store["chunks"] = [c for c in store.get("chunks", []) if c.get("course_id") != course_id]
+        if "resources" in store:
+            store["resources"] = [r for r in store["resources"] if r.get("course_id") != course_id]
+
+        self._write_local_store(store)
+        return True
+
+
     def save_lesson(
         self,
         lesson_id: str,
@@ -398,4 +480,117 @@ class DBAdapter:
         store = self._read_local_store()
         resources = store.get("resources", [])
         return [r for r in resources if r.get("course_id") == course_id]
+
+    def get_students(self, course_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieves enrolled students with realistic seed data."""
+        store = self._read_local_store()
+        if "students" not in store or not store["students"]:
+            courses = self.list_courses()
+            c1_id = courses[0]["id"] if courses else "course-applied-ai-rag"
+            c1_title = courses[0]["title"] if courses else "Applied AI & GenAI with RAG Architectures"
+            c2_id = courses[1]["id"] if len(courses) > 1 else c1_id
+            c2_title = courses[1]["title"] if len(courses) > 1 else c1_title
+
+            store["students"] = [
+                {
+                    "id": "std_101",
+                    "name": "Aarav Sharma",
+                    "email": "aarav.sharma@university.edu",
+                    "course_id": c1_id,
+                    "course_title": c1_title,
+                    "enrolled_date": "2026-09-15",
+                    "progress": "85%",
+                    "doubts_asked": 6,
+                    "status": "Active"
+                },
+                {
+                    "id": "std_102",
+                    "name": "Priya Patel",
+                    "email": "priya.p@university.edu",
+                    "course_id": c1_id,
+                    "course_title": c1_title,
+                    "enrolled_date": "2026-09-18",
+                    "progress": "92%",
+                    "doubts_asked": 4,
+                    "status": "Active"
+                },
+                {
+                    "id": "std_103",
+                    "name": "Rohan Verma",
+                    "email": "rohan.v@university.edu",
+                    "course_id": c2_id,
+                    "course_title": c2_title,
+                    "enrolled_date": "2026-09-20",
+                    "progress": "60%",
+                    "doubts_asked": 9,
+                    "status": "Active"
+                },
+                {
+                    "id": "std_104",
+                    "name": "Sneha Gupta",
+                    "email": "sneha.g@university.edu",
+                    "course_id": c1_id,
+                    "course_title": c1_title,
+                    "enrolled_date": "2026-10-01",
+                    "progress": "74%",
+                    "doubts_asked": 2,
+                    "status": "Active"
+                },
+                {
+                    "id": "std_105",
+                    "name": "Devansh Kulkarni",
+                    "email": "devansh.k@university.edu",
+                    "course_id": c2_id,
+                    "course_title": c2_title,
+                    "enrolled_date": "2026-10-05",
+                    "progress": "45%",
+                    "doubts_asked": 11,
+                    "status": "Active"
+                }
+            ]
+            self._write_local_store(store)
+
+        students = store.get("students", [])
+        if course_id:
+            students = [s for s in students if s.get("course_id") == course_id]
+        return students
+
+    def add_student(self, name: str, email: str, course_id: str) -> Dict[str, Any]:
+        """Enrolls a new student into a course."""
+        import time
+        store = self._read_local_store()
+        if "students" not in store:
+            store["students"] = []
+
+        courses = self.list_courses()
+        course_name = "University Course"
+        for c in courses:
+            if c.get("id") == course_id:
+                course_name = c.get("title", course_name)
+                break
+
+        new_std = {
+            "id": f"std_{int(time.time())}",
+            "name": name,
+            "email": email,
+            "course_id": course_id,
+            "course_title": course_name,
+            "enrolled_date": time.strftime("%Y-%m-%d"),
+            "progress": "0%",
+            "doubts_asked": 0,
+            "status": "Active"
+        }
+        store["students"].append(new_std)
+        self._write_local_store(store)
+        return new_std
+
+    def delete_student(self, student_id: str) -> bool:
+        """Removes a student enrollment."""
+        store = self._read_local_store()
+        if "students" in store:
+            store["students"] = [s for s in store["students"] if s.get("id") != student_id]
+            self._write_local_store(store)
+            return True
+        return False
+
 

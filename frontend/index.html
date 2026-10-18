@@ -3,440 +3,845 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EduRAG Instructor Studio | High-Quality Lecture Video RAG</title>
+  <title>ClimbUp Mentor Studio | University Lecture Video RAG & Course Operations</title>
+  <meta name="description" content="All-in-one ClimbUp Mentor Studio for university course management, video lecture ingestion with Deepgram Nova-2, concept-boundary RAG, and notes/assignments hub.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
   <!-- App Container -->
   <div class="app-container">
     
-    <!-- Top Navbar: Teacher Studio -->
+    <!-- Top Navigation Bar -->
     <header class="navbar">
-      <div class="nav-left">
+      <div class="nav-left" id="brand-logo-btn" style="cursor: pointer;" title="Go to All Courses">
         <div class="logo-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="23 7 16 12 23 17 23 7"></polygon>
             <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
           </svg>
         </div>
         <div class="logo-text">
-          <h1>EduRAG <span class="badge-pro">Teacher Studio</span></h1>
-          <p class="tagline">Professor Course Operations &bull; Stateless Google Drive Ingest &bull; 768-dim Supabase RAG</p>
+          <h1>ClimbUp <span class="badge-pro">Teacher Hub</span></h1>
+          <p class="tagline">Courses &bull; Videos &bull; Notes & Assignments &bull; AI Doubt Solver</p>
         </div>
       </div>
 
-      <div class="nav-center">
-        <!-- Course Selector -->
-        <div class="selector-wrap">
-          <label for="course-select" class="selector-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-            Course:
-          </label>
-          <select id="course-select" class="styled-dropdown">
-            <option value="course-applied-ai-rag">Applied AI & GenAI with RAG Architectures</option>
-          </select>
-        </div>
+      <!-- Navigation Tabs: Strictly Courses and Students -->
+      <nav class="nav-workspace-tabs" id="main-nav-tabs">
+        <button class="nav-tab active" data-view="courses" id="tab-btn-courses" title="View Courses">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+          </svg>
+          <span>Courses</span>
+          <span class="tab-badge" id="tab-courses-count">0</span>
+        </button>
 
-        <!-- Lecture Selector -->
-        <div class="selector-wrap">
-          <label for="lecture-select" class="selector-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-            Lecture:
-          </label>
-          <select id="lecture-select" class="styled-dropdown">
-            <option value="">Loading lectures...</option>
-          </select>
-        </div>
+        <button class="nav-tab" data-view="students" id="tab-btn-students" title="Manage Enrolled Students">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+          <span>Students</span>
+          <span class="tab-badge" id="tab-students-count">0</span>
+        </button>
+      </nav>
 
-        <!-- Live System Cloud Status Badges -->
-        <div class="system-pills">
-          <span class="status-pill active" id="pill-supabase" title="Connected to Supabase PostgreSQL & pgvector">
-            <span class="dot"></span> Supabase Cloud
-          </span>
-          <span class="status-pill active" id="pill-drive" title="Google Drive Video Vault Active (Folder: 1VDrNYA5...)">
-            <span class="dot"></span> Google Drive Vault
-          </span>
-          <span class="status-pill active" id="pill-deepgram" title="Deepgram Nova-2 Diarization">
-            <span class="dot"></span> Nova-2 STT
-          </span>
-          <span class="status-pill active" id="pill-vector" title="Gemini 768-dim Vector Embeddings">
-            <span class="dot"></span> 768-dim Vectors
-          </span>
-        </div>
-      </div>
-
+      <!-- Nav Right: Settings & Account -->
       <div class="nav-right">
-        <button class="btn btn-secondary" id="btn-open-drive-modal" title="Browse and ingest videos from Google Drive Folder">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
-          Drive Vault (<span id="drive-files-badge">50</span>)
-        </button>
-        <button class="btn btn-primary" id="btn-open-upload">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-          Upload to Drive & Index
-        </button>
-        <button class="btn btn-icon" id="btn-settings" title="Cloud Settings">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <button class="btn btn-icon" id="btn-settings" title="Settings & AI Keys">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
         </button>
       </div>
     </header>
 
-    <!-- Main Workspace -->
-    <main class="main-workspace">
-      
-      <!-- Left Column: Video Player & Transcripts / Chunks / Teacher Studio -->
-      <section class="stage-column">
-        <div class="video-card glass-panel">
-          
-          <!-- Teacher Video Stage: Supports HTML5 & Google Drive Stream -->
-          <div class="video-container" id="video-wrapper">
-            <video id="lecture-video" preload="metadata" playsinline poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'><rect width='800' height='450' fill='%230f141c'/><circle cx='400' cy='225' r='48' fill='%236366f1' fill-opacity='0.2'/><polygon points='390,205 425,225 390,245' fill='%23818cf8'/><text x='400' y='310' font-family='sans-serif' font-size='16' fill='%2394a3b8' text-anchor='middle'>Load or Select a Lecture to Play</text></svg>">
-              <source id="video-source" src="" type="video/mp4">
-              Your browser does not support HTML5 video.
-            </video>
-            
-            <iframe id="drive-iframe" src="" style="display: none; width: 100%; height: 100%; border: none;" allow="autoplay" allowfullscreen></iframe>
+    <!-- Main Dynamic Views Container -->
+    <main class="main-content-area">
 
-            <div class="video-overlay" id="video-overlay">
-              <button class="btn-big-play" id="btn-overlay-play">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              </button>
+      <!-- ========================================== -->
+      <!-- TAB 1: ALL COURSES                         -->
+      <!-- ========================================== -->
+      <section class="view-panel active" id="view-courses">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">My Courses</h2>
+            <p class="view-subtitle">Create courses, upload lecture videos, and attach notes & assignments.</p>
+          </div>
+          <div class="view-actions">
+            <button class="btn btn-primary" id="btn-show-create-course">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Create Course
+            </button>
+          </div>
+        </div>
+
+        <!-- Metric KPI Cards -->
+        <div class="kpi-grid">
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon violet">🎓</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-total-courses">0</span>
+              <span class="kpi-label">Courses</span>
+            </div>
+          </div>
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon cyan">🎬</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-total-lectures">0</span>
+              <span class="kpi-label">Videos Uploaded</span>
+            </div>
+          </div>
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon emerald">📝</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-total-resources">0</span>
+              <span class="kpi-label">Notes & Assignments</span>
+            </div>
+          </div>
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon amber">💡</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-total-chunks">0</span>
+              <span class="kpi-label">Topics Ready for AI</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Create Course Form -->
+        <div class="create-card glass-panel" id="create-course-panel" style="display: none;">
+          <div class="create-card-header">
+            <div class="card-title-group">
+              <span class="icon-sparkle">✨</span>
+              <h3>Create New Course</h3>
+            </div>
+            <button class="btn-close-panel" id="btn-hide-create-course">&times;</button>
+          </div>
+          <form id="create-course-form" class="standard-form">
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label for="new-course-title">Course Title *</label>
+                <input type="text" id="new-course-title" class="form-input" placeholder="e.g. Distributed Systems & Microservices Architecture" required>
+              </div>
+              <div class="form-group">
+                <label for="new-course-category">Category *</label>
+                <select id="new-course-category" class="form-input styled-dropdown">
+                  <option value="Computer Science">Computer Science</option>
+                  <option value="Artificial Intelligence">Artificial Intelligence & ML</option>
+                  <option value="Full-Stack Web Dev">Full-Stack Web Dev</option>
+                  <option value="System Design & Architecture">System Design & Architecture</option>
+                  <option value="Cloud & DevOps">Cloud & DevOps</option>
+                  <option value="Data Science & Engineering">Data Science & Engineering</option>
+                  <option value="Cyber Security">Cyber Security</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label for="new-course-level">Proficiency Level</label>
+                <select id="new-course-level" class="form-input styled-dropdown">
+                  <option value="All Levels">All Levels</option>
+                  <option value="Beginner">Beginner</option>
+                  <option value="Intermediate">Intermediate</option>
+                  <option value="Advanced">Advanced / Graduate</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="new-course-instructor">Instructor Name</label>
+                <input type="text" id="new-course-instructor" class="form-input" placeholder="e.g. Dr. Maya Chen">
+              </div>
+              <div class="form-group">
+                <label for="new-course-thumbnail">Thumbnail Image URL (Optional)</label>
+                <input type="url" id="new-course-thumbnail" class="form-input" placeholder="https://images.unsplash.com/...">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="new-course-tagline">Course Tagline / Short Pitch</label>
+              <input type="text" id="new-course-tagline" class="form-input" placeholder="e.g. Master modern cloud systems, microservice scaling, and RAG architectures.">
+            </div>
+
+            <div class="form-group">
+              <label for="new-course-desc">Course Description</label>
+              <textarea id="new-course-desc" class="form-input form-textarea" rows="3" placeholder="Provide syllabus summary, student prerequisites, and core learning goals..."></textarea>
+            </div>
+
+            <div class="form-actions-bar">
+              <span id="create-course-feedback" class="feedback-msg"></span>
+              <div class="btn-group">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-create-course">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="btn-submit-course">Create Course</button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <!-- Course Cards Catalog -->
+        <div class="courses-catalog-section">
+          <div class="catalog-filter-bar">
+            <div class="search-input-wrap">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input type="text" id="course-search-input" placeholder="Search courses by title, category, instructor...">
+            </div>
+            <div class="filter-pills" id="course-category-filters">
+              <button class="filter-pill active" data-category="all">All</button>
+              <button class="filter-pill" data-category="Computer Science">Computer Science</button>
+              <button class="filter-pill" data-category="Artificial Intelligence">AI & ML</button>
+              <button class="filter-pill" data-category="Full-Stack Web Dev">Full-Stack</button>
             </div>
           </div>
 
-          <!-- Video Custom Controls Bar -->
-          <div class="player-controls">
-            <button class="ctrl-btn" id="ctrl-play-pause" title="Play/Pause">
-              <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+          <div class="courses-grid" id="courses-cards-container">
+            <div class="empty-state">Loading courses from Supabase...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 2: STUDENTS MANAGEMENT                -->
+      <!-- ========================================== -->
+      <section class="view-panel" id="view-students">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">Students Directory & Progress</h2>
+            <p class="view-subtitle">Track enrolled students, course completion progress, and lecture doubt interactions across all courses.</p>
+          </div>
+          <div class="view-actions">
+            <button class="btn btn-primary" id="btn-show-enroll-student">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <line x1="20" y1="8" x2="20" y2="14"></line>
+                <line x1="23" y1="11" x2="17" y2="11"></line>
+              </svg>
+              Enroll Student
             </button>
-            <span class="time-display" id="time-current">00:00</span>
-            <input type="range" class="seek-bar" id="seek-bar" value="0" min="0" step="0.5">
-            <span class="time-display" id="time-duration">00:00</span>
-            <div class="speed-select-wrap">
-              <select id="playback-speed" class="speed-select">
-                <option value="1">1x</option>
-                <option value="1.25">1.25x</option>
-                <option value="1.5" selected>1.5x</option>
-                <option value="2">2x</option>
+          </div>
+        </div>
+
+        <!-- Student Metric KPI Cards -->
+        <div class="kpi-grid">
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon violet">👥</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-total-students">0</span>
+              <span class="kpi-label">Total Students</span>
+            </div>
+          </div>
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon emerald">📚</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-active-enrolled-courses">0</span>
+              <span class="kpi-label">Courses with Enrollees</span>
+            </div>
+          </div>
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon cyan">🤖</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-total-doubts-asked">0</span>
+              <span class="kpi-label">AI Doubts Solved</span>
+            </div>
+          </div>
+          <div class="kpi-card glass-panel">
+            <div class="kpi-icon amber">📈</div>
+            <div class="kpi-data">
+              <span class="kpi-number" id="kpi-avg-progress">0%</span>
+              <span class="kpi-label">Avg. Completion</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Enroll Student Form Panel (Collapsible) -->
+        <div class="create-card glass-panel" id="enroll-student-panel" style="display: none; margin-bottom: 24px;">
+          <div class="create-card-header">
+            <div class="card-title-group">
+              <span class="icon-sparkle">🎓</span>
+              <h3>Enroll New Student</h3>
+            </div>
+            <button class="btn-close-panel" id="btn-hide-enroll-student">&times;</button>
+          </div>
+          <form id="enroll-student-form" class="standard-form">
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label for="enroll-student-name">Student Full Name *</label>
+                <input type="text" id="enroll-student-name" class="form-input" placeholder="e.g. Aryan Dixit" required>
+              </div>
+              <div class="form-group">
+                <label for="enroll-student-email">Email Address *</label>
+                <input type="email" id="enroll-student-email" class="form-input" placeholder="e.g. aryan.dixit@university.edu" required>
+              </div>
+              <div class="form-group">
+                <label for="enroll-student-course">Assign to Course *</label>
+                <select id="enroll-student-course" class="form-input styled-dropdown" required>
+                  <option value="">Select a Course...</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-actions" style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 14px;">
+              <span id="enroll-student-feedback" class="feedback-msg"></span>
+              <button type="button" class="btn btn-secondary" id="btn-cancel-enroll-student">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="btn-submit-enroll-student">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="9" cy="7" r="4"></circle>
+                </svg>
+                Confirm Enrollment
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Students Filter & Search Bar -->
+        <div class="catalog-card glass-panel" style="margin-bottom: 20px; padding: 14px 18px;">
+          <div class="students-filter-bar">
+            <div class="students-search-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input type="text" id="student-search-input" placeholder="Search by student name, email, or course title...">
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <label for="student-course-filter" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600; white-space: nowrap;">Course:</label>
+              <select id="student-course-filter" class="form-input styled-dropdown" style="padding: 7px 12px; font-size: 0.84rem; min-width: 200px;">
+                <option value="all">All Enrolled Courses</option>
               </select>
             </div>
           </div>
+        </div>
 
-          <!-- Lecture Header info & Stateless Storage Badge -->
-          <div class="lecture-meta">
-            <div class="lecture-meta-top">
-              <div class="lecture-badge" id="lecture-category">Applied AI & Machine Learning</div>
-              <div class="storage-badge" id="lecture-storage-badge">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
-                Stored in Google Drive (Stateless Cloud Server)
-              </div>
-            </div>
-            <h2 class="lecture-title" id="lecture-title">Applied AI: Vector RAG Architectures</h2>
-            <div class="current-concept-pill" id="current-concept-pill">
-              <span class="sparkle">✦</span> Current Concept: <strong id="current-concept-name">00:00 - Introduction to Process Scheduling</strong>
-            </div>
+        <!-- Students Table -->
+        <div class="students-table-card glass-panel">
+          <div class="table-responsive">
+            <table class="students-table">
+              <thead>
+                <tr>
+                  <th>Student Name & Email</th>
+                  <th>Course Enrolled</th>
+                  <th>Enrolled On</th>
+                  <th>Progress</th>
+                  <th>AI Doubts</th>
+                  <th>Status</th>
+                  <th style="text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="students-table-body">
+                <tr>
+                  <td colspan="7" style="text-align: center; padding: 36px; color: var(--text-muted);">
+                    Loading students...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 1B: COURSE DETAIL WORKSPACE            -->
+      <!-- ========================================== -->
+      <section class="view-panel" id="view-course-detail">
+        <!-- Breadcrumb Navigation -->
+        <div class="breadcrumb-nav">
+          <div class="breadcrumb-left">
+            <button class="breadcrumb-link" id="btn-back-to-courses">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              All Courses
+            </button>
+            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-current" id="cd-breadcrumb-title">Course Title</span>
+          </div>
+          <div class="breadcrumb-right">
+            <button class="btn btn-sm btn-secondary" id="btn-cd-refresh">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              Refresh
+            </button>
           </div>
         </div>
 
-        <!-- Teacher Studio 4-Tab Panel -->
-        <div class="transcript-card glass-panel">
-          <div class="tab-header">
-            <button class="tab-btn active" data-tab="live-transcript">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-              Diarized Speech (<span id="utt-count">0</span>)
-            </button>
-            <button class="tab-btn" data-tab="rag-chunks">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
-              Semantic Chunks & HyDE (<span id="chunk-count">0</span>)
-            </button>
-            <button class="tab-btn" data-tab="lecture-notes">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-              Study Guide & Summary
-            </button>
-            <button class="tab-btn" data-tab="drive-vault-tab">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
-              Drive Video Vault
-            </button>
-          </div>
-
-          <!-- Tab 1: Live Utterance Stream -->
-          <div class="tab-content active" id="tab-live-transcript">
-            <div class="utterances-stream" id="utterances-container">
-              <div class="empty-state">No lecture loaded. Click "Load OS Lecture Sample" or "Upload Lecture" above.</div>
-            </div>
-          </div>
-
-          <!-- Tab 2: RAG Semantic Chunks -->
-          <div class="tab-content" id="tab-rag-chunks">
-            <div class="chunks-stream" id="chunks-container">
-              <div class="empty-state">Chunks will appear here after lecture processing.</div>
-            </div>
-          </div>
-
-          <!-- Tab 3: Lecture Study Guide & Key Concepts -->
-          <div class="tab-content" id="tab-lecture-notes">
-            <div class="study-guide-container" id="study-guide-container">
+        <!-- Course Hero Banner -->
+        <div class="course-hero-banner">
+          <div class="course-hero-top">
+            <div class="course-hero-info">
+              <div class="course-hero-badges">
+                <span class="badge-hero-cat" id="cd-course-category">Computer Science</span>
+                <span class="badge-hero-inst" id="cd-course-instructor">Course Instructor</span>
+                <span class="badge-mini" id="cd-course-level">All Levels</span>
+              </div>
+              <h1 class="course-hero-title" id="cd-course-title">Course Title</h1>
+              <p class="course-hero-desc" id="cd-course-desc">Watch lecture videos, read notes, and ask AI doubts anytime.</p>
               
-              <!-- Direct Notes & Assignment Upload to Supabase Storage -->
-              <div class="resource-upload-card">
-                <div class="resource-upload-header">
-                  <div>
-                    <h4>⚡ Upload Course Notes & Assignment (Supabase Storage)</h4>
-                    <p class="resource-desc">Upload lecture PDFs, assignment guides, and cheatsheets directly into Supabase bucket (<code>course_resources</code>). Instant sync for student portal.</p>
-                  </div>
-                  <button type="button" class="btn btn-sm btn-primary" id="btn-toggle-resource-form">+ Upload Material</button>
-                </div>
-
-                <form id="resource-upload-form" class="resource-form" style="display: none;">
-                  <div class="form-row">
-                    <div class="form-group flex-2">
-                      <label for="resource-title">Material Title:</label>
-                      <input type="text" id="resource-title" class="form-input" placeholder="e.g. Unit 3: CPU Scheduling & Round Robin Cheatsheet.pdf" required>
-                    </div>
-                    <div class="form-group flex-1">
-                      <label for="resource-type">Type:</label>
-                      <select id="resource-type" class="form-input styled-dropdown">
-                        <option value="pdf">Lecture Notes (PDF)</option>
-                        <option value="assignment">Assignment / HW</option>
-                        <option value="slides">Slides (PPT/PDF)</option>
-                        <option value="zip">Code / Templates (ZIP)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div class="form-row">
-                    <div class="form-group flex-2">
-                      <label for="resource-file">Choose File (PDF, DOCX, ZIP, TXT):</label>
-                      <input type="file" id="resource-file" class="form-input" accept=".pdf,.docx,.doc,.zip,.txt,.ppt,.pptx,.ipynb" required>
-                    </div>
-                    <div class="form-group flex-1 form-btn-align">
-                      <button type="submit" class="btn btn-primary" id="btn-submit-resource">Upload to Supabase</button>
-                    </div>
-                  </div>
-                  <div id="resource-upload-status" class="upload-status-text"></div>
-                </form>
-              </div>
-
-              <!-- List of Uploaded Materials for active course -->
-              <div class="guide-section">
-                <div class="section-title-wrap">
-                  <h3>📁 Course Resources & Notes Vault</h3>
-                  <span class="badge-mini" id="resources-count-badge">0 Files</span>
-                </div>
-                <div class="resources-grid" id="resources-list-container">
-                  <div class="empty-state">No notes uploaded yet for this course. Click "+ Upload Material" above.</div>
-                </div>
-              </div>
-
-              <div class="guide-section">
-                <h3>📖 Professor's Lecture Summary</h3>
-                <p id="guide-summary">This lecture provides in-depth instruction on CPU Scheduling, Preemptive vs Non-Preemptive algorithms, Context Switching overheads, and Round Robin time quantum dynamics. All concepts are indexed with 768-dim embeddings in Supabase for student Q&A.</p>
-              </div>
-              <div class="guide-section">
-                <h3>🎯 Core Formulas & Rules</h3>
-                <ul class="guide-list" id="guide-formulas">
-                  <li><strong>Turnaround Time (TAT):</strong> Completion Time &minus; Arrival Time</li>
-                  <li><strong>Waiting Time (WT):</strong> Turnaround Time &minus; Burst Time</li>
-                  <li><strong>80% Rule of Thumb:</strong> 80% of CPU bursts should be shorter than the Round Robin time quantum</li>
-                </ul>
+              <div class="course-hero-actions">
+                <button class="btn btn-primary btn-lg" id="btn-course-upload-video">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+                  + Upload Video
+                </button>
+                <button class="btn btn-secondary btn-lg" id="btn-course-upload-material">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                  + Add Notes or Assignment
+                </button>
               </div>
             </div>
           </div>
 
-          <!-- Tab 4: Google Drive Video Vault Browser -->
-          <div class="tab-content" id="tab-drive-vault-tab">
-            <div class="drive-vault-wrapper">
-              <div class="drive-vault-header">
-                <div>
-                  <h4>Google Drive Connected Folder</h4>
-                  <p class="drive-folder-text">Folder ID: <code>1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d</code></p>
-                </div>
-                <button class="btn btn-sm btn-secondary" id="btn-refresh-drive">Refresh Files</button>
-              </div>
-              <div class="drive-file-list" id="drive-file-list">
-                <div class="empty-state">Loading Drive files...</div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      <!-- Right Column: AI Teaching Assistant Simulator -->
-      <section class="chat-column">
-        <div class="chat-card glass-panel">
-          <div class="chat-header">
-            <div class="bot-info">
-              <div class="bot-avatar">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-              </div>
+          <div class="course-hero-stats">
+            <div class="hero-stat-item">
+              <span class="stat-icon">🎬</span>
               <div>
-                <h3 class="bot-title">AI Teaching Assistant Simulator</h3>
-                <p class="bot-status">
-                  <span class="online-indicator"></span> Grounded in Indexed Video Transcripts (Supabase RAG)
-                </p>
+                <div class="stat-num" id="cd-lectures-count">0</div>
+                <div class="stat-lbl">Videos</div>
               </div>
             </div>
-            <div class="chat-header-actions">
-              <span class="badge-verified">Teacher Verified</span>
-              <button class="btn btn-sm btn-ghost" id="btn-clear-chat" title="Clear Chat">Clear</button>
+            <div class="hero-stat-item">
+              <span class="stat-icon">📝</span>
+              <div>
+                <div class="stat-num" id="cd-materials-count">0</div>
+                <div class="stat-lbl">Notes & Assignments</div>
+              </div>
+            </div>
+            <div class="hero-stat-item">
+              <span class="stat-icon">🤖</span>
+              <div>
+                <div class="stat-num">AI Doubt Solver</div>
+                <div class="stat-lbl">Answers from Video</div>
+              </div>
             </div>
           </div>
+        </div>
 
-          <!-- Quick Doubt Chips -->
-          <div class="quick-chips-wrapper">
-            <span class="chips-label">Professor Test Doubts:</span>
-            <div class="chips-scroll">
-              <button class="chip" data-query="Explain Round Robin scheduling with time quantum.">Round Robin & Time Quantum</button>
-              <button class="chip" data-query="What is the difference between preemptive and non-preemptive scheduling?">Preemptive vs Non-Preemptive</button>
-              <button class="chip" data-query="What happens if time quantum is too large or too small?">Time Quantum Limits</button>
-              <button class="chip" data-query="What is the 80% rule of thumb for time quantum?">80% Rule of Thumb</button>
+        <!-- Course Videos Section -->
+        <div class="course-lectures-section">
+          <div class="section-title-bar" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+            <div>
+              <h3 style="font-size: 1.35rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 10px;">
+                <span>🎬 Videos in this Course</span>
+                <span class="badge-mini" id="cd-lectures-badge">0 Videos</span>
+              </h3>
+              <p style="font-size: 0.84rem; color: var(--text-muted); margin: 4px 0 0 0;">
+                Click any video to watch and ask AI doubts, or add notes and assignments below.
+              </p>
             </div>
+            <button class="btn btn-primary" id="btn-section-upload-video">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+              + Upload Video
+            </button>
           </div>
 
-          <!-- Chat Messages Scroll Area -->
-          <div class="chat-messages" id="chat-messages">
-            <div class="message-wrapper ai">
-              <div class="msg-avatar">AI</div>
-              <div class="msg-content">
-                <div class="msg-bubble">
-                  <p>Welcome, Professor! This is your <strong>AI Teaching Assistant Simulator</strong>. You can test any student questions here to verify that the RAG model returns exact explanations with <strong>clickable timestamp badges</strong> grounded in your lecture words.</p>
+          <!-- Video lectures grid -->
+          <div class="course-lectures-container" id="cd-lectures-grid">
+            <div class="empty-state">Loading videos...</div>
+          </div>
+        </div>
+
+        <!-- Course-wide Materials Section -->
+        <div class="course-general-materials-section" style="margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border-color);">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+            <div>
+              <h4 style="font-size: 1.15rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 8px;">
+                <span>📁 Course Files & Syllabus</span>
+                <span class="badge-mini" id="cd-course-mats-badge">0 Documents</span>
+              </h4>
+              <p style="font-size: 0.8rem; color: var(--text-dim); margin: 3px 0 0 0;">
+                Syllabus and common documents for this course.
+              </p>
+            </div>
+            <button class="btn btn-sm btn-secondary" id="btn-add-course-level-material">
+              + Upload File
+            </button>
+          </div>
+          <div class="materials-grid" id="cd-course-materials-grid">
+            <div class="empty-state">No common course files uploaded yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 4: INTERACTIVE LECTURE STUDIO & AI     -->
+      <!-- ========================================== -->
+      <section class="view-panel" id="view-lecture-studio">
+        <div class="studio-layout">
+          
+          <!-- Left Column: Video Stage & Diarized Speech / Chunks -->
+          <div class="studio-left">
+            <!-- Studio Breadcrumb -->
+            <div class="breadcrumb-nav" style="margin-bottom: 14px;">
+              <div class="breadcrumb-left">
+                <button class="breadcrumb-link" id="btn-back-to-course-from-studio">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                  ← Back to <span id="studio-back-course-name">Course</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Video Card -->
+            <div class="video-card glass-panel">
+              <div class="video-container" id="video-wrapper">
+                <video id="lecture-video" preload="metadata" playsinline poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'><rect width='800' height='450' fill='%230f141c'/><circle cx='400' cy='225' r='48' fill='%236366f1' fill-opacity='0.2'/><polygon points='390,205 425,225 390,245' fill='%23818cf8'/><text x='400' y='310' font-family='sans-serif' font-size='16' fill='%2394a3b8' text-anchor='middle'>Load or Select a Lecture to Play</text></svg>">
+                  <source id="video-source" src="" type="video/mp4">
+                  Your browser does not support HTML5 video.
+                </video>
+                
+                <iframe id="drive-iframe" src="" style="display: none; width: 100%; height: 100%; border: none;" allow="autoplay" allowfullscreen></iframe>
+
+                <div class="video-overlay" id="video-overlay">
+                  <button class="btn-big-play" id="btn-overlay-play">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Video Custom Controls Bar -->
+              <div class="player-controls">
+                <button class="ctrl-btn" id="ctrl-play-pause" title="Play/Pause">
+                  <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                  <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                </button>
+                <span class="time-display" id="time-current">00:00</span>
+                <input type="range" class="seek-bar" id="seek-bar" value="0" min="0" step="0.5">
+                <span class="time-display" id="time-duration">00:00</span>
+                <div class="speed-select-wrap">
+                  <select id="playback-speed" class="speed-select">
+                    <option value="1">1x</option>
+                    <option value="1.25">1.25x</option>
+                    <option value="1.5" selected>1.5x</option>
+                    <option value="2">2x</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Lecture Meta & Live Concept Indicator -->
+              <div class="lecture-meta">
+                <div class="lecture-meta-top">
+                  <div class="lecture-badge" id="lecture-category">Computer Science</div>
+                  <div class="lecture-picker-inline">
+                    <label for="studio-lecture-select">Switch Lecture:</label>
+                    <select id="studio-lecture-select" class="styled-dropdown-mini"></select>
+                  </div>
+                </div>
+                <h2 class="lecture-title" id="lecture-title">Applied AI: Vector RAG Architectures</h2>
+                <div class="current-concept-pill" id="current-concept-pill">
+                  <span class="sparkle">✦</span> Current Concept: <strong id="current-concept-name">00:00 - Introduction to Process Scheduling</strong>
+                </div>
+              </div>
+            </div>
+
+            <!-- Studio Subtabs: Diarized Speech, Chunks & HyDE, Notes & Formulas -->
+            <div class="studio-subtabs-card glass-panel">
+              <div class="subtabs-header">
+                <button class="subtab-btn active" data-subtab="diarized-speech">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                  Diarized Speech (<span id="utt-count">0</span>)
+                </button>
+                <button class="subtab-btn" data-subtab="semantic-chunks">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+                  Semantic Chunks & HyDE (<span id="chunk-count">0</span>)
+                </button>
+                <button class="subtab-btn" data-subtab="formulas-summary">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                  Summary & Equations
+                </button>
+                <button class="subtab-btn" data-subtab="lecture-materials">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                  Notes & Assignments (<span id="studio-mat-count">0</span>)
+                </button>
+              </div>
+
+              <!-- Subtab 1: Diarized Speech Stream -->
+              <div class="subtab-content active" id="subtab-diarized-speech">
+                <div class="utterances-stream" id="utterances-container">
+                  <div class="empty-state">Select a lecture to view spoken utterances.</div>
+                </div>
+              </div>
+
+              <!-- Subtab 2: Semantic Chunks -->
+              <div class="subtab-content" id="subtab-semantic-chunks">
+                <div class="chunks-stream" id="chunks-container">
+                  <div class="empty-state">No semantic chunks loaded.</div>
+                </div>
+              </div>
+
+              <!-- Subtab 3: Summary & Equations -->
+              <div class="subtab-content" id="subtab-formulas-summary">
+                <div class="study-summary-pane">
+                  <div class="guide-section">
+                    <h3>📖 Professor's Lecture Summary</h3>
+                    <p id="guide-summary">This lecture provides in-depth instruction on CPU Scheduling, Preemptive vs Non-Preemptive algorithms, Context Switching overheads, and Round Robin time quantum dynamics. All concepts are indexed with 768-dim embeddings in Supabase for student Q&A.</p>
+                  </div>
+                  <div class="guide-section">
+                    <h3>🎯 Core Formulas & Rules</h3>
+                    <ul class="guide-list" id="guide-formulas">
+                      <li><strong>Turnaround Time (TAT):</strong> Completion Time &minus; Arrival Time</li>
+                      <li><strong>Waiting Time (WT):</strong> Turnaround Time &minus; Burst Time</li>
+                      <li><strong>80% Rule of Thumb:</strong> 80% of CPU bursts should be shorter than the Round Robin time quantum</li>
+                    </ul>
+                  </div>
+              <!-- Subtab 4: Lecture Notes & Assignments -->
+              <div class="subtab-content" id="subtab-lecture-materials">
+                <div class="studio-materials-pane">
+                  <div class="studio-mat-header">
+                    <h4>📎 Attached Notes, Slides & Problem Sets</h4>
+                    <button class="btn btn-sm btn-primary" id="btn-studio-add-material">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                      + Attach Note / Assignment
+                    </button>
+                  </div>
+                  <div class="studio-mat-grid" id="studio-mat-grid">
+                    <div class="empty-state">No materials attached to this lecture yet. Click '+ Attach Note / Assignment' to upload.</div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Chat Input -->
-          <form class="chat-input-bar" id="chat-form">
-            <textarea id="chat-input" rows="1" placeholder="Test a student doubt on this lecture..." required></textarea>
-            <button type="submit" class="btn-send" id="btn-send" title="Send Question">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            </button>
-          </form>
-        </div>
+          <!-- Right Column: AI Doubt Assistant Simulator -->
+          <div class="studio-right">
+            <div class="chat-card glass-panel">
+              <div class="chat-header">
+                <div class="bot-info">
+                  <div class="bot-avatar">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                  </div>
+                  <div>
+                    <h3 class="bot-title">ClimbUp AI Mentor</h3>
+                    <p class="bot-status">
+                      <span class="online-indicator"></span> Grounded in Video Transcripts (Supabase RAG)
+                    </p>
+                  </div>
+                </div>
+                <button class="btn btn-sm btn-secondary" id="btn-clear-chat" title="Clear Chat History">
+                  Clear
+                </button>
+              </div>
+
+              <!-- Quick Student Doubt Chips -->
+              <div class="quick-chips-wrapper">
+                <span class="chips-label">Student Doubts:</span>
+                <div class="chips-scroll"></div>
+              </div>
+
+              <!-- Chat Messages Stream -->
+              <div class="chat-messages" id="chat-messages">
+                <div class="message-wrapper ai">
+                  <div class="msg-avatar">AI</div>
+                  <div class="msg-content">
+                    <div class="msg-bubble">
+                      Hello Professor! I am your <strong>ClimbUp AI Mentor</strong>. I am grounded directly in the spoken transcripts and concept boundaries of this lecture. Click any student doubt chip above or ask any question to test grounded retrieval and clickable timestamp badges <code>[MM:SS]</code>.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Chat Input Bar -->
+              <form class="chat-input-bar" id="chat-form">
+                <input type="text" id="chat-input" class="chat-input" placeholder="Ask a doubt regarding this lecture (e.g. explain round robin overhead)..." autocomplete="off">
+                <button type="submit" class="btn btn-primary btn-send" id="btn-send-chat">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                </button>
+              </form>
+            </div>
+          </div>
+
       </section>
+
     </main>
 
-    <!-- Upload & Process Modal -->
-    <div class="modal-backdrop" id="upload-modal" style="display: none;">
-      <div class="modal-dialog glass-panel">
+
+    <!-- ========================================== -->
+    <!-- MODAL 1: UPLOAD & INGEST LECTURE VIDEO     -->
+    <!-- ========================================== -->
+    <div class="modal" id="modal-upload-video" style="display: none;">
+      <div class="modal-dialog glass-panel" style="max-width: 680px; max-height: 90vh; overflow-y: auto;">
         <div class="modal-header">
-          <h2>Upload Lecture Video to Google Drive</h2>
-          <button class="btn-close" id="btn-close-modal">&times;</button>
-        </div>
-        <div class="modal-body">
-          <div class="stateless-callout">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">🎬</span>
             <div>
-              <strong>Stateless Video Architecture:</strong> Video is directly uploaded to your Google Drive folder (<code>1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d</code>). The Cloud Run server is purely used for the RAG pipeline and does not consume heavy video storage!
+              <h2 style="font-size: 1.22rem; margin: 0; color: #fff;">Upload & Ingest Lecture Video</h2>
+              <p style="font-size: 0.78rem; color: var(--text-muted); margin: 3px 0 0 0;">
+                Target Course: <strong id="modal-upload-target-course" style="color: #a5b4fc;">Course</strong>
+              </p>
             </div>
           </div>
+          <button class="btn-close" id="btn-close-video-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="modal-lecture-upload-form">
+            <input type="hidden" id="modal-upload-course-id" value="">
 
-          <form id="upload-form">
             <div class="form-group">
-              <label for="lecture-name-input">Lecture Title</label>
-              <input type="text" id="lecture-name-input" class="form-input" placeholder="e.g. Distributed Systems: Raft Consensus" value="Operating Systems: Memory Management & Paging" required>
+              <label for="modal-lecture-title-input">Lecture Title *</label>
+              <input type="text" id="modal-lecture-title-input" class="form-input" placeholder="e.g. Lecture 6: Virtual Memory, Paging & TLB Optimization" required>
             </div>
 
-            <div class="form-group">
-              <label for="course-name-input">Course Assignment</label>
-              <input type="text" id="course-name-input" class="form-input" placeholder="e.g. CS-301 Operating Systems" value="Applied AI & GenAI with RAG Architectures" required>
-            </div>
-
-            <div class="source-mode-toggle">
-              <button type="button" class="mode-btn active" id="btn-mode-file">📁 Upload to Google Drive</button>
-              <button type="button" class="mode-btn" id="btn-mode-url">🌐 Direct URL Stream</button>
-            </div>
-
-            <!-- Mode 1: Local File Drop Zone -->
-            <div class="drop-zone" id="drop-zone">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-              <p class="drop-text">Drag & drop lecture video/audio here or <span class="browse-link">browse file</span></p>
-              <span class="file-info" id="selected-file-name">Supports MP4, WebM, MKV, MP3, WAV (Direct to Google Drive)</span>
-              <input type="file" id="file-input" accept="video/*,audio/*" style="display: none;">
-            </div>
-
-            <!-- Mode 2: Online URL Input -->
-            <div class="url-input-container" id="url-container" style="display: none;">
-              <div class="form-group">
-                <label for="media-url-input">Direct Audio / Video URL (Deepgram Streams Directly):</label>
-                <input type="url" id="media-url-input" class="form-input" placeholder="https://archive.org/download/.../lecture.mp3">
-              </div>
-              <div class="presets-section">
-                <span class="presets-label">⚡ 1-Click Online Test Presets:</span>
-                <div class="presets-btns">
-                  <button type="button" class="preset-btn" id="preset-1hr">1-Hour CS & Crypto Lecture</button>
-                  <button type="button" class="preset-btn" id="preset-2hr">2-Hour Science of Getting Rich</button>
-                </div>
+            <!-- Ingestion Method Tabs -->
+            <div class="ingest-methods-header">
+              <label class="form-label" style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Ingestion Mode:</label>
+              <div class="mode-toggles">
+                <button type="button" class="mode-btn active" id="modal-btn-mode-file" data-mode="file">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  File Upload
+                </button>
+                <button type="button" class="mode-btn" id="modal-btn-mode-url" data-mode="url">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                  Direct URL / Drive
+                </button>
               </div>
             </div>
 
-            <!-- Ingestion Live Stepper Progress -->
-            <div class="stepper-progress" id="stepper-progress" style="display: none;">
-              <h4 class="stepper-title">Automated RAG Pipeline Running...</h4>
-              <div class="step-item" id="step-1">
-                <div class="step-icon"><span class="step-num">1</span></div>
-                <div class="step-details">
-                  <strong>Direct Upload to Google Drive</strong>
-                  <p>Saving video file safely to Drive vault without burdening server disk</p>
-                </div>
+            <!-- Option A: File Drop Zone -->
+            <div class="drop-zone" id="modal-drop-zone">
+              <input type="file" id="modal-file-input" accept="video/*,audio/*" style="display: none;">
+              <div class="drop-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+                  <path d="M12 12v9"></path>
+                  <path d="m16 16-4-4-4 4"></path>
+                </svg>
               </div>
-              <div class="step-item" id="step-2">
-                <div class="step-icon"><span class="step-num">2</span></div>
-                <div class="step-details">
-                  <strong>Deepgram Nova-2 Audio Transcription</strong>
-                  <p>Diarizing teacher vs student speech and sub-second word timestamps</p>
-                </div>
+              <div class="drop-text"><strong>Click to browse</strong> or drag & drop lecture video</div>
+              <div class="drop-sub" id="modal-selected-file-name">Supports MP4, WebM, MKV, MP3, WAV (Direct 0-disk streaming)</div>
+            </div>
+
+            <!-- Option B: URL Input Container -->
+            <div class="url-input-container" id="modal-url-container" style="display: none;">
+              <label for="modal-media-url-input">Direct Video URL or Google Drive Public Link:</label>
+              <div class="input-with-button">
+                <input type="url" id="modal-media-url-input" class="form-input" placeholder="https://drive.google.com/file/d/... or https://domain.com/video.mp4">
               </div>
-              <div class="step-item" id="step-3">
-                <div class="step-icon"><span class="step-num">3</span></div>
-                <div class="step-details">
-                  <strong>Gemini 2.5 Flash Concept Chunking</strong>
-                  <p>Partitioning by semantic transitions & cleaning speech disfluency</p>
-                </div>
-              </div>
-              <div class="step-item" id="step-4">
-                <div class="step-icon"><span class="step-num">4</span></div>
-                <div class="step-details">
-                  <strong>Supabase Vector Store Sync</strong>
-                  <p>Writing 768-dim embeddings into <code>transcript_chunks_vector</code></p>
-                </div>
+              <div class="url-presets">
+                <span class="preset-label">1-Click Presets:</span>
+                <button type="button" class="preset-tag modal-preset" data-url="https://drive.google.com/file/d/1B6pB90wz63937y5i25Nf27473_sample/view">OS Masterclass (3 Hours)</button>
+                <button type="button" class="preset-tag modal-preset" data-url="https://drive.google.com/file/d/1XyZ987_sample_berkeley/view">UC Berkeley CS61C</button>
               </div>
             </div>
 
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" id="btn-cancel-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary" id="btn-submit-upload">
-                Start Processing
-              </button>
+            <!-- Stepper Progress Tracker -->
+            <div class="stepper-progress" id="modal-stepper-progress" style="display: none; margin-top: 16px;">
+              <div class="stepper-header">
+                <span class="stepper-title">AI Processing Pipeline Running...</span>
+                <span class="stepper-spin">⚙</span>
+              </div>
+              <div class="step-item" id="modal-step-1">
+                <div class="step-num">1</div>
+                <div class="step-label">16kHz Audio Extraction (FFmpeg WAV)</div>
+                <div class="step-status">Pending</div>
+              </div>
+              <div class="step-item" id="modal-step-2">
+                <div class="step-num">2</div>
+                <div class="step-label">Deepgram Nova-2 (Diarization & Timestamps)</div>
+                <div class="step-status">Pending</div>
+              </div>
+              <div class="step-item" id="modal-step-3">
+                <div class="step-num">3</div>
+                <div class="step-label">Gemini Concept Boundaries & HyDE Query Gen</div>
+                <div class="step-status">Pending</div>
+              </div>
+              <div class="step-item" id="modal-step-4">
+                <div class="step-num">4</div>
+                <div class="step-label">768-dim Vector Embeddings & Supabase Sync</div>
+                <div class="step-status">Pending</div>
+              </div>
+            </div>
+
+            <div class="modal-footer" style="margin-top: 20px;">
+              <span id="modal-upload-feedback" class="feedback-msg"></span>
+              <button type="button" class="btn btn-secondary" id="btn-cancel-modal-video">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="modal-btn-submit-video">Process & Ingest Lecture</button>
             </div>
           </form>
         </div>
       </div>
     </div>
 
-    <!-- Google Drive Folder Browser Modal -->
-    <div class="modal-backdrop" id="drive-modal" style="display: none;">
-      <div class="modal-dialog glass-panel" style="max-width: 680px;">
+    <!-- ========================================== -->
+    <!-- MODAL 2: UPLOAD COURSE NOTES & ASSIGNMENTS -->
+    <!-- ========================================== -->
+    <div class="modal" id="modal-upload-material" style="display: none;">
+      <div class="modal-dialog glass-panel" style="max-width: 620px; max-height: 90vh; overflow-y: auto;">
         <div class="modal-header">
-          <h2>Google Drive Video Vault</h2>
-          <button class="btn-close" id="btn-close-drive-modal">&times;</button>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">📄</span>
+            <div>
+              <h2 style="font-size: 1.22rem; margin: 0; color: #fff;">Upload Course Material or Assignment</h2>
+              <p style="font-size: 0.78rem; color: var(--text-muted); margin: 3px 0 0 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px;">
+                <span>Target:</span>
+                <strong id="modal-mat-target-course" style="color: #a5b4fc;">Course</strong>
+                <span id="modal-mat-target-lecture-badge" style="display:none; background: rgba(99,102,241,0.25); border: 1px solid rgba(99,102,241,0.4); color: #c7d2fe; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;"></span>
+              </p>
+            </div>
+          </div>
+          <button class="btn-close" id="btn-close-mat-modal">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="modal-desc">
-            Directly select any lecture video or audio from your Google Drive folder (<code>1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d</code>) to index into the RAG system.
-          </p>
-          <div class="drive-files-container" id="drive-modal-list">
-            <div class="empty-state">Loading Drive files...</div>
-          </div>
+          <form id="modal-material-upload-form">
+            <input type="hidden" id="modal-mat-course-id" value="">
+            <input type="hidden" id="modal-mat-lecture-id" value="">
+            <input type="hidden" id="modal-mat-lecture-title" value="">
+
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label for="modal-mat-type">Material Type *</label>
+                <select id="modal-mat-type" class="form-input styled-dropdown" required>
+                  <option value="notes">Lecture Notes (PDF)</option>
+                  <option value="assignment">Assignment / Problem Set</option>
+                  <option value="cheatsheet">Cheatsheet / Summary</option>
+                  <option value="slides">Presentation Slides (PPT/PDF)</option>
+                  <option value="lab">Lab Code / Starter (ZIP)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="modal-mat-title">Title *</label>
+                <input type="text" id="modal-mat-title" class="form-input" placeholder="e.g. Unit 3: CPU Scheduling Algorithms & Notes" required>
+              </div>
+            </div>
+
+            <!-- Dynamic Assignment specific fields (visible only when type = assignment) -->
+            <div class="form-grid-2" id="modal-assignment-extra" style="display: none;">
+              <div class="form-group">
+                <label for="modal-mat-due-date">Submission Due Date</label>
+                <input type="date" id="modal-mat-due-date" class="form-input">
+              </div>
+              <div class="form-group">
+                <label for="modal-mat-max-points">Max Points / Marks</label>
+                <input type="number" id="modal-mat-max-points" class="form-input" placeholder="e.g. 100" min="0">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="modal-mat-desc">Description / Instructions</label>
+              <textarea id="modal-mat-desc" class="form-input form-textarea" rows="2" placeholder="e.g. Official syllabus notes and practice problem sets for this lecture..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="modal-mat-file">Choose File (PDF, DOCX, PPTX, ZIP, IPYNB, TXT) *</label>
+              <input type="file" id="modal-mat-file" class="form-input" accept=".pdf,.docx,.doc,.zip,.txt,.ppt,.pptx,.ipynb" required>
+            </div>
+
+            <div class="modal-footer" style="margin-top: 20px;">
+              <span id="modal-mat-feedback" class="feedback-msg"></span>
+              <button type="button" class="btn btn-secondary" id="btn-cancel-modal-mat">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="modal-btn-submit-mat">Upload to Supabase Storage</button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
 
-    <!-- Settings Modal -->
-    <div class="modal-backdrop" id="settings-modal" style="display: none;">
+    <!-- Cloud Settings Modal -->
+    <div class="modal" id="settings-modal" style="display: none;">
       <div class="modal-dialog glass-panel">
         <div class="modal-header">
           <h2>Cloud Infrastructure & Keys</h2>
@@ -471,6 +876,6 @@
 
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
