@@ -24,6 +24,11 @@ class Config:
     
     # Google Drive Integration
     GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+    if not GOOGLE_CREDENTIALS_JSON and (BASE_DIR / "service_account.json").exists():
+        try:
+            GOOGLE_CREDENTIALS_JSON = (BASE_DIR / "service_account.json").read_text(encoding="utf-8")
+        except Exception:
+            pass
     GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d")
     
     # Networking
@@ -47,4 +52,9 @@ def reload_config():
     Config.SUPABASE_URL = os.getenv("SUPABASE_URL", "")
     Config.SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
     Config.GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+    if not Config.GOOGLE_CREDENTIALS_JSON and (Config.BASE_DIR / "service_account.json").exists():
+        try:
+            Config.GOOGLE_CREDENTIALS_JSON = (Config.BASE_DIR / "service_account.json").read_text(encoding="utf-8")
+        except Exception:
+            pass
     Config.GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d")
