@@ -204,13 +204,18 @@ def chat_query(req: ChatRequest):
     if not Config.GEMINI_API_KEY:
         raise HTTPException(status_code=400, detail="Gemini API Key is not configured.")
 
-    engine = RAGEngine(Config.GEMINI_API_KEY, db)
-    response = engine.answer_query(
-        query=req.query,
-        lesson_id=req.lesson_id,
-        session_id=req.session_id or "default-session"
-    )
-    return response
+    try:
+        engine = RAGEngine(Config.GEMINI_API_KEY, db)
+        response = engine.answer_query(
+            query=req.query,
+            lesson_id=req.lesson_id,
+            session_id=req.session_id or "default-session"
+        )
+        return response
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
 
 @app.post("/api/load-sample")
 def load_sample_lecture():

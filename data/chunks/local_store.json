@@ -12456,5 +12456,37 @@
       ]
     }
   ],
-  "chat_history": []
+  "chat_messages": [
+    {
+      "id": "01aa3544-b5f2-4569-a674-cf861534a61b",
+      "session_id": "default-session",
+      "sender": "student",
+      "message": "What is the 80% rule of thumb for CPU bursts in Round Robin scheduling?",
+      "timestamp_ref": null,
+      "retrieved_chunk_ids": []
+    },
+    {
+      "id": "62283140-7f6c-4cd6-9c52-7c1362885e0e",
+      "session_id": "default-session",
+      "sender": "ai",
+      "message": "Hello! As your Intelligent Teaching Assistant, I would be happy to explain the 80% rule of thumb based directly on our lecture material.\n\n### The 80% Rule of Thumb for CPU Bursts\n\nAccording to the teacher, the **80% rule of thumb** dictates that **80 percent of CPU bursts should be shorter than the time quantum** in Round Robin scheduling `[102:20]`. \n\nHere is why this rule is important for scheduler performance:\n* **Voluntary Termination/Blocking:** By ensuring that the vast majority of CPU bursts fit within a single time quantum, most processes will naturally finish their work or block for I/O *voluntarily* before their time slice expires `[102:20]`.\n* **Minimizing Overhead:** This balance minimizes the frequency of forced preemption and costly context switches, protecting overall system throughput `[102:20]`.\n* **Preserving Responsiveness:** At the same time, it keeps the time quantum small enough to preserve interactive responsiveness for user processes `[102:20]`. \n\n*(For context on the broader trade-offs of the time quantum, remember that if the quantum is set too small, context switch overhead dominates, whereas if it approaches infinity, Round Robin degrades into FCFS and causes the convoy effect `[74:35]`.)*\n\n***\n\n### Suggested Questions\n1. How does context switch overhead\u2014specifically cold CPU cache invalidation\u2014impact system performance when time quanta are set too low `[24:00]`?\n2. What are the mathematical implications on Effective Memory Access Time (EAT) when paging and TLB hit ratios fluctuate `[165:10]`?",
+      "timestamp_ref": {
+        "timestamps": [
+          "102:20",
+          "102:20",
+          "102:20",
+          "102:20",
+          "74:35",
+          "24:00",
+          "165:10"
+        ]
+      },
+      "retrieved_chunk_ids": [
+        "e3cefced-2578-424d-9afa-6908cd21b5dc",
+        "751573ba-3b1a-4e35-8d8f-6355dde0dd31",
+        "f55432aa-621a-4f6e-9413-6020cc7714cd",
+        "f802911f-2aaa-4bd5-aee0-c9e7b2388664"
+      ]
+    }
+  ]
 }

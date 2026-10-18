@@ -191,14 +191,20 @@ class DBAdapter:
         retrieved_chunk_ids: Optional[List[str]] = None
     ):
         """Records student and AI messages into ai_chat_messages schema."""
-        store = self._read_local_store()
-        msg_record = {
-            "id": str(uuid.uuid4()),
-            "session_id": session_id,
-            "sender": sender,
-            "message": message,
-            "timestamp_ref": timestamp_ref,
-            "retrieved_chunk_ids": retrieved_chunk_ids or []
-        }
-        store["chat_messages"].append(msg_record)
-        self._write_local_store(store)
+        try:
+            store = self._read_local_store()
+            if "chat_messages" not in store:
+                store["chat_messages"] = store.get("chat_history", [])
+            msg_record = {
+                "id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "sender": sender,
+                "message": message,
+                "timestamp_ref": timestamp_ref,
+                "retrieved_chunk_ids": retrieved_chunk_ids or []
+            }
+            store["chat_messages"].append(msg_record)
+            self._write_local_store(store)
+        except Exception as e:
+            # Safe write: Never fail the chat query if local logging fails
+            print(f"[Warning] Could not record chat message to local store: {e}")
