@@ -5,18 +5,40 @@ const API_BASE = (typeof window !== "undefined" && (window.location.port === "80
     ? "http://127.0.0.1:8000"
     : "https://teacher-lecture-video-rag-28929614461.asia-south1.run.app";
 
+async function parseResponse(res, defaultError = "Request failed") {
+  if (!res.ok) {
+    let msg = `${defaultError} (${res.status})`;
+    try {
+      const raw = await res.text();
+      try {
+        const json = JSON.parse(raw);
+        msg = json.detail || json.message || json.error || msg;
+      } catch {
+        const titleMatch = raw.match(/<title>(.*?)<\/title>/i);
+        if (titleMatch && titleMatch[1]) {
+          msg = `${titleMatch[1].trim()} (HTTP ${res.status})`;
+        } else {
+          const text = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+          msg = text.slice(0, 200) || `HTTP ${res.status}`;
+        }
+      }
+    } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 export const api = {
   // System Status
   async getStatus() {
     const res = await fetch(`${API_BASE}/api/status`);
-    return res.json();
+    return parseResponse(res, "Failed to get system status");
   },
 
   // Courses
   async getCourses() {
     const res = await fetch(`${API_BASE}/api/courses`);
-    if (!res.ok) throw new Error("Failed to load courses");
-    return res.json();
+    return parseResponse(res, "Failed to load courses");
   },
 
   async createCourse(courseData) {
@@ -25,36 +47,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(courseData)
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Failed to create course");
-    }
-    return res.json();
+    return parseResponse(res, "Failed to create course");
   },
 
   async deleteCourse(courseId) {
     const res = await fetch(`${API_BASE}/api/courses/${courseId}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to delete course");
-    return res.json();
+    return parseResponse(res, "Failed to delete course");
   },
 
   // Lessons / Video Lectures
   async getLessons() {
     const res = await fetch(`${API_BASE}/api/lessons`);
-    if (!res.ok) throw new Error("Failed to load lectures");
-    return res.json();
+    return parseResponse(res, "Failed to load lectures");
   },
 
   async getLesson(lessonId) {
     const res = await fetch(`${API_BASE}/api/lessons/${lessonId}`);
-    if (!res.ok) throw new Error("Failed to load lecture details");
-    return res.json();
+    return parseResponse(res, "Failed to load lecture details");
   },
 
   async deleteLesson(lessonId) {
     const res = await fetch(`${API_BASE}/api/lessons/${lessonId}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to delete lecture");
-    return res.json();
+    return parseResponse(res, "Failed to delete lecture");
   },
 
   async processVideo(formData) {
@@ -62,18 +76,13 @@ export const api = {
       method: "POST",
       body: formData
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Video ingestion failed");
-    }
-    return res.json();
+    return parseResponse(res, "Video ingestion failed");
   },
 
   // Notes & Assignments
   async getCourseResources(courseId) {
     const res = await fetch(`${API_BASE}/api/courses/${courseId}/resources`);
-    if (!res.ok) throw new Error("Failed to load course materials");
-    return res.json();
+    return parseResponse(res, "Failed to load course materials");
   },
 
   async uploadResource(formData) {
@@ -81,17 +90,12 @@ export const api = {
       method: "POST",
       body: formData
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Resource upload failed");
-    }
-    return res.json();
+    return parseResponse(res, "Resource upload failed");
   },
 
   async deleteResource(resourceId) {
     const res = await fetch(`${API_BASE}/api/resources/${resourceId}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to delete resource");
-    return res.json();
+    return parseResponse(res, "Failed to delete resource");
   },
 
   // RAG Chat
@@ -101,26 +105,25 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, lesson_id: lessonId })
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Chat request failed");
-    }
-    return res.json();
+    return parseResponse(res, "Chat request failed");
   },
 
   // Google Drive
   async getDriveFiles() {
-    const res = await fetch(`${API_BASE}/api/drive/files`);
-    if (!res.ok) return { configured: false, files: [] };
-    return res.json();
+    try {
+      const res = await fetch(`${API_BASE}/api/drive/files`);
+      if (!res.ok) return { configured: false, files: [] };
+      return res.json();
+    } catch {
+      return { configured: false, files: [] };
+    }
   },
 
   // Students
   async getStudents(courseId = null) {
     const url = courseId ? `${API_BASE}/api/students?course_id=${encodeURIComponent(courseId)}` : `${API_BASE}/api/students`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to load students");
-    return res.json();
+    return parseResponse(res, "Failed to load students");
   },
 
   async enrollStudent(studentData) {
@@ -129,17 +132,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(studentData)
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Failed to enroll student");
-    }
-    return res.json();
+    return parseResponse(res, "Failed to enroll student");
   },
 
   async deleteStudent(studentId) {
     const res = await fetch(`${API_BASE}/api/students/${studentId}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to remove student");
-    return res.json();
+    return parseResponse(res, "Failed to remove student");
   },
 
   // Settings
@@ -149,7 +147,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    if (!res.ok) throw new Error("Failed to update config");
-    return res.json();
+    return parseResponse(res, "Failed to update config");
   }
 };
