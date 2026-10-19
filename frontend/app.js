@@ -1404,16 +1404,15 @@ document.addEventListener("DOMContentLoaded", () => {
     modalStepperProgress.style.display = "none";
     modalUploadFeedback.innerHTML = "";
 
-    // Default to Drive Vault mode (Zero-disk, no 32MB limit)
-    modalVideoMode = "vault";
-    if (modalBtnModeVault) modalBtnModeVault.classList.add("active");
+    // Default to Direct File Upload mode (Auto-synced to 5TB Drive Vault + RAG)
+    modalVideoMode = "file";
+    if (modalBtnModeFile) modalBtnModeFile.classList.add("active");
+    if (modalBtnModeVault) modalBtnModeVault.classList.remove("active");
     if (modalBtnModeUrl) modalBtnModeUrl.classList.remove("active");
-    if (modalBtnModeFile) modalBtnModeFile.classList.remove("active");
-    if (modalVaultPickerContainer) modalVaultPickerContainer.style.display = "flex";
+    if (modalDropZone) modalDropZone.style.display = "flex";
+    if (modalVaultPickerContainer) modalVaultPickerContainer.style.display = "none";
     if (modalUrlContainer) modalUrlContainer.style.display = "none";
-    if (modalDropZone) modalDropZone.style.display = "none";
 
-    loadModalDriveFiles();
     modalUploadVideo.style.display = "flex";
   }
 

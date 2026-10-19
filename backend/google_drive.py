@@ -40,14 +40,33 @@ class GoogleDriveManager:
             return None
 
     def is_configured(self) -> bool:
-        return self.service is not None
+        return self.service is not None or bool(getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", ""))
 
     def list_files(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Lists files inside the designated Google Drive folder."""
+        fid = folder_id or self.default_folder_id
+        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if oauth_token:
+            try:
+                import requests
+                query = f"'{fid}' in parents and trashed=false" if fid else "trashed=false"
+                url = "https://www.googleapis.com/drive/v3/files"
+                params = {
+                    "q": query,
+                    "pageSize": 50,
+                    "fields": "files(id, name, mimeType, size, createdTime, webViewLink, thumbnailLink)",
+                    "orderBy": "createdTime desc",
+                    "supportsAllDrives": "true"
+                }
+                r = requests.get(url, headers={"Authorization": f"Bearer {oauth_token}"}, params=params, timeout=15)
+                if r.ok:
+                    return r.json().get('files', [])
+            except Exception as e:
+                print(f"[GoogleDrive] Error listing files via OAuth: {e}")
+
         if not self.service:
             return []
 
-        fid = folder_id or self.default_folder_id
         try:
             query = f"'{fid}' in parents and trashed=false" if fid else "trashed=false"
             results = self.service.files().list(
@@ -73,11 +92,53 @@ class GoogleDriveManager:
         Directly uploads lecture video/audio to Google Drive folder so that
         the Cloud Run server does NOT act as a heavy video hosting server.
         """
+        fid = folder_id or self.default_folder_id
+
+        # 1. Primary Strategy: Direct 5TB Admin OAuth Upload (Unlimited quota)
+        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if oauth_token and local_path.exists():
+            try:
+                import requests
+                file_size = local_path.stat().st_size
+                init_url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true'
+                headers = {
+                    'Authorization': f'Bearer {oauth_token}',
+                    'Content-Type': 'application/json; charset=UTF-8',
+                    'X-Upload-Content-Type': mime_type,
+                    'X-Upload-Content-Length': str(file_size)
+                }
+                meta = {
+                    'name': filename,
+                    'parents': [fid] if fid else []
+                }
+                r = requests.post(init_url, headers=headers, json=meta, timeout=15)
+                if r.status_code == 200 and 'Location' in r.headers:
+                    upload_url = r.headers['Location']
+                    with open(local_path, 'rb') as f:
+                        r_up = requests.put(
+                            upload_url,
+                            data=f,
+                            headers={'Content-Length': str(file_size), 'Content-Type': mime_type},
+                            timeout=600
+                        )
+                    if r_up.status_code in [200, 201]:
+                        file_data = r_up.json()
+                        file_id = file_data.get("id")
+                        print(f"[GoogleDrive] Successfully uploaded {filename} via 5TB Admin OAuth! ID: {file_id}")
+                        return {
+                            "id": file_id,
+                            "name": file_data.get("name"),
+                            "mimeType": file_data.get("mimeType"),
+                            "size": file_size,
+                            "webViewLink": f"https://drive.google.com/file/d/{file_id}/view",
+                            "stream_url": f"https://drive.google.com/file/d/{file_id}/preview"
+                        }
+            except Exception as oauth_err:
+                print(f"[GoogleDrive] OAuth upload exception: {oauth_err}")
+
         if not self.service:
             print("[GoogleDrive] Service not initialized, cannot upload.")
             return None
-
-        fid = folder_id or self.default_folder_id
         try:
             file_metadata = {
                 "name": filename,
@@ -119,11 +180,31 @@ class GoogleDriveManager:
 
     def download_file(self, file_id: str, dest_path: Path) -> bool:
         """Streams and downloads a file from Google Drive to local disk for RAG processing."""
+        clean_id = self.extract_file_id(file_id)
+        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if oauth_token:
+            try:
+                import requests
+                r = requests.get(
+                    f"https://www.googleapis.com/drive/v3/files/{clean_id}?alt=media&supportsAllDrives=true",
+                    headers={"Authorization": f"Bearer {oauth_token}"},
+                    stream=True,
+                    timeout=60
+                )
+                if r.ok:
+                    with open(dest_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 1024 * 2):
+                            if chunk:
+                                f.write(chunk)
+                    return True
+            except Exception as e:
+                print(f"[GoogleDrive] Error downloading file via OAuth: {e}")
+
         if not self.service:
             return False
 
         try:
-            request = self.service.files().get_media(fileId=file_id)
+            request = self.service.files().get_media(fileId=clean_id)
             with open(dest_path, "wb") as f:
                 downloader = MediaIoBaseDownload(f, request, chunksize=1024 * 1024 * 4) # 4MB chunks
                 done = False
@@ -133,16 +214,31 @@ class GoogleDriveManager:
                         print(f"[GoogleDrive] Ingestion stream {int(status.progress() * 100)}%")
             return True
         except Exception as e:
-            print(f"[GoogleDrive] Error streaming file {file_id}: {e}")
+            print(f"[GoogleDrive] Error streaming file {clean_id}: {e}")
             return False
 
     def get_file_metadata(self, file_id: str) -> Optional[Dict[str, Any]]:
+        clean_id = self.extract_file_id(file_id)
+        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if oauth_token:
+            try:
+                import requests
+                r = requests.get(
+                    f"https://www.googleapis.com/drive/v3/files/{clean_id}?fields=id,name,mimeType,size,webViewLink&supportsAllDrives=true",
+                    headers={"Authorization": f"Bearer {oauth_token}"},
+                    timeout=10
+                )
+                if r.ok:
+                    return r.json()
+            except Exception as e:
+                print(f"[GoogleDrive] Error fetching metadata via OAuth: {e}")
+
         if not self.service:
             return None
         try:
-            return self.service.files().get(fileId=file_id, fields="id, name, mimeType, size, webViewLink").execute()
+            return self.service.files().get(fileId=clean_id, fields="id, name, mimeType, size, webViewLink").execute()
         except Exception as e:
-            print(f"[GoogleDrive] Error fetching metadata for {file_id}: {e}")
+            print(f"[GoogleDrive] Error fetching metadata for {clean_id}: {e}")
             return None
 
     @staticmethod
@@ -161,11 +257,27 @@ class GoogleDriveManager:
 
     def make_file_public_readable(self, file_id: str) -> bool:
         """Makes file readable by anyone with the link so Deepgram can stream directly."""
+        clean_id = self.extract_file_id(file_id)
+        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if oauth_token:
+            try:
+                import requests
+                r = requests.post(
+                    f"https://www.googleapis.com/drive/v3/files/{clean_id}/permissions?supportsAllDrives=true",
+                    headers={"Authorization": f"Bearer {oauth_token}"},
+                    json={"role": "reader", "type": "anyone"},
+                    timeout=10
+                )
+                if r.ok:
+                    return True
+            except Exception as e:
+                print(f"[GoogleDrive] Permission notice via OAuth: {e}")
+
         if not self.service:
             return False
         try:
             self.service.permissions().create(
-                fileId=file_id,
+                fileId=clean_id,
                 body={"role": "reader", "type": "anyone"}
             ).execute()
             return True
@@ -180,10 +292,6 @@ class GoogleDriveManager:
         Returns: (status_code, headers_dict, stream_generator)
         """
         import requests
-        import google.auth.transport.requests
-
-        if not self.service:
-            raise RuntimeError("Google Drive service not configured.")
 
         clean_id = self.extract_file_id(file_id)
         meta = self.get_file_metadata(clean_id)
@@ -193,10 +301,20 @@ class GoogleDriveManager:
         total_size = int(meta.get("size") or 0)
         mime_type = meta.get("mimeType") or "video/mp4"
 
-        # Refresh OAuth token
-        creds = self.service._http.credentials
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req)
+        # Resolve auth token (OAuth Admin token or Service Account)
+        token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if not token and self.service:
+            try:
+                import google.auth.transport.requests
+                creds = self.service._http.credentials
+                auth_req = google.auth.transport.requests.Request()
+                creds.refresh(auth_req)
+                token = creds.token
+            except Exception as e:
+                print(f"[GoogleDrive] Creds refresh error: {e}")
+
+        if not token:
+            raise RuntimeError("Google Drive credentials not available for streaming.")
 
         # Parse Range header
         start = 0

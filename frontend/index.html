@@ -800,23 +800,37 @@
             <div class="ingest-methods-header">
               <label class="form-label" style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Ingestion Mode:</label>
               <div class="mode-toggles">
-                <button type="button" class="mode-btn active" id="modal-btn-mode-vault" data-mode="vault">
+                <button type="button" class="mode-btn active" id="modal-btn-mode-file" data-mode="file">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  Upload Video File (Auto-Drive Sync)
+                </button>
+                <button type="button" class="mode-btn" id="modal-btn-mode-vault" data-mode="vault">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-                  Drive Vault (Recommended)
+                  Drive Vault (Existing)
                 </button>
                 <button type="button" class="mode-btn" id="modal-btn-mode-url" data-mode="url">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
                   Direct URL / YouTube
                 </button>
-                <button type="button" class="mode-btn" id="modal-btn-mode-file" data-mode="file">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                  Local File (&lt;30MB)
-                </button>
               </div>
             </div>
 
-            <!-- Option A: Google Drive Central Vault (Zero-Disk Cloud Streaming) -->
-            <div class="vault-picker-container" id="modal-vault-picker-container" style="display: flex;">
+            <!-- Option A: Direct File Upload to Central 5TB Drive Vault (Active Default) -->
+            <div class="drop-zone" id="modal-drop-zone" style="display: flex;">
+              <input type="file" id="modal-file-input" accept="video/*,audio/*" style="display: none;">
+              <div class="drop-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
+                  <path d="M12 12v9"></path>
+                  <path d="m16 16-4-4-4 4"></path>
+                </svg>
+              </div>
+              <div class="drop-text"><strong>Click to browse</strong> or drag & drop lecture video</div>
+              <div class="drop-sub" id="modal-selected-file-name">Directly uploaded to Central 5TB Google Drive Vault & AI-indexed with Deepgram Nova-2 + Gemini 2.5 Flash</div>
+            </div>
+
+            <!-- Option B: Google Drive Central Vault (Zero-Disk Cloud Streaming) -->
+            <div class="vault-picker-container" id="modal-vault-picker-container" style="display: none;">
               <div style="background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <div>
                   <div style="font-size: 0.86rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 6px;">
@@ -824,7 +838,7 @@
                     Central Google Drive Vault
                   </div>
                   <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 2px;">
-                    Upload 4K/HD videos (any size) directly to Drive with zero server load.
+                    Pick an existing video already uploaded in the Drive Vault folder.
                   </div>
                 </div>
                 <div style="display: flex; gap: 8px;">
@@ -844,7 +858,7 @@
               </div>
             </div>
 
-            <!-- Option B: URL Input Container -->
+            <!-- Option C: URL Input Container -->
             <div class="url-input-container" id="modal-url-container" style="display: none;">
               <label for="modal-media-url-input">Direct Video URL or Google Drive Public Link:</label>
               <div class="input-with-button">
@@ -855,20 +869,6 @@
                 <button type="button" class="preset-tag modal-preset" data-url="https://www.youtube.com/watch?v=kqtD5dpn9C8">Python Tutorial in 1 Hour</button>
                 <button type="button" class="preset-tag modal-preset" data-url="https://www.youtube.com/watch?v=rfscVS0vtbw">Python Full Course 4 Hours</button>
               </div>
-            </div>
-
-            <!-- Option C: File Drop Zone -->
-            <div class="drop-zone" id="modal-drop-zone" style="display: none;">
-              <input type="file" id="modal-file-input" accept="video/*,audio/*" style="display: none;">
-              <div class="drop-icon">
-                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                  <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
-                  <path d="M12 12v9"></path>
-                  <path d="m16 16-4-4-4 4"></path>
-                </svg>
-              </div>
-              <div class="drop-text"><strong>Click to browse</strong> or drag & drop lecture video (&lt;30MB)</div>
-              <div class="drop-sub" id="modal-selected-file-name">For large HD/4K videos, please use the Drive Vault mode above</div>
             </div>
 
             <!-- Stepper Progress Tracker -->
