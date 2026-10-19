@@ -26,9 +26,11 @@ class SemanticChunker:
         # 1. Group utterances into semantic macro-windows (~90-180 seconds or ~250-400 words)
         grouped_windows = self._group_utterances(utterances)
 
-        # 2. Enrich each grouped window via Gemini 2.5 Flash
-        enriched_chunks = []
-        for index, window in enumerate(grouped_windows):
+        # 2. Enrich windows in parallel using ThreadPoolExecutor for 8x speedup
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _process_single_window(item):
+            index, window = item
             enrichment = self._enrich_window_with_gemini(
                 window_text=window["raw_text"],
                 course_title=course_title,
@@ -36,8 +38,6 @@ class SemanticChunker:
                 speaker_label=window["dominant_speaker"],
                 start_label=window["timestamp_label"]
             )
-
-            # Assemble contextual chunk text
             context_header = f"[{course_title} > {subject_name} > {enrichment.get('topic_name', 'Lecture Section')}]"
             full_chunk_text = (
                 f"{context_header}\n"
@@ -45,8 +45,7 @@ class SemanticChunker:
                 f"Content: {enrichment.get('cleaned_text', window['raw_text'])}\n"
                 f"Key Concepts: {', '.join(enrichment.get('key_concepts', []))}"
             )
-
-            chunk_record = {
+            return {
                 "chunk_index": index + 1,
                 "start_seconds": window["start_seconds"],
                 "end_seconds": window["end_seconds"],
@@ -59,7 +58,9 @@ class SemanticChunker:
                 "key_concepts": enrichment.get("key_concepts", []),
                 "hypothetical_questions": enrichment.get("hypothetical_questions", [])
             }
-            enriched_chunks.append(chunk_record)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            enriched_chunks = list(executor.map(_process_single_window, enumerate(grouped_windows)))
 
         return enriched_chunks
 

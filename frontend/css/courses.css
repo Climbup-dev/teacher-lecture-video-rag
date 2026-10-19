@@ -589,6 +589,16 @@
   font-weight: 700;
 }
 
+.cd-subtabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cd-subview-panel {
+  animation: fadeIn 0.25s ease-out;
+}
+
 /* Modern Lecture Card */
 .lecture-card-v2 {
   background: rgba(18, 25, 45, 0.85);

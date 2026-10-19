@@ -1,9 +1,22 @@
 import os
+import sys
 import uuid
 import shutil
 import requests
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+# Ensure Windows console / terminal handles emojis and unicode without charmap crashes
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -307,10 +320,14 @@ async def process_video(
 
             # 1. Direct Upload to Google Drive (Offload heavy video storage from Cloud Run!)
             gdm = GoogleDriveManager()
+            safe_fname = file.filename.encode("ascii", "ignore").decode("ascii") or "lecture_video.mp4"
             if gdm.is_configured():
-                print(f"[Upload] Uploading {file.filename} directly to Google Drive...")
+                try:
+                    print(f"[Upload] Uploading {safe_fname} directly to Google Drive...")
+                except Exception:
+                    pass
                 mime = file.content_type or "video/mp4"
-                drive_res = gdm.upload_file(saved_media_path, filename=file.filename, mime_type=mime)
+                drive_res = gdm.upload_file(saved_media_path, filename=safe_fname, mime_type=mime)
                 if drive_res:
                     drive_file_id = drive_res.get("id")
                     video_url = drive_res.get("stream_url") or drive_res.get("webViewLink")
@@ -389,22 +406,36 @@ async def process_video(
         raw_transcript = transcription_result["full_transcript"]
         utterances = transcription_result["utterances"]
         duration_seconds = int(transcription_result.get("duration_seconds", 0))
+        print(f"[Pipeline] Audio transcribed. Utterances: {len(utterances)}, Duration: {duration_seconds}s")
+
+        if not raw_transcript.strip() or not utterances:
+            raise HTTPException(
+                status_code=400,
+                detail="Deepgram detected no spoken dialogue in this video. Please upload a lecture recording with clear spoken speech/audio so AI can transcribe and index chunks for RAG doubt answering."
+            )
 
         # 6. Semantic Chunking & Enrichment
+        print(f"[Pipeline] Starting concept chunking with Gemini...")
         chunker = SemanticChunker(Config.GEMINI_API_KEY)
         enriched_chunks = chunker.chunk_and_enrich(
             utterances=utterances,
             course_title=course_name,
             subject_name=title
         )
+        print(f"[Pipeline] Chunking done! Total concept chunks: {len(enriched_chunks)}")
 
-        # 7. 768-dim Vector Embeddings
+        # 7. 768-dim Vector Embeddings (Batch mode: 50 chunks/request for ultra-fast indexing)
+        print(f"[Pipeline] Generating 768-dim embeddings in batch mode...")
         embedder = VectorEmbedder(Config.GEMINI_API_KEY)
-        for chunk in enriched_chunks:
-            search_text = embedder.get_chunk_search_text(chunk)
-            chunk["embedding"] = embedder.get_embedding(search_text, dimension=768)
+        search_texts = [embedder.get_chunk_search_text(chunk) for chunk in enriched_chunks]
+        embeddings = embedder.batch_get_embeddings(search_texts, dimension=768)
+        for idx, emb in enumerate(embeddings):
+            if idx < len(enriched_chunks):
+                enriched_chunks[idx]["embedding"] = emb
+        print(f"[Pipeline] Embeddings completed! Total vectors: {len(embeddings)}")
 
         # 8. Persist to Supabase and Local Store
+        print(f"[Pipeline] Saving to Supabase & local store...")
         db.save_lesson(
             lesson_id=lesson_id,
             course_id=course_id,
@@ -415,6 +446,7 @@ async def process_video(
             utterances=utterances
         )
         db.save_chunks(lesson_id=lesson_id, course_id=course_id, chunks=enriched_chunks)
+        print(f"[Pipeline] All done successfully! Lesson {lesson_id} is ready.")
 
         return {
             "status": "success",
@@ -496,11 +528,13 @@ async def ingest_from_drive(req: DriveIngestRequest):
             subject_name=req.title
         )
 
-        # 7. Vector Embeddings
+        # 7. Vector Embeddings (Batch mode: 50 chunks/request)
         embedder = VectorEmbedder(Config.GEMINI_API_KEY)
-        for chunk in enriched_chunks:
-            search_text = embedder.get_chunk_search_text(chunk)
-            chunk["embedding"] = embedder.get_embedding(search_text, dimension=768)
+        search_texts = [embedder.get_chunk_search_text(chunk) for chunk in enriched_chunks]
+        embeddings = embedder.batch_get_embeddings(search_texts, dimension=768)
+        for idx, emb in enumerate(embeddings):
+            if idx < len(enriched_chunks):
+                enriched_chunks[idx]["embedding"] = emb
 
         # Google Drive stream preview URL
         drive_stream_url = f"https://drive.google.com/file/d/{req.file_id}/preview"

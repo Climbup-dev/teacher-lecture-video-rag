@@ -105,6 +105,22 @@ document.addEventListener("DOMContentLoaded", () => {
   const cdLecturesGrid = document.getElementById("cd-lectures-grid");
   const cdCourseMaterialsGrid = document.getElementById("cd-course-materials-grid");
 
+  // Course Detail Subtabs & Course-Specific Students Elements
+  const cdTabBtns = document.querySelectorAll(".cd-tab-btn");
+  const cdSubviewPanels = document.querySelectorAll(".cd-subview-panel");
+  const cdSubtabVideoCount = document.getElementById("cd-subtab-video-count");
+  const cdSubtabMatCount = document.getElementById("cd-subtab-mat-count");
+  const cdSubtabStudentsCount = document.getElementById("cd-subtab-students-count");
+  const cdEnrolledCountBadge = document.getElementById("cd-enrolled-count-badge");
+  const cdStudentsTableBody = document.getElementById("cd-students-table-body");
+  const cdKpiEnrolled = document.getElementById("cd-kpi-enrolled");
+  const cdKpiAvgProgress = document.getElementById("cd-kpi-avg-progress");
+  const cdKpiDoubts = document.getElementById("cd-kpi-doubts");
+  const cdKpiCompleted = document.getElementById("cd-kpi-completed");
+  const btnCdEnrollStudent = document.getElementById("btn-cd-enroll-student");
+  const btnQuickAddVideo = document.getElementById("btn-quick-add-video");
+  const btnQuickAddResource = document.getElementById("btn-quick-add-resource");
+
   // Level 3: Modal 1 - Upload Video to Course
   const modalUploadVideo = document.getElementById("modal-upload-video");
   const btnCloseVideoModal = document.getElementById("btn-close-video-modal");
@@ -851,9 +867,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     switchView("course-detail");
 
-    // Load and render videos & resources for this course
+    // Load and render videos, resources & enrolled students for this course
     await loadCourseLectures(courseId);
     await loadCourseResources(courseId);
+    await loadCourseStudents(courseId);
+
+    // Reset subtab to Lectures & Videos by default
+    const videosTabBtn = document.getElementById("cd-tab-videos");
+    if (videosTabBtn) videosTabBtn.click();
   }
 
   // Connect Course-level "+ Upload Video" buttons
@@ -908,6 +929,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const courseLessons = allLessonsCache.filter(l => l.course_id === courseId);
     if (cdLecturesCount) cdLecturesCount.textContent = courseLessons.length;
     if (cdLecturesBadge) cdLecturesBadge.textContent = `${courseLessons.length} Videos`;
+    if (cdSubtabVideoCount) cdSubtabVideoCount.textContent = courseLessons.length;
 
     renderCourseLectures(courseLessons, courseId);
   }
@@ -1058,6 +1080,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (cdMaterialsCount) cdMaterialsCount.textContent = courseResourcesCache.length;
     if (kpiTotalResources) kpiTotalResources.textContent = courseResourcesCache.length;
+    if (cdSubtabMatCount) cdSubtabMatCount.textContent = courseResourcesCache.length;
 
     // Filter course-level materials (not tagged with a specific lecture)
     const courseLevelMaterials = courseResourcesCache.filter(r => {
@@ -1120,6 +1143,187 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       cdCourseMaterialsGrid.appendChild(card);
+    });
+  }
+
+  // Course Detail Subtabs Switching Logic
+  cdTabBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.getAttribute("data-target");
+      cdTabBtns.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      cdSubviewPanels.forEach(panel => {
+        if (panel.id === targetId) {
+          panel.style.display = "block";
+          panel.classList.add("active");
+        } else {
+          panel.style.display = "none";
+          panel.classList.remove("active");
+        }
+      });
+    });
+  });
+
+  // Quick Action Buttons inside Course Workspace
+  if (btnQuickAddVideo) {
+    btnQuickAddVideo.addEventListener("click", () => {
+      openUploadVideoModal(currentCourseId);
+    });
+  }
+  if (btnQuickAddResource) {
+    btnQuickAddResource.addEventListener("click", () => {
+      openUploadMaterialModal(currentCourseId, null, null, "notes");
+    });
+  }
+  if (btnCdEnrollStudent) {
+    btnCdEnrollStudent.addEventListener("click", () => {
+      switchView("students");
+      const enrollPanel = document.getElementById("enroll-student-panel");
+      if (enrollPanel) enrollPanel.style.display = "block";
+      const enrollCourseSelect = document.getElementById("enroll-student-course");
+      if (enrollCourseSelect && currentCourseId) {
+        enrollCourseSelect.value = currentCourseId;
+      }
+    });
+  }
+
+  // Load and Render Enrolled Students for this specific Course
+  async function loadCourseStudents(courseId) {
+    if (!studentsCache || studentsCache.length === 0) {
+      try {
+        const res = await fetch("/api/students");
+        if (res.ok) {
+          studentsCache = await res.json();
+        }
+      } catch (err) {
+        console.warn("Could not fetch students:", err);
+      }
+    }
+
+    const courseObj = coursesCache.find(c => c.id === courseId);
+    const courseTitle = courseObj ? courseObj.title : "";
+
+    const enrolledStudents = (studentsCache || []).filter(s => {
+      return s.course_id === courseId || (courseTitle && s.course_title === courseTitle);
+    });
+
+    const totalCourseStudents = enrolledStudents.length;
+    if (cdSubtabStudentsCount) cdSubtabStudentsCount.textContent = totalCourseStudents;
+    if (cdEnrolledCountBadge) cdEnrolledCountBadge.textContent = `${totalCourseStudents} Students`;
+    if (cdKpiEnrolled) cdKpiEnrolled.textContent = totalCourseStudents;
+
+    // Course Doubts Sum
+    const totalDoubts = enrolledStudents.reduce((acc, s) => acc + (parseInt(s.doubts_asked) || 0), 0);
+    if (cdKpiDoubts) cdKpiDoubts.textContent = totalDoubts;
+
+    // Average Progress Calculation
+    let avgProg = 0;
+    let completedCount = 0;
+    if (totalCourseStudents > 0) {
+      const sumProg = enrolledStudents.reduce((acc, s) => {
+        const p = parseInt(s.progress) || 0;
+        if (p >= 100 || s.status === "Completed") completedCount++;
+        return acc + p;
+      }, 0);
+      avgProg = Math.round(sumProg / totalCourseStudents);
+    }
+    if (cdKpiAvgProgress) cdKpiAvgProgress.textContent = `${avgProg}%`;
+    if (cdKpiCompleted) cdKpiCompleted.textContent = completedCount;
+
+    renderCourseStudentsTable(enrolledStudents);
+  }
+
+  function renderCourseStudentsTable(students) {
+    if (!cdStudentsTableBody) return;
+    cdStudentsTableBody.innerHTML = "";
+
+    if (!students || students.length === 0) {
+      cdStudentsTableBody.innerHTML = `
+        <tr>
+          <td colspan="6" style="text-align: center; padding: 40px; color: var(--text-muted);">
+            <div style="font-size: 2rem; margin-bottom: 8px;">👥</div>
+            <div style="font-size: 0.95rem; font-weight: 600; color: #fff;">No Students Enrolled in this Course Yet</div>
+            <div style="font-size: 0.8rem; margin-top: 4px;">Click "+ Enroll Student to this Course" above to add students.</div>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    cdStudentsTableBody.innerHTML = students.map(std => {
+      const initials = std.name ? std.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "ST";
+      const progressNum = parseInt(std.progress) || 0;
+      const avatarHtml = std.avatar_url
+        ? `<img src="${escapeHtml(std.avatar_url)}" alt="${escapeHtml(std.name)}" onerror="this.remove();">`
+        : initials;
+
+      return `
+        <tr>
+          <td>
+            <div class="student-profile">
+              <div class="student-avatar">${avatarHtml}</div>
+              <div class="student-name-group">
+                <span class="student-name">${escapeHtml(std.name)}</span>
+                <span class="student-email">${escapeHtml(std.email)}</span>
+              </div>
+            </div>
+          </td>
+          <td style="color: var(--text-muted); font-size: 0.82rem; white-space: nowrap;">
+            ${escapeHtml(std.enrolled_date || '2026-10-18')}
+          </td>
+          <td>
+            <div class="student-progress-wrap" style="min-width: 140px;">
+              <div class="progress-info">
+                <span>Progress</span>
+                <span style="color: #67e8f9; font-weight: 700;">${progressNum}%</span>
+              </div>
+              <div class="progress-track" style="height: 7px;">
+                <div class="progress-fill" style="width: ${progressNum}%;"></div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <span class="student-doubts-pill">
+              🤖 ${std.doubts_asked || 0} doubts
+            </span>
+          </td>
+          <td>
+            <span class="student-status-pill ${progressNum >= 100 || std.status === 'Completed' ? '' : 'active'}" style="${progressNum >= 100 ? 'background: rgba(16, 185, 129, 0.2); color: #6ee7b7;' : ''}">
+              <span class="dot"></span> ${escapeHtml(std.status || (progressNum >= 100 ? 'Completed' : 'Active'))}
+            </span>
+          </td>
+          <td style="text-align: right;">
+            <button class="btn-student-delete btn-cd-student-del" data-student-id="${std.id}" title="Unenroll Student from this course">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+              Unenroll
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    // Unenroll actions inside course student table
+    cdStudentsTableBody.querySelectorAll(".btn-cd-student-del").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const studentId = btn.dataset.studentId;
+        const targetStd = studentsCache.find(s => s.id === studentId);
+        const sName = targetStd ? targetStd.name : "this student";
+
+        if (confirm(`Unenroll ${sName} from this course?`)) {
+          try {
+            await fetch(`/api/students/${studentId}`, { method: "DELETE" });
+          } catch (e) {
+            console.warn("Delete student request failed:", e);
+          }
+          studentsCache = studentsCache.filter(s => s.id !== studentId);
+          await loadCourseStudents(currentCourseId);
+          renderStudentsTable();
+        }
+      });
     });
   }
 
