@@ -1534,7 +1534,65 @@ document.addEventListener("DOMContentLoaded", () => {
           alert("Please select a video file to upload.");
           return;
         }
-        formData.append("file", modalSelectedVideoFile);
+
+        modalBtnSubmitVideo.disabled = true;
+        modalBtnSubmitVideo.textContent = "Uploading to Drive...";
+        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Uploading directly to 5TB Google Drive Vault (0 MB Cloud Run load)...</span>`;
+
+        // 1. Get Google Drive direct resumable upload URL
+        const initRes = await fetch("/api/drive/init-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: modalSelectedVideoFile.name,
+            mime_type: modalSelectedVideoFile.type || "video/mp4",
+            file_size: modalSelectedVideoFile.size
+          })
+        });
+
+        if (!initRes.ok) {
+          const errData = await initRes.json().catch(() => ({}));
+          throw new Error(errData.detail || "Could not initialize Google Drive direct upload session.");
+        }
+
+        const { upload_url } = await initRes.json();
+
+        // 2. Stream video file DIRECTLY from browser to Google Drive (Bypasses Cloud Run 32MB limit!)
+        const driveFile = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", upload_url, true);
+          xhr.setRequestHeader("Content-Type", modalSelectedVideoFile.type || "video/mp4");
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Direct Upload to Drive Vault: <strong>${pct}%</strong></span>`;
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status === 200 || xhr.status === 201) {
+              try {
+                resolve(JSON.parse(xhr.responseText));
+              } catch (ex) {
+                resolve({ id: null });
+              }
+            } else {
+              reject(new Error(`Drive direct upload failed (${xhr.status}): ${xhr.responseText}`));
+            }
+          };
+
+          xhr.onerror = () => reject(new Error("Network error during direct Drive upload. Check internet connection."));
+          xhr.send(modalSelectedVideoFile);
+        });
+
+        const driveFileId = driveFile.id;
+        if (!driveFileId) {
+          throw new Error("Google Drive did not return a valid file ID.");
+        }
+
+        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">✓ Saved to Google Drive Vault! Starting AI pipeline...</span>`;
+        formData.append("media_url", `https://drive.google.com/file/d/${driveFileId}/view`);
       } else {
         const urlVal = modalMediaUrlInput.value.trim();
         if (!urlVal) {

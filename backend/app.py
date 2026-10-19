@@ -484,7 +484,58 @@ async def stream_drive_file(
         raise HTTPException(status_code=404, detail="Google Drive file not found.")
     except Exception as e:
         print(f"[Streaming Error] stream_drive_file error: {e}")
-        raise HTTPException(status_code=502, detail="Upstream streaming error.")
+class InitDriveUploadRequest(BaseModel):
+    filename: str
+    mime_type: Optional[str] = "video/mp4"
+    file_size: Optional[int] = 0
+
+@app.post("/api/drive/init-upload")
+async def init_drive_upload(req: InitDriveUploadRequest):
+    """
+    Initializes a Google Drive Resumable Upload session.
+    Returns upload_url directly to frontend so the browser can stream heavy 500MB-2GB video files
+    DIRECTLY to Google Drive, completely bypassing Cloud Run's 32MB HTTP request limit!
+    """
+    reload_config()
+    token = GoogleDriveManager.get_access_token()
+    if not token:
+        raise HTTPException(status_code=500, detail="Google Drive OAuth is not authenticated.")
+
+    fid = Config.GOOGLE_DRIVE_FOLDER_ID
+    init_url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true'
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': req.mime_type or 'video/mp4',
+    }
+    if req.file_size and req.file_size > 0:
+        headers['X-Upload-Content-Length'] = str(req.file_size)
+
+    safe_name = req.filename.encode("ascii", "ignore").decode("ascii") or "lecture_video.mp4"
+    meta = {
+        'name': safe_name,
+        'parents': [fid] if fid else []
+    }
+
+    try:
+        r = requests.post(init_url, headers=headers, json=meta, timeout=15)
+        if r.status_code == 401:
+            token = GoogleDriveManager.refresh_access_token()
+            headers['Authorization'] = f'Bearer {token}'
+            r = requests.post(init_url, headers=headers, json=meta, timeout=15)
+
+        if r.status_code == 200 and 'Location' in r.headers:
+            return {
+                "status": "success",
+                "upload_url": r.headers['Location'],
+                "filename": safe_name
+            }
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to initiate Google Drive upload session: {r.status_code} - {r.text}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Google Drive init error: {str(e)}")
 
 
 @app.post("/api/process-video")
