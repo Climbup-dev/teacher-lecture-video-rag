@@ -1,9 +1,11 @@
 // ClimbUp Mentor Studio - Hierarchical LMS Controller (Course -> Videos -> Notes & Assignments)
 document.addEventListener("DOMContentLoaded", () => {
-  // Auto-detect Backend API Host (supports both http://127.0.0.1:8000 and file:/// protocol)
-  const API_BASE = (window.location.protocol === "file:" || !window.location.host)
-    ? "http://127.0.0.1:8000"
-    : "";
+  // Auto-detect Backend API Host (supports port 8000, 8080, Live Server 5500, and Cloud Run)
+  const API_BASE = (window.location.port === "8000" || window.location.port === "8080")
+    ? ""
+    : (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.protocol === "file:")
+      ? "http://127.0.0.1:8000"
+      : "https://teacher-lecture-video-rag-28929614461.asia-south1.run.app";
   
   const originalFetch = window.fetch;
   window.fetch = function(url, options) {
@@ -129,8 +131,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const modalUploadCourseId = document.getElementById("modal-upload-course-id");
   const modalUploadTargetCourse = document.getElementById("modal-upload-target-course");
   const modalLectureTitleInput = document.getElementById("modal-lecture-title-input");
+  const modalBtnModeVault = document.getElementById("modal-btn-mode-vault");
   const modalBtnModeFile = document.getElementById("modal-btn-mode-file");
   const modalBtnModeUrl = document.getElementById("modal-btn-mode-url");
+  const modalVaultPickerContainer = document.getElementById("modal-vault-picker-container");
+  const modalVaultPickerList = document.getElementById("modal-vault-picker-list");
+  const modalBtnRefreshVault = document.getElementById("modal-btn-refresh-vault");
   const modalDropZone = document.getElementById("modal-drop-zone");
   const modalFileInput = document.getElementById("modal-file-input");
   const modalSelectedFileName = document.getElementById("modal-selected-file-name");
@@ -1328,8 +1334,62 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ==========================================
-  // 4. MODAL 1: UPLOAD VIDEO TO COURSE
+  // 4. MODAL 1: UPLOAD VIDEO TO COURSE (DRIVE VAULT ZERO-DISK STREAMING)
   // ==========================================
+  async function loadModalDriveFiles() {
+    if (!modalVaultPickerList) return;
+    modalVaultPickerList.innerHTML = `<div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.82rem;">Loading files from Google Drive...</div>`;
+    try {
+      const res = await fetch("/api/drive/files");
+      const data = await res.json();
+      const files = data.files || [];
+      if (!files.length) {
+        modalVaultPickerList.innerHTML = `
+          <div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.82rem;">
+            No files found in central Drive folder.<br>
+            <a href="https://drive.google.com/drive/folders/1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d" target="_blank" rel="noopener noreferrer" style="color: #38d399; font-weight: 600; text-decoration: underline; margin-top: 6px; display: inline-block;">
+              📁 Open Folder to Drag & Drop Videos
+            </a>
+          </div>
+        `;
+        return;
+      }
+
+      modalVaultPickerList.innerHTML = "";
+      files.forEach(f => {
+        const item = document.createElement("div");
+        item.className = "vault-picker-item";
+        const sizeMb = f.size ? (parseInt(f.size, 10) / (1024 * 1024)).toFixed(1) : "?";
+        const isVideo = f.mimeType?.includes("video") || f.name.match(/\.(mp4|webm|mkv|mov|avi)$/i);
+        const icon = isVideo ? "📹" : "📄";
+
+        item.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 9px; overflow: hidden;">
+            <span style="font-size: 1.15rem; flex-shrink: 0;">${icon}</span>
+            <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              <div style="font-size: 0.82rem; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${f.name}</div>
+              <div style="font-size: 0.7rem; color: var(--text-muted);">${f.mimeType || "media"}</div>
+            </div>
+          </div>
+          <span style="font-size: 0.72rem; color: var(--text-dim); background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 6px; flex-shrink: 0;">${sizeMb} MB</span>
+        `;
+
+        item.addEventListener("click", () => {
+          document.querySelectorAll("#modal-vault-picker-list .vault-picker-item").forEach(el => el.classList.remove("selected"));
+          item.classList.add("selected");
+          modalMediaUrlInput.value = `https://drive.google.com/file/d/${f.id}/view`;
+          modalLectureTitleInput.value = f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+          if (modalUploadFeedback) {
+            modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald); font-size: 0.76rem;">✓ Selected: <strong>${f.name}</strong> (Ready to Ingest)</span>`;
+          }
+        });
+        modalVaultPickerList.appendChild(item);
+      });
+    } catch (err) {
+      modalVaultPickerList.innerHTML = `<div style="padding: 16px; text-align: center; color: var(--accent-rose); font-size: 0.82rem;">Could not load Drive files: ${err.message}</div>`;
+    }
+  }
+
   function openUploadVideoModal(courseId) {
     const course = coursesCache.find(c => c.id === courseId);
     const courseTitle = course ? course.title : "Current Course";
@@ -1344,25 +1404,32 @@ document.addEventListener("DOMContentLoaded", () => {
     modalStepperProgress.style.display = "none";
     modalUploadFeedback.innerHTML = "";
 
-    modalVideoMode = "file";
-    modalBtnModeFile.classList.add("active");
-    modalBtnModeUrl.classList.remove("active");
-    modalDropZone.style.display = "flex";
-    modalUrlContainer.style.display = "none";
+    // Default to Drive Vault mode (Zero-disk, no 32MB limit)
+    modalVideoMode = "vault";
+    if (modalBtnModeVault) modalBtnModeVault.classList.add("active");
+    if (modalBtnModeUrl) modalBtnModeUrl.classList.remove("active");
+    if (modalBtnModeFile) modalBtnModeFile.classList.remove("active");
+    if (modalVaultPickerContainer) modalVaultPickerContainer.style.display = "flex";
+    if (modalUrlContainer) modalUrlContainer.style.display = "none";
+    if (modalDropZone) modalDropZone.style.display = "none";
 
+    loadModalDriveFiles();
     modalUploadVideo.style.display = "flex";
   }
 
   if (btnCloseVideoModal) btnCloseVideoModal.addEventListener("click", () => modalUploadVideo.style.display = "none");
   if (btnCancelModalVideo) btnCancelModalVideo.addEventListener("click", () => modalUploadVideo.style.display = "none");
 
-  if (modalBtnModeFile) {
-    modalBtnModeFile.addEventListener("click", () => {
-      modalVideoMode = "file";
-      modalBtnModeFile.classList.add("active");
-      modalBtnModeUrl.classList.remove("active");
-      modalDropZone.style.display = "flex";
-      modalUrlContainer.style.display = "none";
+  if (modalBtnModeVault) {
+    modalBtnModeVault.addEventListener("click", () => {
+      modalVideoMode = "vault";
+      modalBtnModeVault.classList.add("active");
+      if (modalBtnModeUrl) modalBtnModeUrl.classList.remove("active");
+      if (modalBtnModeFile) modalBtnModeFile.classList.remove("active");
+      if (modalVaultPickerContainer) modalVaultPickerContainer.style.display = "flex";
+      if (modalUrlContainer) modalUrlContainer.style.display = "none";
+      if (modalDropZone) modalDropZone.style.display = "none";
+      loadModalDriveFiles();
     });
   }
 
@@ -1370,9 +1437,29 @@ document.addEventListener("DOMContentLoaded", () => {
     modalBtnModeUrl.addEventListener("click", () => {
       modalVideoMode = "url";
       modalBtnModeUrl.classList.add("active");
-      modalBtnModeFile.classList.remove("active");
-      modalDropZone.style.display = "none";
-      modalUrlContainer.style.display = "flex";
+      if (modalBtnModeVault) modalBtnModeVault.classList.remove("active");
+      if (modalBtnModeFile) modalBtnModeFile.classList.remove("active");
+      if (modalVaultPickerContainer) modalVaultPickerContainer.style.display = "none";
+      if (modalUrlContainer) modalUrlContainer.style.display = "flex";
+      if (modalDropZone) modalDropZone.style.display = "none";
+    });
+  }
+
+  if (modalBtnModeFile) {
+    modalBtnModeFile.addEventListener("click", () => {
+      modalVideoMode = "file";
+      modalBtnModeFile.classList.add("active");
+      if (modalBtnModeVault) modalBtnModeVault.classList.remove("active");
+      if (modalBtnModeUrl) modalBtnModeUrl.classList.remove("active");
+      if (modalVaultPickerContainer) modalVaultPickerContainer.style.display = "none";
+      if (modalUrlContainer) modalUrlContainer.style.display = "none";
+      if (modalDropZone) modalDropZone.style.display = "flex";
+    });
+  }
+
+  if (modalBtnRefreshVault) {
+    modalBtnRefreshVault.addEventListener("click", () => {
+      loadModalDriveFiles();
     });
   }
 
@@ -1452,7 +1539,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         const urlVal = modalMediaUrlInput.value.trim();
         if (!urlVal) {
-          alert("Please enter a media stream or Google Drive URL.");
+          alert("Please select a video from Central Drive Vault or enter a video URL.");
           return;
         }
         formData.append("media_url", urlVal);
@@ -1505,15 +1592,25 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || "Video ingestion failed");
+          let errDetail = `Server error (${res.status})`;
+          try {
+            const raw = await res.text();
+            try {
+              const j = JSON.parse(raw);
+              errDetail = j.detail || j.message || j.error || errDetail;
+            } catch {
+              const match = raw.match(/<title>(.*?)<\/title>/i);
+              errDetail = match ? `${match[1].trim()} (HTTP ${res.status})` : raw.slice(0, 150).replace(/<[^>]*>/g, "").trim() || `HTTP ${res.status}`;
+            }
+          } catch {}
+          throw new Error(errDetail);
         }
 
         const data = await res.json();
         s4.classList.remove("processing"); s4.classList.add("completed");
         s4.querySelector(".step-status").textContent = "Indexed";
 
-        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">✓ Lecture indexed successfully!</span>`;
+        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">🎉 Lecture indexed successfully!</span>`;
 
         setTimeout(async () => {
           modalUploadVideo.style.display = "none";

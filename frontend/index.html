@@ -800,19 +800,65 @@
             <div class="ingest-methods-header">
               <label class="form-label" style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Ingestion Mode:</label>
               <div class="mode-toggles">
-                <button type="button" class="mode-btn active" id="modal-btn-mode-file" data-mode="file">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                  File Upload
+                <button type="button" class="mode-btn active" id="modal-btn-mode-vault" data-mode="vault">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                  Drive Vault (Recommended)
                 </button>
                 <button type="button" class="mode-btn" id="modal-btn-mode-url" data-mode="url">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-                  Direct URL / Drive
+                  Direct URL / YouTube
+                </button>
+                <button type="button" class="mode-btn" id="modal-btn-mode-file" data-mode="file">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  Local File (&lt;30MB)
                 </button>
               </div>
             </div>
 
-            <!-- Option A: File Drop Zone -->
-            <div class="drop-zone" id="modal-drop-zone">
+            <!-- Option A: Google Drive Central Vault (Zero-Disk Cloud Streaming) -->
+            <div class="vault-picker-container" id="modal-vault-picker-container" style="display: flex;">
+              <div style="background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div>
+                  <div style="font-size: 0.86rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 6px;">
+                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-emerald);"></span>
+                    Central Google Drive Vault
+                  </div>
+                  <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 2px;">
+                    Upload 4K/HD videos (any size) directly to Drive with zero server load.
+                  </div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <a href="https://drive.google.com/drive/folders/1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="font-size: 0.78rem; padding: 6px 12px; background: rgba(56, 211, 153, 0.15); border-color: rgba(56, 211, 153, 0.4); color: #38d399; text-decoration: none;">
+                    📁 Open Drive Folder ↗
+                  </a>
+                  <button type="button" class="btn btn-secondary" id="modal-btn-refresh-vault" style="font-size: 0.78rem; padding: 6px 12px;" title="Refresh list of files in Google Drive">
+                    🔄 Refresh
+                  </button>
+                </div>
+              </div>
+              <div style="font-size: 0.78rem; font-weight: 600; color: var(--text-dim); margin-bottom: 6px;">
+                Select a video file from Central Drive Vault:
+              </div>
+              <div class="vault-picker-list" id="modal-vault-picker-list" style="max-height: 200px;">
+                <div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 0.82rem;">Loading videos from Drive...</div>
+              </div>
+            </div>
+
+            <!-- Option B: URL Input Container -->
+            <div class="url-input-container" id="modal-url-container" style="display: none;">
+              <label for="modal-media-url-input">Direct Video URL or Google Drive Public Link:</label>
+              <div class="input-with-button">
+                <input type="url" id="modal-media-url-input" class="form-input" placeholder="https://drive.google.com/file/d/... or https://youtube.com/watch?v=...">
+              </div>
+              <div class="url-presets">
+                <span class="preset-label">1-Click Presets:</span>
+                <button type="button" class="preset-tag modal-preset" data-url="https://www.youtube.com/watch?v=kqtD5dpn9C8">Python Tutorial in 1 Hour</button>
+                <button type="button" class="preset-tag modal-preset" data-url="https://www.youtube.com/watch?v=rfscVS0vtbw">Python Full Course 4 Hours</button>
+              </div>
+            </div>
+
+            <!-- Option C: File Drop Zone -->
+            <div class="drop-zone" id="modal-drop-zone" style="display: none;">
               <input type="file" id="modal-file-input" accept="video/*,audio/*" style="display: none;">
               <div class="drop-icon">
                 <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -821,21 +867,8 @@
                   <path d="m16 16-4-4-4 4"></path>
                 </svg>
               </div>
-              <div class="drop-text"><strong>Click to browse</strong> or drag & drop lecture video</div>
-              <div class="drop-sub" id="modal-selected-file-name">Supports MP4, WebM, MKV, MP3, WAV (Direct 0-disk streaming)</div>
-            </div>
-
-            <!-- Option B: URL Input Container -->
-            <div class="url-input-container" id="modal-url-container" style="display: none;">
-              <label for="modal-media-url-input">Direct Video URL or Google Drive Public Link:</label>
-              <div class="input-with-button">
-                <input type="url" id="modal-media-url-input" class="form-input" placeholder="https://drive.google.com/file/d/... or https://domain.com/video.mp4">
-              </div>
-              <div class="url-presets">
-                <span class="preset-label">1-Click Presets:</span>
-                <button type="button" class="preset-tag modal-preset" data-url="https://drive.google.com/file/d/1B6pB90wz63937y5i25Nf27473_sample/view">OS Masterclass (3 Hours)</button>
-                <button type="button" class="preset-tag modal-preset" data-url="https://drive.google.com/file/d/1XyZ987_sample_berkeley/view">UC Berkeley CS61C</button>
-              </div>
+              <div class="drop-text"><strong>Click to browse</strong> or drag & drop lecture video (&lt;30MB)</div>
+              <div class="drop-sub" id="modal-selected-file-name">For large HD/4K videos, please use the Drive Vault mode above</div>
             </div>
 
             <!-- Stepper Progress Tracker -->
