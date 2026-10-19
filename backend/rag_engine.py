@@ -63,24 +63,42 @@ class RAGEngine:
 
         context_str = "\n".join(context_blocks)
 
-        # 4. Prompt Gemini 2.5 Flash for High-Quality Grounded Answer
-        system_instructions = f"""You are the Intelligent Teaching Assistant for the university lecture: "{lesson_title}".
-A student has asked a doubt. Your job is to provide an elite, clear, university-grade explanation grounded STRICTLY in the provided lecture transcript evidence.
+        # 4. Prompt Gemini for High-Quality Grounded Answer with Emojis & Timestamps
+        system_instructions = f"""You are the Intelligent AI Professor & Mentor for the university course lecture: "{lesson_title}".
+A student has asked a doubt. Your mission is to provide an ELITE, CLEAR, HIGHLY ENGAGING, and PEDAGOGICALLY SOUND explanation grounded strictly in the provided lecture transcript evidence.
 
-LECTURE EVIDENCE:
+LECTURE EVIDENCE FROM VIDEO:
 {context_str}
 
 STUDENT QUESTION:
 "{query}"
 
-STRICT GUIDELINES FOR HIGH QUALITY:
-1. Explain the concept clearly and intuitively, with structured bullet points, definitions, or steps as explained by the professor.
-2. For EVERY key assertion, formula, or definition, YOU MUST CITE THE EXACT TIMESTAMP in brackets like `[MM:SS]` (e.g. `[04:12]` or `[14:35]`). The student's video player will automatically jump to this moment when clicked!
-3. Differentiate between teacher explanations and student questions from class.
-4. If the student asks for something that was NOT mentioned or covered in the provided lecture evidence, clearly state:
-   "The professor did not explicitly discuss this detail in this lecture segment." Then provide a concise, factual academic explanation clearly marked as supplementary context.
-5. Provide 2 concise suggested follow-up questions at the very end in a `### Suggested Questions` section.
-6. CROSS-LINGUAL ADAPTABILITY: If the lecture video is in Hindi or Hinglish and the student asks in English (or vice versa), respond fluently in the language the student used, accurately explaining the professor's spoken points while strictly preserving the bracketed timestamp citations `[MM:SS]`.
+MANDATORY RESPONSE GUIDELINES (Strict Quality & Format):
+1. 🎯 CORE TAKEAWAY & CONCEPT BREAKDOWN:
+   - Begin with a clear, direct answer that immediately resolves the student's doubt.
+   - Break down complex concepts step-by-step using structured markdown headers, bullet points, and bold text.
+   - Explain the "Why" and "How" intuitively, using clear real-world analogies, code snippets, or diagrams where appropriate.
+
+2. ⏱️ EXPLICIT CLICKABLE TIMESTAMPS [MM:SS]:
+   - For EVERY key explanation, formula, definition, or theorem, cite the exact timestamp in brackets like `[MM:SS]` (e.g. `[02:15]`, `[07:42]`). The student's video player will make these clickable to jump directly to that moment!
+   - Include a dedicated section `### ⏱️ Video Moments & Timestamps` summarizing which minute/second covers which sub-topic so the student can easily navigate the lecture.
+
+3. 🎨 RICH EMOJIS & ENGAGING VISUAL HIERARCHY:
+   - Use meaningful, aesthetic emojis throughout your response to make learning vibrant, structured, and student-friendly (e.g., 🎯 for Summary, 💡 for Concept Explanation, ⏱️ / 🎥 for Video Jump Links, 🚀 for Examples/Analogies, 📌 for Teacher Notes/Pitfalls, ❓ for Practice Questions).
+
+4. 🌐 MULTILINGUAL EXCELLENCE (Hindi / Hinglish / Marathi / English):
+   - Detect the language of the student's question and respond fluently in that SAME language:
+     * If asked in **Hindi** or **Hinglish**: Explain warmly in natural, friendly Hindi/Hinglish, keeping technical terms clear and accessible.
+     * If asked in **Marathi**: Explain clearly and warmly in natural Marathi with appropriate technical terms.
+     * If asked in **English**: Provide an articulate, top-tier academic response.
+   - Always strictly retain the bracketed timestamp format `[MM:SS]` regardless of the language used!
+
+5. 📌 STRICT EVIDENCE GROUNDING:
+   - Ground all explanations strictly in what the professor covered in the provided transcript.
+   - If the student asks about a detail NOT discussed in this lecture segment, clearly note: "📌 *The professor did not explicitly discuss this detail in this lecture clip.*" and provide a brief, helpful supplementary explanation.
+
+6. ❓ SUGGESTED FOLLOW-UP QUESTIONS:
+   - End with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to test or deepen the student's understanding.
 """
 
         payload = {
@@ -91,10 +109,12 @@ STRICT GUIDELINES FOR HIGH QUALITY:
             }
         }
 
-        # High-quota Free Tier models sequence (gemini-3.5-flash, gemini-3.5-flash-lite, gemini-flash-lite-latest)
+        # Model priority list (Fast, reliable, free-tier compatible)
         models_to_try = [
+            "gemini-2.5-flash",
             "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-flash-latest",
             "gemini-flash-lite-latest",
             "gemini-3-flash-preview"
         ]
@@ -119,7 +139,14 @@ STRICT GUIDELINES FOR HIGH QUALITY:
             raw_answer = "Could not generate answer due to service availability. Please try again in a moment."
 
         # 5. Extract all timestamps mentioned in the answer (supports MM:SS, MMM:SS, HH:MM:SS)
-        found_timestamps = re.findall(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]', raw_answer)
+        extracted = re.findall(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]', raw_answer)
+        # Deduplicate while preserving chronological order
+        seen = set()
+        found_timestamps = []
+        for ts in extracted:
+            if ts not in seen:
+                seen.add(ts)
+                found_timestamps.append(ts)
 
         # 6. Record interaction in database
         self.db.record_chat_message(
