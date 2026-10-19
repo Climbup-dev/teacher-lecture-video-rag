@@ -22,6 +22,7 @@ class DeepgramTranscriber:
 
         params = {
             "model": "nova-2",
+            "detect_language": "true",
             "smart_format": "true",
             "diarize": "true",
             "utterances": "true",
@@ -53,6 +54,7 @@ class DeepgramTranscriber:
         """Transcribes audio from a remote URL."""
         params = {
             "model": "nova-2",
+            "detect_language": "true",
             "smart_format": "true",
             "diarize": "true",
             "utterances": "true",

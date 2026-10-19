@@ -80,6 +80,7 @@ STRICT GUIDELINES FOR HIGH QUALITY:
 4. If the student asks for something that was NOT mentioned or covered in the provided lecture evidence, clearly state:
    "The professor did not explicitly discuss this detail in this lecture segment." Then provide a concise, factual academic explanation clearly marked as supplementary context.
 5. Provide 2 concise suggested follow-up questions at the very end in a `### Suggested Questions` section.
+6. CROSS-LINGUAL ADAPTABILITY: If the lecture video is in Hindi or Hinglish and the student asks in English (or vice versa), respond fluently in the language the student used, accurately explaining the professor's spoken points while strictly preserving the bracketed timestamp citations `[MM:SS]`.
 """
 
         payload = {

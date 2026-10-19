@@ -134,8 +134,8 @@ Given this raw spoken transcript:
 Perform the following tasks:
 1. `topic_name`: A short, descriptive title of the specific concept or theorem explained in this segment (3-6 words).
 2. `cleaned_text`: Clean speech disfluencies (remove "um", "uh", "you know", repetitive stammers) while 100% preserving all technical terms, definitions, equations, numbers, and logical deductions.
-3. `key_concepts`: List of 3 to 6 key terms, formulas, or entities mentioned.
-4. `hypothetical_questions`: Generate 3 to 4 realistic questions a student would ask that are directly answered by this specific chunk. This bridges the vocabulary gap in semantic RAG search.
+3. `key_concepts`: List of 3 to 6 key terms, formulas, or entities mentioned (include standard English technical terms).
+4. `hypothetical_questions`: Generate 3 to 4 realistic questions a student would ask that are directly answered by this specific chunk. If the spoken language is Hindi or Hinglish, generate the hypothetical questions in English (and bilingual) so students asking in English match this chunk with high vector similarity.
 
 Output strictly valid JSON with this exact schema:
 {{
