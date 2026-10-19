@@ -57,6 +57,7 @@ class ConfigUpdateRequest(BaseModel):
     supabase_url: Optional[str] = None
     supabase_key: Optional[str] = None
     drive_folder_id: Optional[str] = None
+    google_credentials_json: Optional[str] = None
 
 class DriveIngestRequest(BaseModel):
     file_id: str
@@ -239,7 +240,8 @@ def update_config(req: ConfigUpdateRequest):
         "GEMINI_API_KEY": req.gemini_key,
         "SUPABASE_URL": req.supabase_url,
         "SUPABASE_SERVICE_ROLE_KEY": req.supabase_key,
-        "GOOGLE_DRIVE_FOLDER_ID": req.drive_folder_id
+        "GOOGLE_DRIVE_FOLDER_ID": req.drive_folder_id,
+        "GOOGLE_CREDENTIALS_JSON": req.google_credentials_json
     }
 
     updated_keys = set()
