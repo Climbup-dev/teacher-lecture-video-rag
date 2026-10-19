@@ -172,3 +172,81 @@ class GoogleDriveManager:
         except Exception as e:
             print(f"[GoogleDrive] Permission notice: {e}")
             return False
+
+    def stream_file_range(self, file_id: str, range_header: Optional[str] = None):
+        """
+        Fetches metadata and streams byte ranges from Google Drive API without buffering the full file in memory.
+        Supports HTTP Range requests (206 Partial Content) and HEAD requests for seeking.
+        Returns: (status_code, headers_dict, stream_generator)
+        """
+        import requests
+        import google.auth.transport.requests
+
+        if not self.service:
+            raise RuntimeError("Google Drive service not configured.")
+
+        clean_id = self.extract_file_id(file_id)
+        meta = self.get_file_metadata(clean_id)
+        if not meta:
+            raise FileNotFoundError(f"File {clean_id} not found in Google Drive.")
+
+        total_size = int(meta.get("size") or 0)
+        mime_type = meta.get("mimeType") or "video/mp4"
+
+        # Refresh OAuth token
+        creds = self.service._http.credentials
+        auth_req = google.auth.transport.requests.Request()
+        creds.refresh(auth_req)
+
+        # Parse Range header
+        start = 0
+        end = total_size - 1 if total_size > 0 else 0
+        status_code = 200
+
+        if range_header and range_header.startswith("bytes="):
+            range_val = range_header.replace("bytes=", "").strip()
+            parts = range_val.split("-")
+            if parts[0]:
+                start = int(parts[0])
+            if len(parts) > 1 and parts[1]:
+                end = int(parts[1])
+            status_code = 206
+
+        if total_size > 0 and end >= total_size:
+            end = total_size - 1
+
+        content_length = (end - start + 1) if total_size > 0 else 0
+
+        drive_url = f"https://www.googleapis.com/drive/v3/files/{clean_id}?alt=media"
+        req_headers = {
+            "Authorization": f"Bearer {creds.token}",
+            "Range": f"bytes={start}-{end}"
+        }
+
+        upstream = requests.get(drive_url, headers=req_headers, stream=True, timeout=20)
+        if not upstream.ok and upstream.status_code != 206:
+            raise RuntimeError(f"Google Drive upstream error {upstream.status_code}")
+
+        resp_headers = {
+            "Content-Type": mime_type,
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, no-cache, no-store, must-revalidate",
+            "X-Content-Type-Options": "nosniff"
+        }
+        if status_code == 206 and total_size > 0:
+            resp_headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+
+        def iter_chunks():
+            try:
+                for chunk in upstream.iter_content(chunk_size=1024 * 64):  # 64KB chunks
+                    if chunk:
+                        yield chunk
+            except Exception as e:
+                print(f"[GoogleDrive Stream Notice] Client disconnected or stream closed: {e}")
+            finally:
+                upstream.close()
+
+        return status_code, resp_headers, iter_chunks()
+

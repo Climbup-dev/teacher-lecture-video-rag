@@ -17,9 +17,10 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response, Header, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel
 
 from backend.config import Config, reload_config
@@ -278,6 +279,211 @@ def get_lesson(lesson_id: str):
         **lesson,
         "chunks": chunks
     }
+
+
+def verify_supabase_user_and_enrollment(
+    authorization_header: Optional[str],
+    token_param: Optional[str],
+    course_id: str
+) -> Dict[str, Any]:
+    """
+    Verifies Supabase JWT token authenticity and checks that the student is enrolled in course_id.
+    Returns 401 if unauthenticated, 403 if not enrolled.
+    """
+    token = None
+    if authorization_header and authorization_header.startswith("Bearer "):
+        token = authorization_header.split(" ", 1)[1].strip()
+    elif token_param:
+        token = token_param.strip()
+
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required: No bearer token or token query parameter provided."
+        )
+
+    # 1. Verify token authenticity with Supabase Auth
+    user_url = f"{Config.SUPABASE_URL}/auth/v1/user"
+    auth_headers = {
+        "apikey": Config.SUPABASE_KEY,
+        "Authorization": f"Bearer {token}"
+    }
+    try:
+        user_res = requests.get(user_url, headers=auth_headers, timeout=6)
+        if not user_res.ok:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid, expired, or revoked student session token."
+            )
+        user_data = user_res.json()
+        user_id = user_data.get("id")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Auth Error] Supabase user check exception: {e}")
+        raise HTTPException(status_code=401, detail="Authentication verification failed.")
+
+    # 2. Check student course enrollment
+    service_headers = {
+        "apikey": Config.SUPABASE_KEY,
+        "Authorization": f"Bearer {Config.SUPABASE_KEY}"
+    }
+    is_enrolled = False
+    try:
+        enroll_url = f"{Config.SUPABASE_URL}/rest/v1/course_enrollments?user_id=eq.{user_id}&course_id=eq.{course_id}&select=id"
+        enroll_res = requests.get(enroll_url, headers=service_headers, timeout=6)
+        is_enrolled = enroll_res.ok and len(enroll_res.json()) > 0
+    except Exception as e:
+        print(f"[Auth Error] Enrollment check exception: {e}")
+
+    if not is_enrolled:
+        # Check if user is the course instructor/creator
+        try:
+            course_url = f"{Config.SUPABASE_URL}/rest/v1/courses?id=eq.{course_id}&select=instructor_id,instructor_name"
+            c_res = requests.get(course_url, headers=service_headers, timeout=6)
+            if c_res.ok and c_res.json():
+                c_data = c_res.json()[0]
+                if c_data.get("instructor_id") == user_id:
+                    is_enrolled = True
+        except Exception:
+            pass
+
+    if not is_enrolled:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Forbidden: You are not enrolled in this course or lack permission to stream this protected lecture."
+        )
+
+    return {"user_id": user_id, "user": user_data}
+
+
+@app.api_route("/api/lessons/{lesson_id}/stream", methods=["GET", "HEAD"])
+async def stream_lesson_video(
+    lesson_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Secure Video Streaming Endpoint:
+    - Verifies student identity and course enrollment against Supabase.
+    - Supports HTTP Range requests (206 Partial Content) and HEAD requests for seeking.
+    - Streams byte ranges directly from private Google Drive or local storage without buffering full video in RAM.
+    """
+    reload_config()
+    lesson = db.get_lesson(lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+
+    course_id = lesson.get("course_id")
+    is_free_preview = bool(lesson.get("is_free_preview", False))
+
+    # Perform authorization check if not a free preview lesson
+    if not is_free_preview:
+        verify_supabase_user_and_enrollment(authorization, token, course_id)
+
+    video_url = lesson.get("video_url", "").strip()
+    range_header = request.headers.get("Range")
+
+    # CASE 1: Google Drive video
+    drive_file_id = GoogleDriveManager.extract_file_id(video_url)
+    if drive_file_id and drive_mgr.is_configured():
+        try:
+            status_code, headers, chunk_iter = drive_mgr.stream_file_range(drive_file_id, range_header)
+            if request.method == "HEAD":
+                return Response(status_code=status_code, headers=headers)
+            return StreamingResponse(chunk_iter, status_code=status_code, headers=headers)
+        except FileNotFoundError:
+            pass  # Fall through to check local storage
+        except Exception as e:
+            print(f"[Streaming Error] Google Drive streaming error: {e}")
+            raise HTTPException(status_code=502, detail="Failed to stream media from Google Drive storage.")
+
+    # CASE 2: Local uploaded MP4 file
+    local_filename = video_url.replace("/uploads/", "").replace("uploads/", "")
+    local_path = Config.UPLOADS_DIR / local_filename
+    if local_path.exists() and local_path.is_file():
+        total_size = local_path.stat().st_size
+        start = 0
+        end = total_size - 1 if total_size > 0 else 0
+        status_code = 200
+
+        if range_header and range_header.startswith("bytes="):
+            range_val = range_header.replace("bytes=", "").strip()
+            parts = range_val.split("-")
+            if parts[0]:
+                start = int(parts[0])
+            if len(parts) > 1 and parts[1]:
+                end = int(parts[1])
+            status_code = 206
+
+        if total_size > 0 and end >= total_size:
+            end = total_size - 1
+
+        content_length = (end - start + 1) if total_size > 0 else 0
+        resp_headers = {
+            "Content-Type": "video/mp4",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, no-cache, no-store, must-revalidate",
+            "X-Content-Type-Options": "nosniff"
+        }
+        if status_code == 206 and total_size > 0:
+            resp_headers["Content-Range"] = f"bytes {start}-{end}/{total_size}"
+
+        if request.method == "HEAD":
+            return Response(status_code=status_code, headers=resp_headers)
+
+        def iter_file():
+            with open(local_path, "rb") as f:
+                f.seek(start)
+                bytes_left = content_length
+                while bytes_left > 0:
+                    read_size = min(1024 * 64, bytes_left)
+                    chunk = f.read(read_size)
+                    if not chunk:
+                        break
+                    bytes_left -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(iter_file(), status_code=status_code, headers=resp_headers)
+
+    # CASE 3: External streaming or YouTube fallback
+    if video_url.startswith("http"):
+        return RedirectResponse(url=video_url, status_code=307)
+
+    raise HTTPException(status_code=404, detail="Video media source not found or format unsupported.")
+
+
+@app.api_route("/api/stream/drive/{file_id}", methods=["GET", "HEAD"])
+async def stream_drive_file(
+    file_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
+    """Direct Google Drive video streaming endpoint with byte-range support."""
+    reload_config()
+    clean_id = GoogleDriveManager.extract_file_id(file_id)
+    if not clean_id or not drive_mgr.is_configured():
+        raise HTTPException(status_code=400, detail="Google Drive storage service not configured.")
+
+    if not token and not authorization:
+        raise HTTPException(status_code=401, detail="Authentication required to stream protected video.")
+
+    range_header = request.headers.get("Range")
+    try:
+        status_code, headers, chunk_iter = drive_mgr.stream_file_range(clean_id, range_header)
+        if request.method == "HEAD":
+            return Response(status_code=status_code, headers=headers)
+        return StreamingResponse(chunk_iter, status_code=status_code, headers=headers)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Google Drive file not found.")
+    except Exception as e:
+        print(f"[Streaming Error] stream_drive_file error: {e}")
+        raise HTTPException(status_code=502, detail="Upstream streaming error.")
+
 
 @app.post("/api/process-video")
 async def process_video(
