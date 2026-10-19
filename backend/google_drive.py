@@ -39,13 +39,50 @@ class GoogleDriveManager:
             print(f"[Warning] Failed to initialize Google Drive service: {e}")
             return None
 
+    @staticmethod
+    def refresh_access_token() -> str:
+        """Exchanges refresh_token for a fresh access_token via Google OAuth2."""
+        refresh_token = getattr(Config, "GOOGLE_OAUTH_REFRESH_TOKEN", "")
+        client_id = getattr(Config, "GOOGLE_OAUTH_CLIENT_ID", "")
+        client_secret = getattr(Config, "GOOGLE_OAUTH_CLIENT_SECRET", "")
+        if not (refresh_token and client_id and client_secret):
+            return ""
+        try:
+            import requests
+            payload = {
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'refresh_token': refresh_token,
+                'grant_type': 'refresh_token'
+            }
+            r = requests.post('https://oauth2.googleapis.com/token', data=payload, timeout=10)
+            if r.ok:
+                new_token = r.json().get('access_token', "")
+                if new_token:
+                    Config.GOOGLE_OAUTH_ACCESS_TOKEN = new_token
+                    print(f"[GoogleDrive] Successfully auto-refreshed access_token via permanent refresh_token!")
+                    return new_token
+            else:
+                print(f"[GoogleDrive Auto-Refresh Notice]: {r.status_code} - {r.text}")
+        except Exception as e:
+            print(f"[GoogleDrive Refresh Exception]: {e}")
+        return ""
+
+    @classmethod
+    def get_access_token(cls) -> str:
+        """Returns active access token, auto-refreshing via permanent refresh_token if needed."""
+        token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        if not token:
+            token = cls.refresh_access_token()
+        return token
+
     def is_configured(self) -> bool:
-        return self.service is not None or bool(getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", ""))
+        return self.service is not None or bool(self.get_access_token())
 
     def list_files(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Lists files inside the designated Google Drive folder."""
         fid = folder_id or self.default_folder_id
-        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        oauth_token = self.get_access_token()
         if oauth_token:
             try:
                 import requests
@@ -59,6 +96,10 @@ class GoogleDriveManager:
                     "supportsAllDrives": "true"
                 }
                 r = requests.get(url, headers={"Authorization": f"Bearer {oauth_token}"}, params=params, timeout=15)
+                if r.status_code == 401:
+                    new_tok = self.refresh_access_token()
+                    if new_tok:
+                        r = requests.get(url, headers={"Authorization": f"Bearer {new_tok}"}, params=params, timeout=15)
                 if r.ok:
                     return r.json().get('files', [])
             except Exception as e:
@@ -95,7 +136,7 @@ class GoogleDriveManager:
         fid = folder_id or self.default_folder_id
 
         # 1. Primary Strategy: Direct 5TB Admin OAuth Upload (Unlimited quota)
-        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        oauth_token = self.get_access_token()
         if oauth_token and local_path.exists():
             try:
                 import requests
@@ -112,6 +153,11 @@ class GoogleDriveManager:
                     'parents': [fid] if fid else []
                 }
                 r = requests.post(init_url, headers=headers, json=meta, timeout=15)
+                if r.status_code == 401:
+                    new_tok = self.refresh_access_token()
+                    if new_tok:
+                        headers['Authorization'] = f'Bearer {new_tok}'
+                        r = requests.post(init_url, headers=headers, json=meta, timeout=15)
                 if r.status_code == 200 and 'Location' in r.headers:
                     upload_url = r.headers['Location']
                     with open(local_path, 'rb') as f:

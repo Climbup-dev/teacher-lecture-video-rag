@@ -33,6 +33,7 @@ class Config:
     GOOGLE_OAUTH_ACCESS_TOKEN = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN", "")
     GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", "")
     GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+    GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
     
     # Networking
     HOST = os.getenv("HOST", "0.0.0.0")
@@ -59,6 +60,7 @@ def reload_config():
     Config.GOOGLE_OAUTH_ACCESS_TOKEN = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN", "")
     Config.GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", "")
     Config.GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+    Config.GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
     if not Config.GOOGLE_CREDENTIALS_JSON and (Config.BASE_DIR / "service_account.json").exists():
         try:
             Config.GOOGLE_CREDENTIALS_JSON = (Config.BASE_DIR / "service_account.json").read_text(encoding="utf-8")
