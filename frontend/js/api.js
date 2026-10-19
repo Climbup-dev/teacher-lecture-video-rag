@@ -109,6 +109,33 @@ export const api = {
     return res.json();
   },
 
+  // Students
+  async getStudents(courseId = null) {
+    const url = courseId ? `/api/students?course_id=${encodeURIComponent(courseId)}` : "/api/students";
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to load students");
+    return res.json();
+  },
+
+  async enrollStudent(studentData) {
+    const res = await fetch("/api/students", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(studentData)
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to enroll student");
+    }
+    return res.json();
+  },
+
+  async deleteStudent(studentId) {
+    const res = await fetch(`/api/students/${studentId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("Failed to remove student");
+    return res.json();
+  },
+
   // Settings
   async updateConfig(payload) {
     const res = await fetch("/api/update-config", {

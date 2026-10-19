@@ -6,6 +6,7 @@ import { initUploadTab } from "./tabs/upload.js";
 import { initMaterialsTab } from "./tabs/materials.js";
 import { initStudioTab } from "./tabs/studio.js";
 import { initChatTab } from "./tabs/chat.js";
+import { initStudentsTab } from "./tabs/students.js";
 
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -87,6 +88,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initMaterialsTab();
   initStudioTab();
   initChatTab();
+  initStudentsTab();
 
   // Settings Modal Handlers
   const settingsModal = document.getElementById("settings-modal");
