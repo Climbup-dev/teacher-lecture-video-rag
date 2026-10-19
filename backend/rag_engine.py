@@ -73,32 +73,38 @@ LECTURE EVIDENCE FROM VIDEO:
 STUDENT QUESTION:
 "{query}"
 
-MANDATORY RESPONSE GUIDELINES (Strict Quality & Format):
-1. 🎯 CORE TAKEAWAY & CONCEPT BREAKDOWN:
-   - Begin with a clear, direct answer that immediately resolves the student's doubt.
-   - Break down complex concepts step-by-step using structured markdown headers, bullet points, and bold text.
-   - Explain the "Why" and "How" intuitively, using clear real-world analogies, code snippets, or diagrams where appropriate.
+MANDATORY RESPONSE GUIDELINES (Smart, Clean & Elegant Teaching):
+1. 🎯 SMART & FLUID EXPLANATION (ZERO INLINE CLUTTER):
+   - Provide a clean, highly intelligent, natural explanation like a world-class mentor.
+   - ABSOLUTE RULE: DO NOT put any bracketed timestamps like `[MM:SS]` inside the explanation paragraphs, headings, or bullet points!
+   - Keep the body text 100% clean, fluid, and effortless to read. Use clear bold keywords, bullet points, and steps.
 
-2. ⏱️ EXPLICIT CLICKABLE TIMESTAMPS [MM:SS]:
-   - For EVERY key explanation, formula, definition, or theorem, cite the exact timestamp in brackets like `[MM:SS]` (e.g. `[02:15]`, `[07:42]`). The student's video player will make these clickable to jump directly to that moment!
-   - Include a dedicated section `### ⏱️ Video Moments & Timestamps` summarizing which minute/second covers which sub-topic so the student can easily navigate the lecture.
+2. ⏱️ DEDICATED VIDEO JUMP POINTS AT THE END ONLY:
+   - All video timestamps MUST be placed EXCLUSIVELY in a dedicated `### ⏱️ Video Jump Points` section at the bottom.
+   - Format:
+     ```
+     ### ⏱️ Video Jump Points
+     * ⏱️ [MM:SS] - Topic / Key Moment 1
+     * ⏱️ [MM:SS] - Topic / Key Moment 2
+     ```
+   - This keeps the explanation smart and readable while providing instant 1-click video navigation.
 
-3. 🎨 RICH EMOJIS & ENGAGING VISUAL HIERARCHY:
-   - Use meaningful, aesthetic emojis throughout your response to make learning vibrant, structured, and student-friendly (e.g., 🎯 for Summary, 💡 for Concept Explanation, ⏱️ / 🎥 for Video Jump Links, 🚀 for Examples/Analogies, 📌 for Teacher Notes/Pitfalls, ❓ for Practice Questions).
+3. 🎨 VIBRANT EMOJIS & CLEAN VISUAL HIERARCHY:
+   - Use meaningful emojis tastefully to highlight section headings and key takeaways (🎯, 💡, ⏱️, 🚀, 📌, ❓).
+   - Never overdo emojis on every line; use them on section titles and highlights for a sleek, modern look.
 
 4. 🌐 MULTILINGUAL EXCELLENCE (Hindi / Hinglish / Marathi / English):
-   - Detect the language of the student's question and respond fluently in that SAME language:
-     * If asked in **Hindi** or **Hinglish**: Explain warmly in natural, friendly Hindi/Hinglish, keeping technical terms clear and accessible.
-     * If asked in **Marathi**: Explain clearly and warmly in natural Marathi with appropriate technical terms.
-     * If asked in **English**: Provide an articulate, top-tier academic response.
-   - Always strictly retain the bracketed timestamp format `[MM:SS]` regardless of the language used!
+   - Match the student's language naturally:
+     * If asked in **Hindi / Hinglish**: Explain in smooth, friendly, natural Hindi/Hinglish without awkward literal translations.
+     * If asked in **Marathi**: Explain clearly and warmly in natural Marathi.
+     * If asked in **English**: Provide an articulate, smart explanation.
+   - Preserve the bracketed `[MM:SS]` format strictly in the `### ⏱️ Video Jump Points` section so the video player can seek.
 
-5. 📌 STRICT EVIDENCE GROUNDING:
-   - Ground all explanations strictly in what the professor covered in the provided transcript.
-   - If the student asks about a detail NOT discussed in this lecture segment, clearly note: "📌 *The professor did not explicitly discuss this detail in this lecture clip.*" and provide a brief, helpful supplementary explanation.
+5. 📌 PROFESSOR'S HIGHLIGHTS & TIPS:
+   - Include a brief `### 📌 Professor's Pro Tips` section highlighting key warnings (e.g., PATH checkbox, free Community edition) without any inline timestamps.
 
-6. ❓ SUGGESTED FOLLOW-UP QUESTIONS:
-   - End with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to test or deepen the student's understanding.
+6. ❓ 2 PRACTICE QUESTIONS:
+   - Conclude with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to test the student's understanding.
 """
 
         payload = {
