@@ -396,8 +396,9 @@ async def stream_lesson_video(
     drive_file_id = GoogleDriveManager.extract_file_id(video_url)
     if drive_file_id and drive_mgr.is_configured():
         try:
-            status_code, headers, chunk_iter = drive_mgr.stream_file_range(drive_file_id, range_header)
-            if request.method == "HEAD":
+            is_head = (request.method == "HEAD")
+            status_code, headers, chunk_iter = drive_mgr.stream_file_range(drive_file_id, range_header, is_head=is_head)
+            if is_head:
                 return Response(status_code=status_code, headers=headers)
             return StreamingResponse(chunk_iter, status_code=status_code, headers=headers)
         except FileNotFoundError:
@@ -415,6 +416,7 @@ async def stream_lesson_video(
         end = total_size - 1 if total_size > 0 else 0
         status_code = 200
 
+        MAX_CHUNK_SIZE = 5 * 1024 * 1024
         if range_header and range_header.startswith("bytes="):
             range_val = range_header.replace("bytes=", "").strip()
             parts = range_val.split("-")
@@ -422,7 +424,13 @@ async def stream_lesson_video(
                 start = int(parts[0])
             if len(parts) > 1 and parts[1]:
                 end = int(parts[1])
+            else:
+                end = min(start + MAX_CHUNK_SIZE - 1, total_size - 1) if total_size > 0 else start
             status_code = 206
+        else:
+            if total_size > MAX_CHUNK_SIZE:
+                end = MAX_CHUNK_SIZE - 1
+                status_code = 206
 
         if total_size > 0 and end >= total_size:
             end = total_size - 1
@@ -481,8 +489,9 @@ async def stream_drive_file(
 
     range_header = request.headers.get("Range")
     try:
-        status_code, headers, chunk_iter = drive_mgr.stream_file_range(clean_id, range_header)
-        if request.method == "HEAD":
+        is_head = (request.method == "HEAD")
+        status_code, headers, chunk_iter = drive_mgr.stream_file_range(clean_id, range_header, is_head=is_head)
+        if is_head:
             return Response(status_code=status_code, headers=headers)
         return StreamingResponse(chunk_iter, status_code=status_code, headers=headers)
     except FileNotFoundError:

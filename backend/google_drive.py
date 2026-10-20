@@ -339,10 +339,11 @@ class GoogleDriveManager:
             print(f"[GoogleDrive] Permission notice: {e}")
             return False
 
-    def stream_file_range(self, file_id: str, range_header: Optional[str] = None):
+    def stream_file_range(self, file_id: str, range_header: Optional[str] = None, is_head: bool = False):
         """
         Fetches metadata and streams byte ranges from Google Drive API without buffering the full file in memory.
         Supports HTTP Range requests (206 Partial Content) and HEAD requests for seeking.
+        Chunk-clamped to 5 MB per response to comply with Cloud Run 32 MB response limits.
         Returns: (status_code, headers_dict, stream_generator)
         """
         import requests
@@ -354,6 +355,18 @@ class GoogleDriveManager:
 
         total_size = int(meta.get("size") or 0)
         mime_type = meta.get("mimeType") or "video/mp4"
+
+        # Fast HEAD response: return full metadata and byte-range capability without transferring any video payload
+        if is_head:
+            resp_headers = {
+                "Content-Type": mime_type,
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(total_size),
+                "Content-Disposition": "inline",
+                "Cache-Control": "private, no-cache, no-store, must-revalidate",
+                "X-Content-Type-Options": "nosniff"
+            }
+            return 200, resp_headers, iter([])
 
         # Resolve auth token (OAuth Admin token or Service Account)
         token = self.get_access_token()
@@ -370,7 +383,10 @@ class GoogleDriveManager:
         if not token:
             raise RuntimeError("Google Drive credentials not available for streaming.")
 
-        # Parse Range header
+        # Chunk clamp: Cloud Run has a strict 32 MB response payload limit.
+        # Clamping open-ended / large ranges to 5 MB chunks guarantees fast TTFB, smooth buffering, and zero 500 errors.
+        MAX_CHUNK_SIZE = 5 * 1024 * 1024
+
         start = 0
         end = total_size - 1 if total_size > 0 else 0
         status_code = 200
@@ -382,10 +398,22 @@ class GoogleDriveManager:
                 start = int(parts[0])
             if len(parts) > 1 and parts[1]:
                 end = int(parts[1])
+            else:
+                # Open-ended Range e.g. 'bytes=0-'
+                end = min(start + MAX_CHUNK_SIZE - 1, total_size - 1) if total_size > 0 else start
             status_code = 206
+        else:
+            # Full GET without Range header
+            if total_size > MAX_CHUNK_SIZE:
+                end = MAX_CHUNK_SIZE - 1
+                status_code = 206
 
         if total_size > 0 and end >= total_size:
             end = total_size - 1
+
+        # Hard safety ceiling: single chunk never exceeds 8 MB
+        if (end - start + 1) > (8 * 1024 * 1024):
+            end = start + (8 * 1024 * 1024) - 1
 
         content_length = (end - start + 1) if total_size > 0 else 0
 
@@ -427,4 +455,3 @@ class GoogleDriveManager:
                 upstream.close()
 
         return status_code, resp_headers, iter_chunks()
-
