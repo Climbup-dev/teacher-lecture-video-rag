@@ -30,9 +30,21 @@ class DeepgramTranscriber:
             "paragraphs": "true"
         }
 
+        ext = path.suffix.lower()
+        if ext == ".wav":
+            content_type = "audio/wav"
+        elif ext in (".m4a", ".mp4", ".aac"):
+            content_type = "audio/mp4"
+        elif ext == ".ogg":
+            content_type = "audio/ogg"
+        elif ext == ".flac":
+            content_type = "audio/flac"
+        else:
+            content_type = "audio/mpeg"
+
         headers = {
             "Authorization": f"Token {self.api_key}",
-            "Content-Type": "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg"
+            "Content-Type": content_type
         }
 
         with open(path, "rb") as audio_file:
@@ -41,7 +53,7 @@ class DeepgramTranscriber:
                 params=params,
                 headers=headers,
                 data=audio_file,
-                timeout=300
+                timeout=900
             )
 
         if response.status_code != 200:
@@ -72,7 +84,7 @@ class DeepgramTranscriber:
             params=params,
             headers=headers,
             json={"url": audio_url},
-            timeout=300
+            timeout=900
         )
 
         if response.status_code != 200:
