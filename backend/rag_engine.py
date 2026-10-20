@@ -74,6 +74,15 @@ class RAGEngine:
 
         history_summary = "\n".join(history_msgs) if history_msgs else "New conversation session (no previous messages)."
 
+        # Sanitize query against prompt injection & oversized payloads
+        safe_query = re.sub(r'[\r\n]+', ' ', (query or "").strip())[:1000]
+        if not safe_query:
+            return {
+                "answer": "Please provide a valid question regarding the lecture.",
+                "retrieved_evidence": [],
+                "video_timestamps": []
+            }
+
         # 4. Prompt Gemini for High-Quality Grounded Answer with Anti-Hallucination Guardrails
         system_instructions = f"""You are the Intelligent AI Professor & Mentor for the university course lecture: "{lesson_title}".
 A student has asked a doubt. Your mission is to provide an ELITE, CLEAR, HIGHLY ENGAGING, and PEDAGOGICALLY SOUND explanation grounded strictly in the provided lecture transcript evidence.
@@ -84,8 +93,10 @@ RECENT CONVERSATION CONTEXT (For pronoun & conversational continuity only; NEVER
 LECTURE EVIDENCE FROM VIDEO:
 {context_str}
 
-STUDENT QUESTION:
-"{query}"
+STUDENT QUESTION (Bounded):
+<<<
+{safe_query}
+>>>
 
 MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
 1. 🛡️ ABSOLUTE GROUNDING & ZERO HALLUCINATION:
@@ -153,17 +164,18 @@ MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
                 res = requests.post(endpoint, json=payload, timeout=45)
                 if res.status_code == 200:
                     data = res.json()
-                    raw_answer = data["candidates"][0]["content"]["parts"][0]["text"]
-                    break
-                elif res.status_code == 429:
-                    continue  # Try next available free model
-                else:
-                    raw_answer = f"Error ({res.status_code}): {res.text}"
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
+                        raw_answer = candidates[0]["content"]["parts"][0].get("text", "")
+                        if raw_answer:
+                            break
+                elif res.status_code in (429, 503):
+                    continue  # Try next available model on quota/concurrency limits
             except Exception as e:
-                raw_answer = f"AI service error: {str(e)}"
+                continue
 
         if not raw_answer:
-            raw_answer = "Could not generate answer due to service availability. Please try again in a moment."
+            raw_answer = "Could not generate answer due to AI service temporary availability. Please try again in a moment."
 
         # 5. Extract all timestamps mentioned in the answer (supports MM:SS, MMM:SS, HH:MM:SS)
         extracted = re.findall(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]', raw_answer)

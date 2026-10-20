@@ -1,8 +1,11 @@
 import json
 import uuid
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from backend.config import Config
 from backend.vector_embedder import VectorEmbedder
 
@@ -11,6 +14,15 @@ class DBAdapter:
         self.supabase_url = (supabase_url or Config.SUPABASE_URL).rstrip("/")
         self.supabase_key = supabase_key or Config.SUPABASE_KEY
         self.storage_file = Config.CHUNKS_DIR / "local_store.json"
+        self._store_lock = threading.Lock()
+        
+        # Configure pooled HTTP session for fast, keep-alive Supabase REST queries
+        self.session = requests.Session()
+        retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[502, 503, 504])
+        adapter = HTTPAdapter(pool_connections=15, pool_maxsize=30, max_retries=retries)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        
         self._init_local_store()
 
     def _get_headers(self) -> Dict[str, str]:
@@ -22,27 +34,30 @@ class DBAdapter:
         }
 
     def _init_local_store(self):
-        if not self.storage_file.exists():
-            initial_data = {
-                "courses": {},
-                "lessons": {},
-                "chunks": [],
-                "chat_sessions": {},
-                "chat_messages": []
-            }
-            with open(self.storage_file, "w", encoding="utf-8") as f:
-                json.dump(initial_data, f, indent=2)
+        with self._store_lock:
+            if not self.storage_file.exists():
+                initial_data = {
+                    "courses": {},
+                    "lessons": {},
+                    "chunks": [],
+                    "chat_sessions": {},
+                    "chat_messages": []
+                }
+                with open(self.storage_file, "w", encoding="utf-8") as f:
+                    json.dump(initial_data, f, indent=2)
 
     def _read_local_store(self) -> Dict[str, Any]:
-        try:
-            with open(self.storage_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {"courses": {}, "lessons": {}, "chunks": [], "chat_sessions": {}, "chat_messages": []}
+        with self._store_lock:
+            try:
+                with open(self.storage_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return {"courses": {}, "lessons": {}, "chunks": [], "chat_sessions": {}, "chat_messages": []}
 
     def _write_local_store(self, data: Dict[str, Any]):
-        with open(self.storage_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with self._store_lock:
+            with open(self.storage_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
 
     def ensure_course_exists(self, course_id: str, title: str = "Applied AI & GenAI"):
         """Ensures the parent course exists in Supabase to satisfy foreign key constraints."""
@@ -51,7 +66,7 @@ class DBAdapter:
 
         try:
             headers = self._get_headers()
-            res = requests.get(
+            res = self.session.get(
                 f"{self.supabase_url}/rest/v1/courses?id=eq.{course_id}&select=id",
                 headers=headers,
                 timeout=5
@@ -72,7 +87,7 @@ class DBAdapter:
                 "duration": "10+ Hours",
                 "total_lessons": 1
             }
-            requests.post(
+            self.session.post(
                 f"{self.supabase_url}/rest/v1/courses",
                 headers={**headers, "Prefer": "resolution=ignore-duplicates"},
                 json=course_payload,
@@ -88,7 +103,7 @@ class DBAdapter:
             return module_id
         try:
             headers = self._get_headers()
-            res = requests.get(
+            res = self.session.get(
                 f"{self.supabase_url}/rest/v1/course_modules?course_id=eq.{course_id}&select=id&limit=1",
                 headers=headers,
                 timeout=5
@@ -102,7 +117,7 @@ class DBAdapter:
                 "title": "Module 1: Core Lectures",
                 "display_order": 1
             }
-            requests.post(
+            self.session.post(
                 f"{self.supabase_url}/rest/v1/course_modules",
                 headers={**headers, "Prefer": "resolution=ignore-duplicates"},
                 json=payload,
@@ -118,7 +133,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = requests.get(
+                res = self.session.get(
                     f"{self.supabase_url}/rest/v1/courses?select=*&order=created_at.desc",
                     headers=headers,
                     timeout=8
@@ -167,7 +182,7 @@ class DBAdapter:
             try:
                 headers = self._get_headers()
                 headers["Prefer"] = "return=representation"
-                res = requests.post(
+                res = self.session.post(
                     f"{self.supabase_url}/rest/v1/courses",
                     headers=headers,
                     json=course_payload,
@@ -192,10 +207,10 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                requests.delete(f"{self.supabase_url}/rest/v1/transcript_chunks_vector?course_id=eq.{course_id}", headers=headers, timeout=8)
-                requests.delete(f"{self.supabase_url}/rest/v1/course_resources?course_id=eq.{course_id}", headers=headers, timeout=8)
-                requests.delete(f"{self.supabase_url}/rest/v1/course_lessons?course_id=eq.{course_id}", headers=headers, timeout=8)
-                requests.delete(f"{self.supabase_url}/rest/v1/courses?id=eq.{course_id}", headers=headers, timeout=8)
+                self.session.delete(f"{self.supabase_url}/rest/v1/transcript_chunks_vector?course_id=eq.{course_id}", headers=headers, timeout=8)
+                self.session.delete(f"{self.supabase_url}/rest/v1/course_resources?course_id=eq.{course_id}", headers=headers, timeout=8)
+                self.session.delete(f"{self.supabase_url}/rest/v1/course_lessons?course_id=eq.{course_id}", headers=headers, timeout=8)
+                self.session.delete(f"{self.supabase_url}/rest/v1/courses?id=eq.{course_id}", headers=headers, timeout=8)
             except Exception as e:
                 print(f"[Supabase] delete_course warning: {e}")
 
@@ -269,7 +284,7 @@ class DBAdapter:
                     "display_order": 1,
                     "is_free_preview": True
                 }
-                res = requests.post(f"{self.supabase_url}/rest/v1/course_lessons", headers=headers, json=payload, timeout=12)
+                res = self.session.post(f"{self.supabase_url}/rest/v1/course_lessons", headers=headers, json=payload, timeout=12)
                 if not res.ok:
                     print(f"[Supabase] course_lessons sync HTTP {res.status_code}: {res.text}")
             except Exception as e:
@@ -324,7 +339,7 @@ class DBAdapter:
                         row["embedding"] = emb
                     supabase_rows.append(row)
 
-                res = requests.post(
+                res = self.session.post(
                     f"{self.supabase_url}/rest/v1/transcript_chunks_vector",
                     headers=headers,
                     json=supabase_rows,
@@ -351,7 +366,7 @@ class DBAdapter:
                 url = f"{self.supabase_url}/rest/v1/transcript_chunks_vector?select=*"
                 if lesson_id:
                     url += f"&lesson_id=eq.{lesson_id}"
-                res = requests.get(url, headers=headers, timeout=8)
+                res = self.session.get(url, headers=headers, timeout=8)
                 if res.ok:
                     chunks_to_search = res.json()
             except Exception as e:
@@ -384,7 +399,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = requests.get(
+                res = self.session.get(
                     f"{self.supabase_url}/rest/v1/course_lessons?id=eq.{lesson_id}&select=*",
                     headers=headers,
                     timeout=6
@@ -402,7 +417,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = requests.get(
+                res = self.session.get(
                     f"{self.supabase_url}/rest/v1/course_lessons?select=*&order=created_at.asc",
                     headers=headers,
                     timeout=8
@@ -422,7 +437,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = requests.get(
+                res = self.session.get(
                     f"{self.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}&order=chunk_index.asc&select=*",
                     headers=headers,
                     timeout=8
@@ -518,7 +533,7 @@ class DBAdapter:
                     "Content-Type": "application/octet-stream",
                     "x-upsert": "true"
                 }
-                upload_res = requests.post(upload_endpoint, headers=headers, data=file_bytes, timeout=30)
+                upload_res = self.session.post(upload_endpoint, headers=headers, data=file_bytes, timeout=30)
                 if not upload_res.ok:
                     print(f"[Supabase Storage] Note upload HTTP {upload_res.status_code}: {upload_res.text}")
 
@@ -536,7 +551,7 @@ class DBAdapter:
                     "download_url": download_url,
                     "description": description or f"Official course material: {title}"
                 }
-                db_res = requests.post(table_endpoint, headers=table_headers, json=payload, timeout=10)
+                db_res = self.session.post(table_endpoint, headers=table_headers, json=payload, timeout=10)
                 if db_res.ok and db_res.json():
                     return db_res.json()[0]
             except Exception as e:
@@ -565,7 +580,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = requests.get(
+                res = self.session.get(
                     f"{self.supabase_url}/rest/v1/course_resources?course_id=eq.{course_id}&order=created_at.desc",
                     headers=headers,
                     timeout=8
@@ -589,14 +604,14 @@ class DBAdapter:
                 enr_url = f"{self.supabase_url}/rest/v1/course_enrollments?select=*"
                 if course_id:
                     enr_url += f"&course_id=eq.{course_id}"
-                enr_res = requests.get(enr_url, headers=headers, timeout=6)
+                enr_res = self.session.get(enr_url, headers=headers, timeout=6)
 
                 if enr_res.ok:
                     enrollments = enr_res.json()
-                    prof_res = requests.get(f"{self.supabase_url}/rest/v1/profiles?select=id,full_name,email,avatar_url", headers=headers, timeout=6)
+                    prof_res = self.session.get(f"{self.supabase_url}/rest/v1/profiles?select=id,full_name,email,avatar_url", headers=headers, timeout=6)
                     profiles_map = {p["id"]: p for p in prof_res.json()} if prof_res.ok else {}
 
-                    crs_res = requests.get(f"{self.supabase_url}/rest/v1/courses?select=id,title", headers=headers, timeout=6)
+                    crs_res = self.session.get(f"{self.supabase_url}/rest/v1/courses?select=id,title", headers=headers, timeout=6)
                     courses_map = {c["id"]: c.get("title") for c in crs_res.json()} if crs_res.ok else {}
 
                     students = []
@@ -648,7 +663,7 @@ class DBAdapter:
             try:
                 headers = self._get_headers()
                 # Check if profile exists for this email
-                prof_check = requests.get(f"{self.supabase_url}/rest/v1/profiles?email=eq.{email}&select=id", headers=headers, timeout=5)
+                prof_check = self.session.get(f"{self.supabase_url}/rest/v1/profiles?email=eq.{email}&select=id", headers=headers, timeout=5)
                 if prof_check.ok and len(prof_check.json()) > 0:
                     user_id = prof_check.json()[0]["id"]
                 else:
@@ -659,7 +674,7 @@ class DBAdapter:
                         "full_name": name,
                         "role": "student"
                     }
-                    requests.post(f"{self.supabase_url}/rest/v1/profiles", headers={**headers, "Prefer": "resolution=ignore-duplicates"}, json=prof_payload, timeout=5)
+                    self.session.post(f"{self.supabase_url}/rest/v1/profiles", headers={**headers, "Prefer": "resolution=ignore-duplicates"}, json=prof_payload, timeout=5)
 
                 enr_payload = {
                     "id": new_id,
@@ -668,7 +683,7 @@ class DBAdapter:
                     "progress_percentage": 0,
                     "is_completed": False
                 }
-                res = requests.post(f"{self.supabase_url}/rest/v1/course_enrollments", headers=headers, json=enr_payload, timeout=8)
+                res = self.session.post(f"{self.supabase_url}/rest/v1/course_enrollments", headers=headers, json=enr_payload, timeout=8)
                 if not res.ok:
                     print(f"[Supabase] course_enrollments insert notice: {res.text}")
             except Exception as e:
@@ -700,7 +715,7 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = requests.delete(f"{self.supabase_url}/rest/v1/course_enrollments?id=eq.{student_id}", headers=headers, timeout=8)
+                res = self.session.delete(f"{self.supabase_url}/rest/v1/course_enrollments?id=eq.{student_id}", headers=headers, timeout=8)
                 if res.ok:
                     deleted = True
             except Exception as e:

@@ -17,10 +17,12 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+import time
+import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response, Header, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 
 from backend.config import Config, reload_config
@@ -32,16 +34,76 @@ from backend.db_adapter import DBAdapter
 from backend.rag_engine import RAGEngine
 from backend.google_drive import GoogleDriveManager
 
-app = FastAPI(title="ClimbUp Mentor Engine | Teacher Video RAG & Studio")
-
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Configure structured production logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] [Req:%(request_id)s] %(message)s"
+    if "%(request_id)s" in logging._defaultFormatter._fmt else
+    "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
 )
+logger = logging.getLogger("climbup.backend")
+
+app = FastAPI(
+    title="ClimbUp Mentor Engine | Teacher Video RAG & Studio",
+    version="2.0.0",
+    docs_url=None if Config.ENVIRONMENT == "production" else "/docs",
+    redoc_url=None if Config.ENVIRONMENT == "production" else "/redoc",
+)
+
+# 1. Security Headers & Request Correlation Middleware
+@app.middleware("http")
+async def add_security_headers_and_tracing(request: Request, call_next):
+    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
+    request.state.request_id = req_id
+    start_time = time.time()
+    
+    response: Response = await call_next(request)
+    
+    latency = time.time() - start_time
+    response.headers["X-Request-ID"] = req_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["X-Response-Time"] = f"{latency:.4f}s"
+    
+    # Do not log sensitive health check polling spam unless error
+    if request.url.path not in ("/health", "/healthz") or response.status_code >= 400:
+        logger.info(f"{request.method} {request.url.path} - {response.status_code} ({latency:.3f}s) [id:{req_id}]")
+        
+    return response
+
+# 2. Hardened CORS Configuration
+cors_origins = Config.CORS_ORIGINS
+if "*" in cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://.*",
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+        allow_headers=["*"],
+        expose_headers=["Content-Range", "Accept-Ranges", "X-Request-ID", "X-Response-Time"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+        allow_headers=["*"],
+        expose_headers=["Content-Range", "Accept-Ranges", "X-Request-ID", "X-Response-Time"],
+    )
+
+# 3. Health & Liveness Endpoints for Cloud Run, Docker & Load Balancers
+@app.get("/health")
+@app.get("/healthz")
+def health_check():
+    return {
+        "status": "healthy",
+        "environment": Config.ENVIRONMENT,
+        "timestamp": int(time.time()),
+        "service": "climbup-mentor-rag"
+    }
 
 db = DBAdapter()
 drive_mgr = GoogleDriveManager()
@@ -203,21 +265,31 @@ async def upload_resource(
     into Supabase Storage ('course_resources') and persists record into 'public.course_resources'.
     """
     reload_config()
+    
+    # 1. Enforce max resource payload size check
+    max_bytes = Config.MAX_RESOURCE_SIZE_MB * 1024 * 1024
     file_bytes = await file.read()
     if not file_bytes:
-        raise HTTPException(status_code=400, detail="Empty file uploaded")
+        raise HTTPException(status_code=400, detail="Empty file uploaded.")
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded file exceeds maximum permitted size of {Config.MAX_RESOURCE_SIZE_MB}MB."
+        )
     
-    detected_type = file_type
-    if file.filename:
-        ext = file.filename.split(".")[-1].lower()
+    # 2. Sanitize filename against path traversal
+    safe_filename = Path(file.filename or "notes.pdf").name
+    detected_type = file_type.lower().strip()
+    if "." in safe_filename:
+        ext = safe_filename.rsplit(".", 1)[-1].lower()
         if ext in ["pdf", "zip", "doc", "docx", "ppt", "pptx", "txt", "ipynb"]:
             detected_type = ext
 
     result = db.upload_course_resource(
         course_id=course_id,
-        title=title,
+        title=title.strip(),
         file_bytes=file_bytes,
-        filename=file.filename or "notes.pdf",
+        filename=safe_filename,
         file_type=detected_type,
         description=description or f"Official course material for {title}"
     )
@@ -229,7 +301,34 @@ async def upload_resource(
 
 
 @app.post("/api/update-config")
-def update_config(req: ConfigUpdateRequest):
+def update_config(
+    req: ConfigUpdateRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Protected configuration endpoint.
+    Guarded by Config.ADMIN_API_KEY and disabled when READONLY_CONFIG is enabled.
+    """
+    if Config.READONLY_CONFIG:
+        raise HTTPException(
+            status_code=403,
+            detail="Configuration updates are disabled in this environment (READONLY_CONFIG=true)."
+        )
+
+    # Enforce admin authentication if ADMIN_API_KEY is configured
+    admin_secret = Config.ADMIN_API_KEY
+    if admin_secret:
+        auth_token = None
+        if authorization and authorization.startswith("Bearer "):
+            auth_token = authorization.split(" ", 1)[1].strip()
+        provided = x_admin_key or auth_token
+        if not provided or provided != admin_secret:
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized: Valid X-Admin-Key or Authorization Bearer token required to modify configuration."
+            )
+
     env_lines = []
     if Config.ENV_PATH.exists():
         with open(Config.ENV_PATH, "r", encoding="utf-8") as f:
@@ -250,7 +349,9 @@ def update_config(req: ConfigUpdateRequest):
         matched = False
         for k, v in keys_to_update.items():
             if v is not None and line.startswith(f"{k}="):
-                new_lines.append(f"{k}={v}\n")
+                # Clean newline injection
+                clean_v = str(v).replace("\r", "").replace("\n", "")
+                new_lines.append(f"{k}={clean_v}\n")
                 updated_keys.add(k)
                 matched = True
                 break
@@ -259,7 +360,8 @@ def update_config(req: ConfigUpdateRequest):
 
     for k, v in keys_to_update.items():
         if v is not None and k not in updated_keys:
-            new_lines.append(f"{k}={v}\n")
+            clean_v = str(v).replace("\r", "").replace("\n", "")
+            new_lines.append(f"{k}={clean_v}\n")
 
     with open(Config.ENV_PATH, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
@@ -408,8 +510,10 @@ async def stream_lesson_video(
             raise HTTPException(status_code=502, detail="Failed to stream media from Google Drive storage.")
 
     # CASE 2: Local uploaded MP4 file
-    local_filename = video_url.replace("/uploads/", "").replace("uploads/", "")
-    local_path = Config.UPLOADS_DIR / local_filename
+    local_filename = Path(video_url.replace("/uploads/", "").replace("uploads/", "")).name
+    local_path = (Config.UPLOADS_DIR / local_filename).resolve()
+    if not str(local_path).startswith(str(Config.UPLOADS_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid media file path.")
     if local_path.exists() and local_path.is_file():
         total_size = local_path.stat().st_size
         start = 0
@@ -595,12 +699,32 @@ async def process_video(
 
     try:
         if file and file.filename:
-            file_ext = Path(file.filename).suffix or ".mp4"
+            file_ext = Path(file.filename).suffix.lower() or ".mp4"
+            allowed_exts = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".mp3", ".wav", ".m4a"}
+            if file_ext not in allowed_exts:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported media format '{file_ext}'. Allowed formats: MP4, MOV, MKV, WEBM, AVI, MP3, WAV, M4A."
+                )
+
             temp_name = f"temp_{lesson_id}{file_ext}"
             saved_media_path = Config.UPLOADS_DIR / temp_name
             
+            # Enforce max video file upload size
+            max_bytes = Config.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+            total_read = 0
             with open(saved_media_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+                while chunk := file.file.read(1024 * 1024):
+                    total_read += len(chunk)
+                    if total_read > max_bytes:
+                        buffer.close()
+                        if saved_media_path.exists():
+                            saved_media_path.unlink()
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Uploaded video exceeds maximum allowed size of {Config.MAX_UPLOAD_SIZE_MB}MB."
+                        )
+                    buffer.write(chunk)
 
             # 1. Direct Upload to Google Drive (Offload heavy video storage from Cloud Run!)
             gdm = GoogleDriveManager()
@@ -751,10 +875,11 @@ async def process_video(
                 for c in enriched_chunks[:5]
             ]
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        logger.exception("Processing failed: %s", e)
+        raise HTTPException(status_code=500, detail="Processing failed. Please check audio quality and try again.")
 
 @app.post("/api/drive/ingest")
 async def ingest_from_drive(req: DriveIngestRequest):
@@ -844,10 +969,11 @@ async def ingest_from_drive(req: DriveIngestRequest):
             "storage": "Google Drive Folder",
             "total_chunks_indexed": len(enriched_chunks)
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Google Drive ingestion failed: {str(e)}")
+        logger.exception("Google Drive ingestion failed: %s", e)
+        raise HTTPException(status_code=500, detail="Google Drive ingestion failed. Please verify the file permissions.")
 
 @app.post("/api/chat")
 def chat_query(req: ChatRequest):
@@ -863,10 +989,11 @@ def chat_query(req: ChatRequest):
             session_id=req.session_id or "default-session"
         )
         return response
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
+        logger.exception("RAG Error: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to process doubt query. Please try again.")
 
 @app.post("/api/chat/clear")
 def clear_chat_history(req: Dict[str, Any]):

@@ -35,6 +35,14 @@ class Config:
     GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "") or os.getenv("GOOGLE_ADMIN_CLIENT_ID", "")
     GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "") or os.getenv("GOOGLE_ADMIN_CLIENT_SECRET", "")
     
+    # Production & Security Controls
+    ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+    ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+    READONLY_CONFIG = os.getenv("READONLY_CONFIG", "false").lower() in ("true", "1", "yes")
+    CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
+    MAX_RESOURCE_SIZE_MB = int(os.getenv("MAX_RESOURCE_SIZE_MB", "50"))
+
     # Networking
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", "8000"))
@@ -58,9 +66,15 @@ def reload_config():
     Config.GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
     Config.GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d")
     Config.GOOGLE_OAUTH_ACCESS_TOKEN = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN", "")
-    Config.GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", "")
-    Config.GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
-    Config.GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    Config.GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", "") or os.getenv("GOOGLE_ADMIN_REFRESH_TOKEN", "")
+    Config.GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "") or os.getenv("GOOGLE_ADMIN_CLIENT_ID", "")
+    Config.GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "") or os.getenv("GOOGLE_ADMIN_CLIENT_SECRET", "")
+    Config.ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+    Config.ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+    Config.READONLY_CONFIG = os.getenv("READONLY_CONFIG", "false").lower() in ("true", "1", "yes")
+    Config.CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    Config.MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
+    Config.MAX_RESOURCE_SIZE_MB = int(os.getenv("MAX_RESOURCE_SIZE_MB", "50"))
     if not Config.GOOGLE_CREDENTIALS_JSON and (Config.BASE_DIR / "service_account.json").exists():
         try:
             Config.GOOGLE_CREDENTIALS_JSON = (Config.BASE_DIR / "service_account.json").read_text(encoding="utf-8")

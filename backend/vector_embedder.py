@@ -1,6 +1,12 @@
 import math
+import threading
 import requests
-from typing import List
+from typing import List, Dict
+
+# Global in-memory cache for query embeddings across instances
+_EMBEDDING_CACHE: Dict[str, List[float]] = {}
+_CACHE_LOCK = threading.Lock()
+_MAX_CACHE_ENTRIES = 1000
 
 class VectorEmbedder:
     def __init__(self, gemini_api_key: str):
@@ -14,10 +20,16 @@ class VectorEmbedder:
         """
         Generates a 768-dimensional normalized dense vector embedding
         using Google's gemini-embedding-001 model with Matryoshka Representation Learning.
+        Uses in-memory LRU-like cache for instant retrieval of repeat queries.
         """
         clean_text = text.strip()
         if not clean_text:
             return [0.0] * dimension
+
+        cache_key = f"{clean_text[:512]}::{dimension}"
+        with _CACHE_LOCK:
+            if cache_key in _EMBEDDING_CACHE:
+                return _EMBEDDING_CACHE[cache_key]
 
         payload = {
             "model": "models/gemini-embedding-001",
@@ -31,7 +43,14 @@ class VectorEmbedder:
 
         data = response.json()
         embedding = data.get("embedding", {}).get("values", [])
-        return self._normalize_vector(embedding)
+        norm_emb = self._normalize_vector(embedding)
+
+        with _CACHE_LOCK:
+            if len(_EMBEDDING_CACHE) >= _MAX_CACHE_ENTRIES:
+                _EMBEDDING_CACHE.pop(next(iter(_EMBEDDING_CACHE)))
+            _EMBEDDING_CACHE[cache_key] = norm_emb
+
+        return norm_emb
 
     def batch_get_embeddings(self, texts: List[str], dimension: int = 768, batch_size: int = 50) -> List[List[float]]:
         """
