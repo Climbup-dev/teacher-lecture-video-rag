@@ -266,7 +266,8 @@ class DBAdapter:
                     "structured_notes": structured_notes or {},
                     "chapters": chapters or [],
                     "processing_status": "ready",
-                    "display_order": 1
+                    "display_order": 1,
+                    "is_free_preview": True
                 }
                 res = requests.post(f"{self.supabase_url}/rest/v1/course_lessons", headers=headers, json=payload, timeout=12)
                 if not res.ok:

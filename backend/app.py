@@ -489,6 +489,8 @@ async def stream_drive_file(
         raise HTTPException(status_code=404, detail="Google Drive file not found.")
     except Exception as e:
         print(f"[Streaming Error] stream_drive_file error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to stream media from Google Drive storage.")
+
 class InitDriveUploadRequest(BaseModel):
     filename: str
     mime_type: Optional[str] = "video/mp4"
