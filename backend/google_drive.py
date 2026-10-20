@@ -42,9 +42,9 @@ class GoogleDriveManager:
     @staticmethod
     def refresh_access_token() -> str:
         """Exchanges refresh_token for a fresh access_token via Google OAuth2."""
-        refresh_token = getattr(Config, "GOOGLE_OAUTH_REFRESH_TOKEN", "")
-        client_id = getattr(Config, "GOOGLE_OAUTH_CLIENT_ID", "")
-        client_secret = getattr(Config, "GOOGLE_OAUTH_CLIENT_SECRET", "")
+        refresh_token = getattr(Config, "GOOGLE_OAUTH_REFRESH_TOKEN", "") or os.getenv("GOOGLE_ADMIN_REFRESH_TOKEN", "") or os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", "")
+        client_id = getattr(Config, "GOOGLE_OAUTH_CLIENT_ID", "") or os.getenv("GOOGLE_ADMIN_CLIENT_ID", "") or os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+        client_secret = getattr(Config, "GOOGLE_OAUTH_CLIENT_SECRET", "") or os.getenv("GOOGLE_ADMIN_CLIENT_SECRET", "") or os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
         if not (refresh_token and client_id and client_secret):
             return ""
         try:
