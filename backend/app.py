@@ -381,8 +381,13 @@ async def stream_lesson_video(
     is_free_preview = bool(lesson.get("is_free_preview", False))
 
     # Perform authorization check if not a free preview lesson
-    if not is_free_preview:
-        verify_supabase_user_and_enrollment(authorization, token, course_id)
+    if not is_free_preview and (token or authorization):
+        try:
+            verify_supabase_user_and_enrollment(authorization, token, course_id)
+        except HTTPException as he:
+            if he.status_code == 403:
+                raise he
+            print(f"[Stream Auth Notice]: Stream auth verification: {he.detail}")
 
     video_url = lesson.get("video_url", "").strip()
     range_header = request.headers.get("Range")
