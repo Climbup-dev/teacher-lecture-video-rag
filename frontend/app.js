@@ -2262,6 +2262,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       removeElement(thinkingId);
       appendAiMessage(`Connection error: ${err.message}`, []);
+    }
   }
 
   function appendUserMessage(text) {
