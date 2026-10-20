@@ -40,6 +40,7 @@ class DBAdapter:
                     "courses": {},
                     "lessons": {},
                     "chunks": [],
+                    "jobs": {},
                     "chat_sessions": {},
                     "chat_messages": []
                 }
@@ -50,9 +51,12 @@ class DBAdapter:
         with self._store_lock:
             try:
                 with open(self.storage_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if "jobs" not in data:
+                        data["jobs"] = {}
+                    return data
             except Exception:
-                return {"courses": {}, "lessons": {}, "chunks": [], "chat_sessions": {}, "chat_messages": []}
+                return {"courses": {}, "lessons": {}, "chunks": [], "jobs": {}, "chat_sessions": {}, "chat_messages": []}
 
     def _write_local_store(self, data: Dict[str, Any]):
         with self._store_lock:
@@ -729,5 +733,338 @@ class DBAdapter:
                 deleted = True
             self._write_local_store(store)
         return deleted or True
+
+    # =========================================================================
+    # DURABLE INGESTION JOB STATE MACHINE (SUPABASE + LOCAL RECOVERY)
+    # =========================================================================
+
+    def create_job(
+        self,
+        course_id: str,
+        title: str,
+        media_url: str = "",
+        file_id: Optional[str] = None,
+        lesson_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Creates a new durable ingestion job with initial state 'QUEUED'."""
+        import datetime
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        lesson_id = lesson_id or f"lesson_{uuid.uuid4().hex[:8]}"
+
+        job_payload = {
+            "id": job_id,
+            "course_id": course_id,
+            "lesson_id": lesson_id,
+            "user_id": user_id,
+            "title": title,
+            "media_url": media_url,
+            "file_id": file_id,
+            "idempotency_key": idempotency_key or f"{course_id}::{file_id or media_url}::{title}",
+            "status": "QUEUED",
+            "current_stage": "QUEUED",
+            "progress_percent": 0,
+            "stage_message": "Ingestion job queued and awaiting worker assignment.",
+            "checkpoints": {},
+            "error_message": None,
+            "attempts": 0,
+            "max_attempts": 3,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "completed_at": None
+        }
+
+        # 1. Persist to Supabase if available
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "return=representation"
+                res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs",
+                    headers=headers,
+                    json=job_payload,
+                    timeout=8
+                )
+                if res.ok and res.json():
+                    created = res.json()[0]
+                    # Also keep local store updated
+                    store = self._read_local_store()
+                    store["jobs"][job_id] = created
+                    self._write_local_store(store)
+                    return created
+                else:
+                    print(f"[Supabase] ingestion_jobs insert notice HTTP {res.status_code}: {res.text}")
+            except Exception as e:
+                print(f"[Supabase] create_job warning: {e}")
+
+        # 2. Local store persistence
+        store = self._read_local_store()
+        store["jobs"][job_id] = job_payload
+        self._write_local_store(store)
+        return job_payload
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves an ingestion job by ID from Supabase or local store."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = self.session.get(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs?id=eq.{job_id}&select=*",
+                    headers=headers,
+                    timeout=6
+                )
+                if res.ok and len(res.json()) > 0:
+                    job = res.json()[0]
+                    store = self._read_local_store()
+                    store["jobs"][job_id] = job
+                    self._write_local_store(store)
+                    return job
+            except Exception as e:
+                print(f"[Supabase] get_job warning: {e}")
+
+        store = self._read_local_store()
+        return store.get("jobs", {}).get(job_id)
+
+    def find_job_by_idempotency_key(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        """Finds any active or recently completed job matching the idempotency key."""
+        if not idempotency_key:
+            return None
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                res = self.session.get(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs?idempotency_key=eq.{idempotency_key}&order=created_at.desc&limit=1&select=*",
+                    headers=headers,
+                    timeout=6
+                )
+                if res.ok and len(res.json()) > 0:
+                    return res.json()[0]
+            except Exception as e:
+                print(f"[Supabase] find_job_by_idempotency_key warning: {e}")
+
+        store = self._read_local_store()
+        for j in store.get("jobs", {}).values():
+            if j.get("idempotency_key") == idempotency_key:
+                return j
+        return None
+
+    def update_job_stage(
+        self,
+        job_id: str,
+        stage: str,
+        status: str = "IN_PROGRESS",
+        progress_percent: int = 0,
+        stage_message: str = "",
+        checkpoint_data: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Updates the stage, status, progress, and incremental checkpoints of an ingestion job."""
+        import datetime
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        store = self._read_local_store()
+        job = store.get("jobs", {}).get(job_id) or self.get_job(job_id)
+        if not job:
+            return None
+
+        job["current_stage"] = stage
+        job["status"] = status
+        job["progress_percent"] = max(0, min(100, progress_percent))
+        if stage_message:
+            job["stage_message"] = stage_message
+        if error_message is not None:
+            job["error_message"] = error_message
+        job["updated_at"] = now_iso
+
+        if checkpoint_data:
+            if "checkpoints" not in job or not isinstance(job["checkpoints"], dict):
+                job["checkpoints"] = {}
+            job["checkpoints"].update(checkpoint_data)
+
+        # Update local store
+        store["jobs"][job_id] = job
+        self._write_local_store(store)
+
+        # Sync to Supabase
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                patch_payload = {
+                    "current_stage": job["current_stage"],
+                    "status": job["status"],
+                    "progress_percent": job["progress_percent"],
+                    "stage_message": job["stage_message"],
+                    "error_message": job.get("error_message"),
+                    "checkpoints": job.get("checkpoints", {}),
+                    "updated_at": now_iso
+                }
+                res = self.session.patch(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs?id=eq.{job_id}",
+                    headers=headers,
+                    json=patch_payload,
+                    timeout=8
+                )
+                if not res.ok:
+                    print(f"[Supabase] update_job_stage patch notice HTTP {res.status_code}: {res.text}")
+            except Exception as e:
+                print(f"[Supabase] update_job_stage warning: {e}")
+
+        return job
+
+    def complete_job(
+        self,
+        job_id: str,
+        lesson_id: str,
+        duration_seconds: int = 0,
+        total_chunks: int = 0,
+        stage_message: str = "Lecture successfully processed and indexed."
+    ) -> Optional[Dict[str, Any]]:
+        """Transitions job to terminal 'COMPLETED' state."""
+        import datetime
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        store = self._read_local_store()
+        job = store.get("jobs", {}).get(job_id) or self.get_job(job_id)
+        if not job:
+            return None
+
+        job["status"] = "COMPLETED"
+        job["current_stage"] = "COMPLETED"
+        job["progress_percent"] = 100
+        job["stage_message"] = stage_message
+        job["lesson_id"] = lesson_id
+        job["completed_at"] = now_iso
+        job["updated_at"] = now_iso
+        if "checkpoints" not in job or not isinstance(job["checkpoints"], dict):
+            job["checkpoints"] = {}
+        job["checkpoints"]["duration_seconds"] = duration_seconds
+        job["checkpoints"]["total_chunks_indexed"] = total_chunks
+
+        store["jobs"][job_id] = job
+        self._write_local_store(store)
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                patch_payload = {
+                    "status": "COMPLETED",
+                    "current_stage": "COMPLETED",
+                    "progress_percent": 100,
+                    "stage_message": stage_message,
+                    "lesson_id": lesson_id,
+                    "checkpoints": job["checkpoints"],
+                    "completed_at": now_iso,
+                    "updated_at": now_iso
+                }
+                self.session.patch(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs?id=eq.{job_id}",
+                    headers=headers,
+                    json=patch_payload,
+                    timeout=8
+                )
+            except Exception as e:
+                print(f"[Supabase] complete_job patch warning: {e}")
+
+        return job
+
+    def fail_job(self, job_id: str, error_message: str) -> Optional[Dict[str, Any]]:
+        """Transitions job to terminal 'FAILED' state with sanitized error description."""
+        import datetime
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        store = self._read_local_store()
+        job = store.get("jobs", {}).get(job_id) or self.get_job(job_id)
+        if not job:
+            return None
+
+        job["status"] = "FAILED"
+        job["current_stage"] = "FAILED"
+        job["error_message"] = error_message
+        job["stage_message"] = f"Failed: {error_message}"
+        job["updated_at"] = now_iso
+
+        store["jobs"][job_id] = job
+        self._write_local_store(store)
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                patch_payload = {
+                    "status": "FAILED",
+                    "current_stage": "FAILED",
+                    "error_message": error_message,
+                    "stage_message": f"Failed: {error_message}",
+                    "updated_at": now_iso
+                }
+                self.session.patch(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs?id=eq.{job_id}",
+                    headers=headers,
+                    json=patch_payload,
+                    timeout=8
+                )
+            except Exception as e:
+                print(f"[Supabase] fail_job patch warning: {e}")
+
+        return job
+
+    def cancel_job(self, job_id: str) -> bool:
+        """Marks a queued or in-progress job as CANCELLED."""
+        import datetime
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        store = self._read_local_store()
+        job = store.get("jobs", {}).get(job_id) or self.get_job(job_id)
+        if not job:
+            return False
+
+        if job["status"] in ("COMPLETED", "FAILED", "CANCELLED"):
+            return False
+
+        job["status"] = "CANCELLED"
+        job["current_stage"] = "CANCELLED"
+        job["stage_message"] = "Job cancelled by instructor."
+        job["updated_at"] = now_iso
+
+        store["jobs"][job_id] = job
+        self._write_local_store(store)
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                self.session.patch(
+                    f"{self.supabase_url}/rest/v1/ingestion_jobs?id=eq.{job_id}",
+                    headers=headers,
+                    json={"status": "CANCELLED", "current_stage": "CANCELLED", "stage_message": "Job cancelled by instructor.", "updated_at": now_iso},
+                    timeout=8
+                )
+            except Exception as e:
+                print(f"[Supabase] cancel_job warning: {e}")
+
+        return True
+
+    def list_jobs(self, course_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Lists recent ingestion jobs, optionally filtered by course_id."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/ingestion_jobs?select=*&order=created_at.desc&limit={limit}"
+                if course_id:
+                    url += f"&course_id=eq.{course_id}"
+                res = self.session.get(url, headers=headers, timeout=8)
+                if res.ok and isinstance(res.json(), list):
+                    return res.json()
+            except Exception as e:
+                print(f"[Supabase] list_jobs warning: {e}")
+
+        store = self._read_local_store()
+        jobs = list(store.get("jobs", {}).values())
+        if course_id:
+            jobs = [j for j in jobs if j.get("course_id") == course_id]
+        jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return jobs[:limit]
+
 
 

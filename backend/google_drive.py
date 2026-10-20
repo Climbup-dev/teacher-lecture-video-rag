@@ -302,10 +302,10 @@ class GoogleDriveManager:
         if not url_or_id:
             return ""
         clean = url_or_id.strip()
-        match = re.search(r'(?:file/d/|id=)([a-zA-Z0-9_-]{20,})', clean)
+        match = re.search(r'(?:file/d/|id=)([a-zA-Z0-9_-]+)', clean)
         if match:
             return match.group(1)
-        if len(clean) >= 20 and "/" not in clean and "?" not in clean:
+        if "/" not in clean and "?" not in clean:
             return clean
         return clean
 

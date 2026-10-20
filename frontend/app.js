@@ -1623,31 +1623,10 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         s1.classList.add("processing");
-        s1.querySelector(".step-status").textContent = "Running...";
-
-        setTimeout(() => {
-          s1.classList.remove("processing"); s1.classList.add("completed");
-          s1.querySelector(".step-status").textContent = "Done";
-          s2.classList.add("processing");
-          s2.querySelector(".step-status").textContent = "Transcribing...";
-        }, 3000);
-
-        setTimeout(() => {
-          s2.classList.remove("processing"); s2.classList.add("completed");
-          s2.querySelector(".step-status").textContent = "Done";
-          s3.classList.add("processing");
-          s3.querySelector(".step-status").textContent = "Chunking...";
-        }, 7000);
-
-        setTimeout(() => {
-          s3.classList.remove("processing"); s3.classList.add("completed");
-          s3.querySelector(".step-status").textContent = "Done";
-          s4.classList.add("processing");
-          s4.querySelector(".step-status").textContent = "Embedding...";
-        }, 11000);
+        s1.querySelector(".step-status").textContent = "Queuing...";
 
         modalBtnSubmitVideo.disabled = true;
-        modalBtnSubmitVideo.textContent = "Processing Lecture Pipeline...";
+        modalBtnSubmitVideo.textContent = "Dispatched to Background Worker...";
 
         const res = await fetch("/api/process-video", {
           method: "POST",
@@ -1670,17 +1649,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const data = await res.json();
-        s4.classList.remove("processing"); s4.classList.add("completed");
-        s4.querySelector(".step-status").textContent = "Indexed";
+        const jobId = data.job_id;
+        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">⚡ Ingestion job dispatched: <code>${jobId}</code>. Tracking live progress...</span>`;
 
-        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">🎉 Lecture indexed successfully!</span>`;
-
-        setTimeout(async () => {
-          modalUploadVideo.style.display = "none";
-          modalBtnSubmitVideo.disabled = false;
-          modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
-          await openCourseWorkspace(courseId);
-        }, 1200);
+        // Authoritative Background Status Polling
+        await pollJobProgress(jobId, courseId);
 
       } catch (err) {
         modalUploadFeedback.innerHTML = `<span style="color: var(--accent-rose);">Error: ${err.message}</span>`;
@@ -1688,6 +1661,118 @@ document.addEventListener("DOMContentLoaded", () => {
         modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
       }
     });
+
+    async function pollJobProgress(targetJobId, targetCourseId) {
+      const s1 = document.getElementById("modal-step-1");
+      const s2 = document.getElementById("modal-step-2");
+      const s3 = document.getElementById("modal-step-3");
+      const s4 = document.getElementById("modal-step-4");
+
+      let pollInterval = null;
+      let pollAttempts = 0;
+      const maxAttempts = 600; // 20 minutes max polling time (2s interval)
+
+      return new Promise((resolve) => {
+        pollInterval = setInterval(async () => {
+          pollAttempts++;
+          if (pollAttempts > maxAttempts) {
+            clearInterval(pollInterval);
+            modalUploadFeedback.innerHTML = `<span style="color: var(--accent-amber);">Job is still running in background. You can check back shortly or refresh.</span>`;
+            modalBtnSubmitVideo.disabled = false;
+            modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
+            resolve();
+            return;
+          }
+
+          try {
+            const jobRes = await fetch(`/api/jobs/${targetJobId}`);
+            if (!jobRes.ok) return;
+            const job = await jobRes.json();
+            const stage = job.current_stage || job.stage || "QUEUED";
+            const status = job.status || "IN_PROGRESS";
+            const progressPct = job.progress_percent || 0;
+            const stageMsg = job.stage_message || "";
+
+            modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">${stageMsg || `Processing (${progressPct}%)...`}</span>`;
+
+            if (stage === "QUEUED" || stage === "VERIFYING_SOURCE") {
+              s1.classList.add("processing"); s1.classList.remove("completed");
+              s1.querySelector(".step-status").textContent = "Running...";
+              s2.querySelector(".step-status").textContent = "Pending";
+              s3.querySelector(".step-status").textContent = "Pending";
+              s4.querySelector(".step-status").textContent = "Pending";
+            } else if (stage === "AUDIO_EXTRACTION") {
+              s1.classList.remove("processing"); s1.classList.add("completed");
+              s1.querySelector(".step-status").textContent = "Done";
+              s2.classList.add("processing"); s2.classList.remove("completed");
+              s2.querySelector(".step-status").textContent = "Extracting...";
+            } else if (stage === "TRANSCRIPTION") {
+              s1.classList.add("completed");
+              s1.querySelector(".step-status").textContent = "Done";
+              s2.classList.add("processing"); s2.classList.remove("completed");
+              s2.querySelector(".step-status").textContent = "Transcribing...";
+            } else if (stage === "SEMANTIC_PROCESSING") {
+              s1.classList.add("completed"); s1.querySelector(".step-status").textContent = "Done";
+              s2.classList.add("completed"); s2.querySelector(".step-status").textContent = "Done";
+              s3.classList.add("processing"); s3.classList.remove("completed");
+              s3.querySelector(".step-status").textContent = "Chunking...";
+            } else if (stage === "EMBEDDING" || stage === "VECTOR_SYNC") {
+              s1.classList.add("completed"); s1.querySelector(".step-status").textContent = "Done";
+              s2.classList.add("completed"); s2.querySelector(".step-status").textContent = "Done";
+              s3.classList.add("completed"); s3.querySelector(".step-status").textContent = "Done";
+              s4.classList.add("processing"); s4.classList.remove("completed");
+              s4.querySelector(".step-status").textContent = "Embedding...";
+            }
+
+            if (status === "COMPLETED") {
+              clearInterval(pollInterval);
+              s1.classList.add("completed"); s1.querySelector(".step-status").textContent = "Done";
+              s2.classList.add("completed"); s2.querySelector(".step-status").textContent = "Done";
+              s3.classList.add("completed"); s3.querySelector(".step-status").textContent = "Done";
+              s4.classList.remove("processing"); s4.classList.add("completed");
+              s4.querySelector(".step-status").textContent = "Indexed";
+
+              modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">🎉 Lecture indexed successfully!</span>`;
+
+              setTimeout(async () => {
+                modalUploadVideo.style.display = "none";
+                modalBtnSubmitVideo.disabled = false;
+                modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
+                await openCourseWorkspace(targetCourseId);
+                resolve();
+              }, 1200);
+            } else if (status === "FAILED") {
+              clearInterval(pollInterval);
+              const errorMsg = job.error_message || "Video processing failed.";
+              modalUploadFeedback.innerHTML = `
+                <div style="color: var(--accent-rose); margin-bottom: 8px;">Error: ${errorMsg}</div>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-retry-failed-job" style="margin-top: 4px;">🔄 Retry from Checkpoint</button>
+              `;
+              const retryBtn = document.getElementById("btn-retry-failed-job");
+              if (retryBtn) {
+                retryBtn.addEventListener("click", async () => {
+                  retryBtn.disabled = true;
+                  retryBtn.textContent = "Retrying...";
+                  await fetch(`/api/jobs/${targetJobId}/retry`, { method: "POST" });
+                  pollJobProgress(targetJobId, targetCourseId);
+                });
+              }
+              modalBtnSubmitVideo.disabled = false;
+              modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
+              resolve();
+            } else if (status === "CANCELLED") {
+              clearInterval(pollInterval);
+              modalUploadFeedback.innerHTML = `<span style="color: var(--text-muted);">Job was cancelled.</span>`;
+              modalBtnSubmitVideo.disabled = false;
+              modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
+              resolve();
+            }
+          } catch (pollErr) {
+            console.warn("Poll status check error:", pollErr);
+          }
+        }, 2000);
+      });
+    }
   }
 
   // ==========================================

@@ -191,48 +191,82 @@ export function initUploadTab() {
 
       if (step1) {
         step1.classList.add("processing");
-        step1.querySelector(".step-status").textContent = "Running...";
+        step1.querySelector(".step-status").textContent = "Queuing...";
       }
 
-      setTimeout(() => {
-        if (step1) { step1.classList.remove("processing"); step1.classList.add("completed"); step1.querySelector(".step-status").textContent = "Done"; }
-        if (step2) { step2.classList.add("processing"); step2.querySelector(".step-status").textContent = "Transcribing..."; }
-      }, 3000);
-
-      setTimeout(() => {
-        if (step2) { step2.classList.remove("processing"); step2.classList.add("completed"); step2.querySelector(".step-status").textContent = "Done"; }
-        if (step3) { step3.classList.add("processing"); step3.querySelector(".step-status").textContent = "Chunking..."; }
-      }, 7000);
-
-      setTimeout(() => {
-        if (step3) { step3.classList.remove("processing"); step3.classList.add("completed"); step3.querySelector(".step-status").textContent = "Done"; }
-        if (step4) { step4.classList.add("processing"); step4.querySelector(".step-status").textContent = "Embedding..."; }
-      }, 11000);
-
       try {
-        const data = await api.processVideo(formData);
+        const initData = await api.processVideo(formData);
+        const jobId = initData.job_id;
 
-        if (step4) {
-          step4.classList.remove("processing");
-          step4.classList.add("completed");
-          step4.querySelector(".step-status").textContent = "Indexed";
-        }
+        // Poll job status until complete
+        let pollCount = 0;
+        const maxPolls = 600;
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          if (pollCount > maxPolls) {
+            clearInterval(pollInterval);
+            alert("Job is still processing in the background. You can check back shortly.");
+            return;
+          }
 
-        alert(`✓ Lecture "${title}" successfully processed with Deepgram Nova-2 and indexed into Supabase!`);
+          try {
+            const job = await api.getJob(jobId);
+            const stage = job.current_stage || job.stage || "QUEUED";
+            const status = job.status || "IN_PROGRESS";
 
-        selectedUploadFile = null;
-        if (selectedFileName) selectedFileName.textContent = "Supports MP4, WebM, MKV, MP3, WAV (Direct Google Drive offload)";
-        if (lectureTitleInput) lectureTitleInput.value = "";
-        if (mediaUrlInput) mediaUrlInput.value = "";
-        if (stepperProgress) stepperProgress.style.display = "none";
+            if (stage === "AUDIO_EXTRACTION") {
+              if (step1) { step1.classList.remove("processing"); step1.classList.add("completed"); step1.querySelector(".step-status").textContent = "Done"; }
+              if (step2) { step2.classList.add("processing"); step2.querySelector(".step-status").textContent = "Extracting..."; }
+            } else if (stage === "TRANSCRIPTION") {
+              if (step1) { step1.classList.add("completed"); step1.querySelector(".step-status").textContent = "Done"; }
+              if (step2) { step2.classList.add("processing"); step2.querySelector(".step-status").textContent = "Transcribing..."; }
+            } else if (stage === "SEMANTIC_PROCESSING") {
+              if (step1) { step1.classList.add("completed"); step1.querySelector(".step-status").textContent = "Done"; }
+              if (step2) { step2.classList.remove("processing"); step2.classList.add("completed"); step2.querySelector(".step-status").textContent = "Done"; }
+              if (step3) { step3.classList.add("processing"); step3.querySelector(".step-status").textContent = "Chunking..."; }
+            } else if (stage === "EMBEDDING" || stage === "VECTOR_SYNC") {
+              if (step1) { step1.classList.add("completed"); step1.querySelector(".step-status").textContent = "Done"; }
+              if (step2) { step2.classList.add("completed"); step2.querySelector(".step-status").textContent = "Done"; }
+              if (step3) { step3.classList.remove("processing"); step3.classList.add("completed"); step3.querySelector(".step-status").textContent = "Done"; }
+              if (step4) { step4.classList.add("processing"); step4.querySelector(".step-status").textContent = "Embedding..."; }
+            }
 
-        await refreshLessons();
+            if (status === "COMPLETED") {
+              clearInterval(pollInterval);
+              if (step1) { step1.classList.add("completed"); step1.querySelector(".step-status").textContent = "Done"; }
+              if (step2) { step2.classList.add("completed"); step2.querySelector(".step-status").textContent = "Done"; }
+              if (step3) { step3.classList.add("completed"); step3.querySelector(".step-status").textContent = "Done"; }
+              if (step4) {
+                step4.classList.remove("processing");
+                step4.classList.add("completed");
+                step4.querySelector(".step-status").textContent = "Indexed";
+              }
 
-        if (confirm("Would you like to open this lecture immediately in the Interactive Studio?")) {
-          appState.setActiveLesson(data.lesson_id);
-          const studioTab = document.getElementById("tab-nav-studio");
-          if (studioTab) studioTab.click();
-        }
+              alert(`✓ Lecture "${title}" successfully processed with Deepgram Nova-2 and indexed into Supabase!`);
+
+              selectedUploadFile = null;
+              if (selectedFileName) selectedFileName.textContent = "Supports MP4, WebM, MKV, MP3, WAV (Direct Google Drive offload)";
+              if (lectureTitleInput) lectureTitleInput.value = "";
+              if (mediaUrlInput) mediaUrlInput.value = "";
+              if (stepperProgress) stepperProgress.style.display = "none";
+
+              await refreshLessons();
+
+              if (confirm("Would you like to open this lecture immediately in the Interactive Studio?")) {
+                appState.setActiveLesson(job.lesson_id || initData.lesson_id);
+                const studioTab = document.getElementById("tab-nav-studio");
+                if (studioTab) studioTab.click();
+              }
+            } else if (status === "FAILED") {
+              clearInterval(pollInterval);
+              alert("Ingestion error: " + (job.error_message || "Video processing failed."));
+              if (stepperProgress) stepperProgress.style.display = "none";
+            }
+          } catch (e) {
+            console.warn("Upload tab poll error:", e);
+          }
+        }, 2000);
+
       } catch (err) {
         alert("Ingestion error: " + err.message);
         if (stepperProgress) stepperProgress.style.display = "none";

@@ -33,6 +33,7 @@ from backend.vector_embedder import VectorEmbedder
 from backend.db_adapter import DBAdapter
 from backend.rag_engine import RAGEngine
 from backend.google_drive import GoogleDriveManager
+from backend.job_manager import get_job_manager
 
 # Configure structured production logging
 logging.basicConfig(
@@ -78,8 +79,8 @@ cors_origins = Config.CORS_ORIGINS
 if "*" in cors_origins:
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=r"^https?://.*",
-        allow_credentials=True,
+        allow_origins=["*"],
+        allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["Content-Range", "Accept-Ranges", "X-Request-ID", "X-Response-Time"],
@@ -676,14 +677,10 @@ async def process_video(
     media_url: Optional[str] = Form(None)
 ):
     """
-    Stateless RAG Ingestion Pipeline:
-    1. Direct upload of video file to Google Drive (Cloud Run server is NOT used as video storage)
-    2. Temporary audio extraction via FFmpeg
-    3. Immediate deletion of local video file to free container memory/disk
-    4. Deepgram Nova-2 transcription with diarization & word timestamps
-    5. Immediate deletion of local audio file
-    6. Gemini 2.5 Flash concept chunking & reverse-question enrichment
-    7. 768-dim vector embeddings persisted into Supabase (course_lessons & transcript_chunks_vector)
+    Asynchronous RAG Ingestion Endpoint:
+    Accepts video upload or Google Drive media URL, initializes a durable job record,
+    dispatches the multi-stage ingestion to IngestionJobManager, and immediately returns
+    HTTP 202 Accepted (< 250ms latency), completely preventing Cloud Run HTTP 504 timeouts!
     """
     reload_config()
     if not Config.DEEPGRAM_API_KEY:
@@ -691,13 +688,18 @@ async def process_video(
     if not Config.GEMINI_API_KEY:
         raise HTTPException(status_code=400, detail="Gemini API key is not configured.")
 
+    clean_title = title.strip() or "Lecture Video"
+    clean_course_id = course_id.strip() or "course-applied-ai-rag"
     lesson_id = f"lesson_{uuid.uuid4().hex[:8]}"
     saved_media_path = None
-    clean_audio_path = None
-    video_url = ""
     drive_file_id = None
+    video_url = ""
+
+    # Ensure course exists
+    db.ensure_course_exists(clean_course_id, title=course_name or clean_title)
 
     try:
+        # Case 1: Video File Upload
         if file and file.filename:
             file_ext = Path(file.filename).suffix.lower() or ".mp4"
             allowed_exts = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".mp3", ".wav", ".m4a"}
@@ -709,8 +711,8 @@ async def process_video(
 
             temp_name = f"temp_{lesson_id}{file_ext}"
             saved_media_path = Config.UPLOADS_DIR / temp_name
-            
-            # Enforce max video file upload size
+
+            # Enforce max upload size
             max_bytes = Config.MAX_UPLOAD_SIZE_MB * 1024 * 1024
             total_read = 0
             with open(saved_media_path, "wb") as buffer:
@@ -726,254 +728,128 @@ async def process_video(
                         )
                     buffer.write(chunk)
 
-            # 1. Direct Upload to Google Drive (Offload heavy video storage from Cloud Run!)
+            # Offload to Google Drive if configured
             gdm = GoogleDriveManager()
             safe_fname = file.filename.encode("ascii", "ignore").decode("ascii") or "lecture_video.mp4"
             if gdm.is_configured():
-                try:
-                    print(f"[Upload] Uploading {safe_fname} directly to Google Drive...")
-                except Exception:
-                    pass
                 mime = file.content_type or "video/mp4"
                 drive_res = gdm.upload_file(saved_media_path, filename=safe_fname, mime_type=mime)
                 if drive_res:
                     drive_file_id = drive_res.get("id")
                     video_url = drive_res.get("stream_url") or drive_res.get("webViewLink")
-                    print(f"[Upload] Successfully uploaded to Google Drive. ID: {drive_file_id}")
-            
-            if not video_url:
-                # Fallback if Drive is unconfigured or failed: serve locally
+                    if saved_media_path.exists():
+                        try:
+                            saved_media_path.unlink()
+                            saved_media_path = None
+                        except Exception:
+                            pass
+
+            if not video_url and saved_media_path:
                 permanent_media_path = Config.UPLOADS_DIR / f"{lesson_id}{file_ext}"
                 shutil.copy(saved_media_path, permanent_media_path)
                 video_url = f"/uploads/{permanent_media_path.name}"
 
-            # 2. Extract 16kHz audio for RAG
-            clean_audio_path = extract_and_clean_audio(str(saved_media_path))
-            
-            # 3. Clean up the temporary local video file if uploaded to Drive
-            if drive_file_id and saved_media_path.exists():
-                try:
-                    saved_media_path.unlink()
-                except Exception:
-                    pass
-
-            # 4. Transcribe audio with Deepgram Nova-2
-            transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
-            transcription_result = transcriber.transcribe_file(clean_audio_path)
-
-            # 5. Clean up temporary audio file immediately
-            if clean_audio_path and Path(clean_audio_path).exists():
-                try:
-                    Path(clean_audio_path).unlink()
-                except Exception:
-                    pass
-
         elif media_url:
             clean_url = media_url.strip()
             gdm = GoogleDriveManager()
-            drive_fid = gdm.extract_file_id(clean_url)
-
-            # Check if input is a Google Drive URL or File ID
-            if drive_fid and ("drive.google.com" in clean_url or len(clean_url) < 60):
-                print(f"[Ingest] Google Drive link detected. File ID: {drive_fid}")
-                if gdm.is_configured():
-                    gdm.make_file_public_readable(drive_fid)
-
-                video_url = f"https://drive.google.com/file/d/{drive_fid}/preview"
-                stream_url = f"https://drive.google.com/uc?export=download&id={drive_fid}"
-                
-                transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
-                try:
-                    # Strategy 1: Direct Deepgram URL Stream (0 bytes downloaded on our server!)
-                    print("[Ingest] Sending direct stream link to Deepgram Nova-2...")
-                    transcription_result = transcriber.transcribe_url(stream_url)
-                    print("[Ingest] Deepgram successfully transcribed directly from Google Drive stream!")
-                except Exception as stream_err:
-                    print(f"[Ingest] Direct URL stream notice: {stream_err}. Falling back to lightweight audio extraction...")
-                    temp_media = Config.UPLOADS_DIR / f"temp_stream_{lesson_id}.tmp"
-                    gdm.download_file(drive_fid, temp_media)
-                    clean_audio = extract_and_clean_audio(str(temp_media))
-                    if temp_media.exists():
-                        try:
-                            temp_media.unlink()
-                        except Exception:
-                            pass
-                    transcription_result = transcriber.transcribe_file(clean_audio)
-                    if clean_audio and Path(clean_audio).exists():
-                        try:
-                            Path(clean_audio).unlink()
-                        except Exception:
-                            pass
-            else:
-                transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
-                transcription_result = transcriber.transcribe_url(clean_url)
-                video_url = clean_url
+            drive_file_id = gdm.extract_file_id(clean_url)
+            video_url = clean_url
         else:
-            raise HTTPException(status_code=400, detail="Please upload a video file or provide a URL.")
+            raise HTTPException(status_code=400, detail="Please upload a video file or provide a video/Drive URL.")
 
-        raw_transcript = transcription_result["full_transcript"]
-        utterances = transcription_result["utterances"]
-        duration_seconds = int(transcription_result.get("duration_seconds", 0))
-        print(f"[Pipeline] Audio transcribed. Utterances: {len(utterances)}, Duration: {duration_seconds}s")
-
-        if not raw_transcript.strip() or not utterances:
-            raise HTTPException(
-                status_code=400,
-                detail="Deepgram detected no spoken dialogue in this video. Please upload a lecture recording with clear spoken speech/audio so AI can transcribe and index chunks for RAG doubt answering."
-            )
-
-        # 6. Semantic Chunking & Enrichment
-        print(f"[Pipeline] Starting concept chunking with Gemini...")
-        chunker = SemanticChunker(Config.GEMINI_API_KEY)
-        enriched_chunks = chunker.chunk_and_enrich(
-            utterances=utterances,
-            course_title=course_name,
-            subject_name=title
-        )
-        print(f"[Pipeline] Chunking done! Total concept chunks: {len(enriched_chunks)}")
-
-        # 7. 768-dim Vector Embeddings (Batch mode: 50 chunks/request for ultra-fast indexing)
-        print(f"[Pipeline] Generating 768-dim embeddings in batch mode...")
-        embedder = VectorEmbedder(Config.GEMINI_API_KEY)
-        search_texts = [embedder.get_chunk_search_text(chunk) for chunk in enriched_chunks]
-        embeddings = embedder.batch_get_embeddings(search_texts, dimension=768)
-        for idx, emb in enumerate(embeddings):
-            if idx < len(enriched_chunks):
-                enriched_chunks[idx]["embedding"] = emb
-        print(f"[Pipeline] Embeddings completed! Total vectors: {len(embeddings)}")
-
-        # 8. Persist to Supabase and Local Store
-        print(f"[Pipeline] Saving to Supabase & local store...")
-        db.save_lesson(
+        # Dispatch to IngestionJobManager
+        job_mgr = get_job_manager()
+        job = job_mgr.submit_job(
+            course_id=clean_course_id,
+            title=clean_title,
+            media_url=video_url,
+            file_id=drive_file_id,
             lesson_id=lesson_id,
-            course_id=course_id,
-            title=title,
-            duration_seconds=duration_seconds,
-            video_url=video_url,
-            raw_transcript=raw_transcript,
-            utterances=utterances
+            local_filepath=str(saved_media_path) if saved_media_path else None
         )
-        db.save_chunks(lesson_id=lesson_id, course_id=course_id, chunks=enriched_chunks)
-        print(f"[Pipeline] All done successfully! Lesson {lesson_id} is ready.")
 
-        return {
-            "status": "success",
-            "lesson_id": lesson_id,
-            "title": title,
-            "duration_seconds": duration_seconds,
-            "video_url": video_url,
-            "storage_location": "Google Drive" if drive_file_id else "Server",
-            "total_utterances": len(utterances),
-            "total_chunks_indexed": len(enriched_chunks),
-            "preview_chunks": [
-                {
-                    "topic": c["topic_name"],
-                    "timestamp": c["timestamp_label"],
-                    "speaker": c["speaker_label"],
-                    "sample_text": c["cleaned_text"][:150]
-                }
-                for c in enriched_chunks[:5]
-            ]
-        }
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "QUEUED",
+                "job_id": job["id"],
+                "lesson_id": job.get("lesson_id"),
+                "title": clean_title,
+                "stage": job.get("current_stage", "QUEUED"),
+                "progress_percent": job.get("progress_percent", 0),
+                "stage_message": job.get("stage_message", "Ingestion job queued."),
+                "checkpoints": job.get("checkpoints", {})
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Processing failed: %s", e)
-        raise HTTPException(status_code=500, detail="Processing failed. Please check audio quality and try again.")
+        logger.exception("Failed to dispatch video ingestion: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to queue video ingestion: {str(e)}")
 
 @app.post("/api/drive/ingest")
 async def ingest_from_drive(req: DriveIngestRequest):
-    """
-    Directly processes a video file residing in Google Drive:
-    Streams the media into memory/temp, extracts audio, transcribes, chunks,
-    embeds into Supabase, and cleans disk.
-    """
+    """Asynchronous ingestion for direct Google Drive vault files."""
     reload_config()
     gdm = GoogleDriveManager()
     if not gdm.is_configured():
         raise HTTPException(status_code=400, detail="Google Drive is not configured.")
 
-    lesson_id = f"lesson_drive_{uuid.uuid4().hex[:8]}"
-    temp_video = Config.UPLOADS_DIR / f"drive_{req.file_id}.tmp"
+    meta = gdm.get_file_metadata(req.file_id)
+    title = req.title or (meta.get("name") if meta else "Drive Lecture")
+    course_id = req.course_id or "course-applied-ai-rag"
 
-    try:
-        # 1. Stream file from Google Drive
-        meta = gdm.get_file_metadata(req.file_id)
-        file_name = meta.get("name") if meta else req.title
-        success = gdm.download_file(req.file_id, temp_video)
-        if not success:
-            raise HTTPException(status_code=404, detail="Could not retrieve file from Google Drive.")
+    db.ensure_course_exists(course_id, title=req.course_name or title)
 
-        # 2. Extract 16kHz audio
-        clean_audio_path = extract_and_clean_audio(str(temp_video))
+    job_mgr = get_job_manager()
+    job = job_mgr.submit_job(
+        course_id=course_id,
+        title=title,
+        file_id=req.file_id
+    )
 
-        # 3. Immediately delete temp video from server
-        if temp_video.exists():
-            try:
-                temp_video.unlink()
-            except Exception:
-                pass
-
-        # 4. Transcribe with Deepgram
-        transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
-        transcription_result = transcriber.transcribe_file(clean_audio_path)
-
-        # 5. Delete temp audio
-        if clean_audio_path and Path(clean_audio_path).exists():
-            try:
-                Path(clean_audio_path).unlink()
-            except Exception:
-                pass
-
-        raw_transcript = transcription_result["full_transcript"]
-        utterances = transcription_result["utterances"]
-        duration_seconds = int(transcription_result.get("duration_seconds", 0))
-
-        # 6. Semantic Chunking
-        chunker = SemanticChunker(Config.GEMINI_API_KEY)
-        enriched_chunks = chunker.chunk_and_enrich(
-            utterances=utterances,
-            course_title=req.course_name or "Applied AI",
-            subject_name=req.title
-        )
-
-        # 7. Vector Embeddings (Batch mode: 50 chunks/request)
-        embedder = VectorEmbedder(Config.GEMINI_API_KEY)
-        search_texts = [embedder.get_chunk_search_text(chunk) for chunk in enriched_chunks]
-        embeddings = embedder.batch_get_embeddings(search_texts, dimension=768)
-        for idx, emb in enumerate(embeddings):
-            if idx < len(enriched_chunks):
-                enriched_chunks[idx]["embedding"] = emb
-
-        # Google Drive stream preview URL
-        drive_stream_url = f"https://drive.google.com/file/d/{req.file_id}/preview"
-
-        # 8. Save to Supabase
-        db.save_lesson(
-            lesson_id=lesson_id,
-            course_id=req.course_id or "course-applied-ai-rag",
-            title=req.title or file_name,
-            duration_seconds=duration_seconds,
-            video_url=drive_stream_url,
-            raw_transcript=raw_transcript,
-            utterances=utterances
-        )
-        db.save_chunks(lesson_id=lesson_id, course_id=req.course_id or "course-applied-ai-rag", chunks=enriched_chunks)
-
-        return {
-            "status": "success",
-            "lesson_id": lesson_id,
-            "title": req.title or file_name,
-            "duration_seconds": duration_seconds,
-            "video_url": drive_stream_url,
-            "storage": "Google Drive Folder",
-            "total_chunks_indexed": len(enriched_chunks)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "QUEUED",
+            "job_id": job["id"],
+            "lesson_id": job.get("lesson_id"),
+            "title": title,
+            "stage": job.get("current_stage", "QUEUED"),
+            "progress_percent": job.get("progress_percent", 0),
+            "stage_message": job.get("stage_message", "Ingestion job queued.")
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Google Drive ingestion failed: %s", e)
-        raise HTTPException(status_code=500, detail="Google Drive ingestion failed. Please verify the file permissions.")
+    )
+
+@app.get("/api/jobs/{job_id}")
+def get_job_status(job_id: str):
+    """Retrieves authoritative live status of an asynchronous lecture ingestion job."""
+    job = db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job
+
+@app.get("/api/jobs")
+def list_jobs(course_id: Optional[str] = None, limit: int = 20):
+    """Lists recent ingestion jobs, optionally filtered by course."""
+    return db.list_jobs(course_id=course_id, limit=limit)
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str):
+    """Retries a failed or interrupted ingestion job from its latest checkpoint."""
+    job = get_job_manager().retry_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Cancels an in-progress or queued ingestion job."""
+    success = get_job_manager().cancel_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Job '{job_id}' could not be cancelled or is already finished.")
+    return {"status": "success", "message": f"Job {job_id} cancelled."}
+
 
 @app.post("/api/chat")
 def chat_query(req: ChatRequest):

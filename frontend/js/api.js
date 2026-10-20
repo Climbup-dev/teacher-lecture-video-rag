@@ -79,6 +79,21 @@ export const api = {
     return parseResponse(res, "Video ingestion failed");
   },
 
+  async getJob(jobId) {
+    const res = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+    return parseResponse(res, "Failed to fetch job status");
+  },
+
+  async retryJob(jobId) {
+    const res = await fetch(`${API_BASE}/api/jobs/${jobId}/retry`, { method: "POST" });
+    return parseResponse(res, "Failed to retry job");
+  },
+
+  async cancelJob(jobId) {
+    const res = await fetch(`${API_BASE}/api/jobs/${jobId}/cancel`, { method: "POST" });
+    return parseResponse(res, "Failed to cancel job");
+  },
+
   // Notes & Assignments
   async getCourseResources(courseId) {
     const res = await fetch(`${API_BASE}/api/courses/${courseId}/resources`);
