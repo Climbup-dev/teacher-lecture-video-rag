@@ -265,7 +265,7 @@ class GoogleDriveManager:
 
     def get_file_metadata(self, file_id: str) -> Optional[Dict[str, Any]]:
         clean_id = self.extract_file_id(file_id)
-        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        oauth_token = self.get_access_token()
         if oauth_token:
             try:
                 import requests
@@ -274,6 +274,14 @@ class GoogleDriveManager:
                     headers={"Authorization": f"Bearer {oauth_token}"},
                     timeout=10
                 )
+                if r.status_code == 401:
+                    new_tok = self.refresh_access_token()
+                    if new_tok:
+                        r = requests.get(
+                            f"https://www.googleapis.com/drive/v3/files/{clean_id}?fields=id,name,mimeType,size,webViewLink&supportsAllDrives=true",
+                            headers={"Authorization": f"Bearer {new_tok}"},
+                            timeout=10
+                        )
                 if r.ok:
                     return r.json()
             except Exception as e:
@@ -348,7 +356,7 @@ class GoogleDriveManager:
         mime_type = meta.get("mimeType") or "video/mp4"
 
         # Resolve auth token (OAuth Admin token or Service Account)
-        token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        token = self.get_access_token()
         if not token and self.service:
             try:
                 import google.auth.transport.requests
@@ -383,11 +391,17 @@ class GoogleDriveManager:
 
         drive_url = f"https://www.googleapis.com/drive/v3/files/{clean_id}?alt=media"
         req_headers = {
-            "Authorization": f"Bearer {creds.token}",
+            "Authorization": f"Bearer {token}",
             "Range": f"bytes={start}-{end}"
         }
 
         upstream = requests.get(drive_url, headers=req_headers, stream=True, timeout=20)
+        if upstream.status_code == 401:
+            fresh_token = self.refresh_access_token()
+            if fresh_token:
+                req_headers["Authorization"] = f"Bearer {fresh_token}"
+                upstream = requests.get(drive_url, headers=req_headers, stream=True, timeout=20)
+
         if not upstream.ok and upstream.status_code != 206:
             raise RuntimeError(f"Google Drive upstream error {upstream.status_code}")
 
