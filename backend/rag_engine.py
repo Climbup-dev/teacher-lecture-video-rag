@@ -87,6 +87,33 @@ class RAGEngine:
                 "video_timestamps": []
             }
 
+        raw_duration = lesson.get("duration_seconds", 0) if lesson else 0
+        if not raw_duration and all_chunks:
+            raw_duration = int(all_chunks[-1].get("end_seconds", 0))
+
+        duration_mins = raw_duration // 60 if raw_duration else (len(all_chunks) * 2)
+        total_chunks = len(all_chunks)
+
+        # -------------------------------------------------------------
+        # DURATION-ADAPTIVE RETRIEVAL STRATEGY:
+        # Tier 1 (<= 15 min, e.g. 10m): 100% Full-Video Context (zero blind spots)
+        # Tier 2 (15 - 60 min, e.g. 1h): Focused 6-Chunk Semantic Window
+        # Tier 3 (1 - 2.5 hr, e.g. 2h): Deep 8-Chunk Hybrid Expansion
+        # Tier 4 (2.5 - 5+ hr, e.g. 4h): Comprehensive 10-Chunk Hybrid + Chapter Roadmap
+        # -------------------------------------------------------------
+        if duration_mins <= 15 or total_chunks <= 8:
+            duration_tier = "MICRO_LESSON"  # 10 min
+            top_k_target = total_chunks     # Full 100% transcript passed to Gemini
+        elif duration_mins <= 60 or total_chunks <= 35:
+            duration_tier = "STANDARD_LECTURE"  # 1 hour
+            top_k_target = min(6, total_chunks)
+        elif duration_mins <= 150 or total_chunks <= 75:
+            duration_tier = "EXTENDED_LECTURE"  # 2 hours
+            top_k_target = min(8, total_chunks)
+        else:
+            duration_tier = "MARATHON_MASTERCLASS"  # 4+ hours
+            top_k_target = min(10, total_chunks)
+
         # Check for temporal intent (e.g. "24 min pr kya hua tha")
         target_seconds = self._extract_temporal_seconds(query)
         is_overview = self._is_overview_query(query)
@@ -97,7 +124,6 @@ class RAGEngine:
         if target_seconds is not None:
             # --- 1. TEMPORAL RETRIEVAL ---
             query_mode = "temporal"
-            # Find the chunk containing target_seconds, or closest chunk
             best_idx = 0
             min_dist = float("inf")
             for idx, c in enumerate(all_chunks):
@@ -112,9 +138,11 @@ class RAGEngine:
                     min_dist = dist
                     best_idx = idx
 
-            # Window: Take 1-2 chunks before and 1-2 chunks after for full contiguous explanation
-            start_i = max(0, best_idx - 1)
-            end_i = min(len(all_chunks), best_idx + 3)
+            # Dynamic Temporal Window:
+            # Short video: 1 chunk before/after; 4-hour video: 2 chunks before/after for broad conversational context
+            pad = 2 if duration_tier in ("EXTENDED_LECTURE", "MARATHON_MASTERCLASS") else 1
+            start_i = max(0, best_idx - pad)
+            end_i = min(len(all_chunks), best_idx + pad + 2)
             retrieved_chunks = all_chunks[start_i:end_i]
             for c in retrieved_chunks:
                 c["similarity_score"] = 0.99
@@ -122,14 +150,23 @@ class RAGEngine:
         elif is_overview:
             # --- 2. GLOBAL OVERVIEW / ROADMAP RETRIEVAL ---
             query_mode = "overview"
-            # Sample representative chunks across the full 4-hour timeline
-            step = max(1, len(all_chunks) // 8)
-            retrieved_chunks = all_chunks[::step][:8]
+            if duration_tier == "MICRO_LESSON":
+                retrieved_chunks = list(all_chunks)
+            else:
+                step = max(1, len(all_chunks) // 10)
+                retrieved_chunks = all_chunks[::step][:10]
             for c in retrieved_chunks:
                 c["similarity_score"] = 0.95
 
+        elif duration_tier == "MICRO_LESSON":
+            # --- 3A. 10-MINUTE VIDEO: FULL CONTEXT (Zero Blind Spots) ---
+            query_mode = "full_video"
+            retrieved_chunks = list(all_chunks)
+            for c in retrieved_chunks:
+                c["similarity_score"] = 1.0
+
         else:
-            # --- 3. HYBRID SEMANTIC + CONCEPT RETRIEVAL (8 chunks for 4-hr videos) ---
+            # --- 3B. 1-HR, 2-HR & 4-HR VIDEOS: HYBRID SEMANTIC + CONCEPT RERANKING ---
             query_emb = self.embedder.get_embedding(query)
             q_tokens = set(re.findall(r'\w+', query.lower()))
 
@@ -138,7 +175,6 @@ class RAGEngine:
                 emb = c.get("embedding", [])
                 cos_sim = self.embedder.cosine_similarity(query_emb, emb) if emb else 0.0
 
-                # Keyword match bonus for key_concepts, topic_name, and hypothetical_questions
                 concept_text = " ".join([
                     c.get("topic_name", ""),
                     " ".join(c.get("key_concepts", []) or []),
@@ -156,7 +192,7 @@ class RAGEngine:
                 })
 
             scored_chunks.sort(key=lambda x: x["similarity_score"], reverse=True)
-            retrieved_chunks = scored_chunks[:7]
+            retrieved_chunks = scored_chunks[:top_k_target]
 
         # 3. Assemble Grounded Context
         context_blocks = []
@@ -218,6 +254,7 @@ Use the course chapter outline below to provide a structured, chronological road
 
         # 4. Prompt Gemini for Elite Pedagogical Teaching
         system_instructions = f"""You are the Brilliant, Highly Empathetic AI Professor & Mentor for the university course lecture: "{lesson_title}".
+Course Video Profile: ~{duration_mins} Minutes ({duration_tier.replace('_', ' ').title()} - {total_chunks} Total Segments)
 A student has asked a doubt. Your mission is to provide an ACCURATE, HIGHLY ENGAGING, PEDAGOGICALLY SOUND, and PRACTICAL explanation strictly grounded in the provided lecture video.
 
 {mode_instruction}
@@ -225,7 +262,7 @@ A student has asked a doubt. Your mission is to provide an ACCURATE, HIGHLY ENGA
 RECENT CONVERSATION CONTEXT:
 {history_summary}
 
-LECTURE TRANSCRIPT EVIDENCE (From 4-Hour Video):
+LECTURE TRANSCRIPT EVIDENCE (From {duration_mins}-Minute Video):
 {context_str}
 
 STUDENT QUESTION:
