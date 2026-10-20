@@ -859,6 +859,13 @@ def chat_query(req: ChatRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
 
+@app.post("/api/chat/clear")
+def clear_chat_history(req: Dict[str, Any]):
+    session_id = req.get("session_id")
+    if session_id:
+        db.clear_chat_session(session_id)
+    return {"status": "success", "message": f"Chat session {session_id} cleared"}
+
 @app.post("/api/load-sample")
 def load_sample_lecture():
     """

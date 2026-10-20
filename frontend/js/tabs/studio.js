@@ -166,23 +166,29 @@ export function initStudioTab() {
       if (uttCount) uttCount.textContent = currentUtterances.length;
       if (chunkCount) chunkCount.textContent = currentChunks.length;
 
-      // Video Source handling
+      // Video Source handling: High-performance streaming via backend stream endpoint
       const vUrl = lesson.video_url || "";
-      if (vUrl.includes("drive.google.com/file/d/")) {
-        const match = vUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-        const fileId = match ? match[1] : null;
-        if (fileId && driveIframeEl) {
-          driveIframeEl.dataset.fileId = fileId;
-          driveIframeEl.src = `https://drive.google.com/file/d/${fileId}/preview`;
-          driveIframeEl.style.display = "block";
-          if (videoEl) videoEl.style.display = "none";
-          if (videoOverlay) videoOverlay.style.display = "none";
-        }
-      } else if (videoEl) {
-        if (driveIframeEl) driveIframeEl.style.display = "none";
+      const streamEndpoint = `/api/lessons/${lesson.id}/stream`;
+
+      if (driveIframeEl) driveIframeEl.style.display = "none";
+      if (videoEl) {
         videoEl.style.display = "block";
         if (videoOverlay) videoOverlay.style.display = "flex";
-        videoEl.src = vUrl || "/uploads/berkeley_cs61c.mp4";
+
+        videoEl.onerror = () => {
+          console.warn("[Stream Notice] Native stream error, attempting preview fallback...");
+          const match = vUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          const fileId = match ? match[1] : null;
+          if (fileId && driveIframeEl) {
+            videoEl.style.display = "none";
+            if (videoOverlay) videoOverlay.style.display = "none";
+            driveIframeEl.dataset.fileId = fileId;
+            driveIframeEl.src = `https://drive.google.com/file/d/${fileId}/preview`;
+            driveIframeEl.style.display = "block";
+          }
+        };
+
+        videoEl.src = streamEndpoint;
         videoEl.load();
       }
 

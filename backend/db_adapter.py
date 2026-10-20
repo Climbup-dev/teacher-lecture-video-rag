@@ -465,6 +465,27 @@ class DBAdapter:
         except Exception as e:
             print(f"[Warning] Could not record chat message: {e}")
 
+    def get_chat_history(self, session_id: str, limit: int = 4) -> List[Dict[str, Any]]:
+        """Returns recent chat messages for a session to provide grounded context."""
+        try:
+            store = self._read_local_store()
+            all_msgs = [m for m in store.get("chat_messages", []) if m.get("session_id") == session_id]
+            return all_msgs[-limit:] if limit > 0 else all_msgs
+        except Exception:
+            return []
+
+    def clear_chat_session(self, session_id: str) -> bool:
+        """Clears chat history for a session when user closes or resets AI tutorial."""
+        try:
+            store = self._read_local_store()
+            if "chat_messages" in store:
+                store["chat_messages"] = [m for m in store["chat_messages"] if m.get("session_id") != session_id]
+                self._write_local_store(store)
+                return True
+        except Exception as e:
+            print(f"[Warning] Could not clear chat session: {e}")
+        return False
+
     def upload_course_resource(
         self,
         course_id: str,

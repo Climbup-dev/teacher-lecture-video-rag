@@ -150,13 +150,15 @@ export function initChatTab() {
     return id;
   }
 
+  let currentChatSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
   async function submitChatQuery(query) {
     appendUserMessage(query);
     const thinkingId = appendThinkingBubble();
     const lessonId = appState.get("currentLessonId") || "masterclass_os_3hours";
 
     try {
-      const data = await api.sendChat(query, lessonId);
+      const data = await api.sendChat(query, lessonId, currentChatSessionId);
       const thinkingEl = document.getElementById(thinkingId);
       if (thinkingEl) thinkingEl.remove();
       appendAiMessage(data.answer, data.retrieved_evidence || []);
@@ -179,16 +181,21 @@ export function initChatTab() {
 
   if (btnClearChat && chatMessages) {
     btnClearChat.addEventListener("click", () => {
+      const oldSession = currentChatSessionId;
+      currentChatSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       chatMessages.innerHTML = `
         <div class="message-wrapper ai">
           <div class="msg-avatar">AI</div>
           <div class="msg-content">
             <div class="msg-bubble">
-              Chat cleared. Ask any doubt to test ClimbUp Mentor grounded retrieval and clickable timestamp jump badges <code>[MM:SS]</code>.
+              👋 <strong>Chat session reset.</strong> Ask any lecture doubt to test grounded retrieval and clickable video timestamp badges <code>[MM:SS]</code>.
             </div>
           </div>
         </div>
       `;
+      if (oldSession) {
+        api.clearChat(oldSession);
+      }
     });
   }
 

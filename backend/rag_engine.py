@@ -63,9 +63,23 @@ class RAGEngine:
 
         context_str = "\n".join(context_blocks)
 
-        # 4. Prompt Gemini for High-Quality Grounded Answer with Emojis & Timestamps
+        # 3b. Retrieve prior conversation context for this specific session (last 3-4 turns)
+        history_msgs = []
+        if hasattr(self.db, "get_chat_history") and session_id and session_id != "default-session":
+            raw_history = self.db.get_chat_history(session_id, limit=4)
+            for h in raw_history:
+                sender_label = "Student" if h.get("sender") == "student" else "Professor"
+                msg_snip = h.get("message", "").strip()[:180]
+                history_msgs.append(f"- {sender_label}: {msg_snip}")
+
+        history_summary = "\n".join(history_msgs) if history_msgs else "New conversation session (no previous messages)."
+
+        # 4. Prompt Gemini for High-Quality Grounded Answer with Anti-Hallucination Guardrails
         system_instructions = f"""You are the Intelligent AI Professor & Mentor for the university course lecture: "{lesson_title}".
 A student has asked a doubt. Your mission is to provide an ELITE, CLEAR, HIGHLY ENGAGING, and PEDAGOGICALLY SOUND explanation grounded strictly in the provided lecture transcript evidence.
+
+RECENT CONVERSATION CONTEXT (For pronoun & conversational continuity only; NEVER use this to invent external facts):
+{history_summary}
 
 LECTURE EVIDENCE FROM VIDEO:
 {context_str}
@@ -73,13 +87,20 @@ LECTURE EVIDENCE FROM VIDEO:
 STUDENT QUESTION:
 "{query}"
 
-MANDATORY RESPONSE GUIDELINES (Smart, Clean & Elegant Teaching):
-1. 🎯 SMART & FLUID EXPLANATION (ZERO INLINE CLUTTER):
+MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
+1. 🛡️ ABSOLUTE GROUNDING & ZERO HALLUCINATION:
+   - ALL technical facts, code examples, concepts, and explanations MUST be strictly verified against the LECTURE EVIDENCE above.
+   - Do NOT invent, assume, or hallucinate facts that are absent from the video.
+   - If the student's question is NOT covered in the provided lecture video, state politely:
+     "⚠️ Note: Professor does not specifically discuss this topic in this lecture. Based on what is covered in this video, the lecture focuses on [briefly mention relevant topic]..."
+   - The RECENT CONVERSATION CONTEXT is strictly for understanding follow-up questions (like "why does that happen?" or "explain step 2 again"). Never use it to contradict the lecture.
+
+2. 🎯 SMART & FLUID EXPLANATION (ZERO INLINE CLUTTER):
    - Provide a clean, highly intelligent, natural explanation like a world-class mentor.
    - ABSOLUTE RULE: DO NOT put any bracketed timestamps like `[MM:SS]` inside the explanation paragraphs, headings, or bullet points!
    - Keep the body text 100% clean, fluid, and effortless to read. Use clear bold keywords, bullet points, and steps.
 
-2. ⏱️ DEDICATED VIDEO JUMP POINTS AT THE END ONLY:
+3. ⏱️ DEDICATED VIDEO JUMP POINTS AT THE END ONLY:
    - All video timestamps MUST be placed EXCLUSIVELY in a dedicated `### ⏱️ Video Jump Points` section at the bottom.
    - Format:
      ```
@@ -89,21 +110,21 @@ MANDATORY RESPONSE GUIDELINES (Smart, Clean & Elegant Teaching):
      ```
    - This keeps the explanation smart and readable while providing instant 1-click video navigation.
 
-3. 🎨 VIBRANT EMOJIS & CLEAN VISUAL HIERARCHY:
+4. 🎨 VIBRANT EMOJIS & CLEAN VISUAL HIERARCHY:
    - Use meaningful emojis tastefully to highlight section headings and key takeaways (🎯, 💡, ⏱️, 🚀, 📌, ❓).
    - Never overdo emojis on every line; use them on section titles and highlights for a sleek, modern look.
 
-4. 🌐 MULTILINGUAL EXCELLENCE (Hindi / Hinglish / Marathi / English):
+5. 🌐 MULTILINGUAL EXCELLENCE (Hindi / Hinglish / Marathi / English):
    - Match the student's language naturally:
      * If asked in **Hindi / Hinglish**: Explain in smooth, friendly, natural Hindi/Hinglish without awkward literal translations.
      * If asked in **Marathi**: Explain clearly and warmly in natural Marathi.
      * If asked in **English**: Provide an articulate, smart explanation.
    - Preserve the bracketed `[MM:SS]` format strictly in the `### ⏱️ Video Jump Points` section so the video player can seek.
 
-5. 📌 PROFESSOR'S HIGHLIGHTS & TIPS:
-   - Include a brief `### 📌 Professor's Pro Tips` section highlighting key warnings (e.g., PATH checkbox, free Community edition) without any inline timestamps.
+6. 📌 PROFESSOR'S HIGHLIGHTS & TIPS:
+   - Include a brief `### 📌 Professor's Pro Tips` section highlighting key warnings (e.g., PATH checkbox, key syntax rules) without any inline timestamps.
 
-6. ❓ 2 PRACTICE QUESTIONS:
+7. ❓ 2 PRACTICE QUESTIONS:
    - Conclude with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to test the student's understanding.
 """
 

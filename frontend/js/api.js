@@ -99,13 +99,24 @@ export const api = {
   },
 
   // RAG Chat
-  async sendChat(query, lessonId) {
+  async sendChat(query, lessonId, sessionId = null) {
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, lesson_id: lessonId })
+      body: JSON.stringify({ query, lesson_id: lessonId, session_id: sessionId })
     });
     return parseResponse(res, "Chat request failed");
+  },
+
+  async clearChat(sessionId) {
+    if (!sessionId) return;
+    try {
+      await fetch(`${API_BASE}/api/chat/clear`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+    } catch {}
   },
 
   // Google Drive

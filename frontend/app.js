@@ -276,6 +276,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnBackToCourseFromStudio) {
     btnBackToCourseFromStudio.addEventListener("click", () => {
+      resetChatSession();
       if (currentCourseId) {
         openCourseWorkspace(currentCourseId);
       } else {
@@ -1991,27 +1992,37 @@ document.addEventListener("DOMContentLoaded", () => {
       if (uttCount) uttCount.textContent = currentUtterances.length;
       if (chunkCount) chunkCount.textContent = currentChunks.length;
 
-      // Video Source handling
+      // Video Source handling: High-performance direct streaming via Backend & Google Drive API
+      // Bypasses slow Google Drive web preview transcoding queue and supports native 206 byte ranges
       const vUrl = lesson.video_url || "";
-      if (vUrl.includes("drive.google.com/file/d/")) {
-        const match = vUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-        const fileId = match ? match[1] : null;
-        if (fileId) {
-          driveIframe.dataset.fileId = fileId;
-          driveIframe.src = `https://drive.google.com/file/d/${fileId}/preview`;
-          driveIframe.style.display = "block";
-          video.style.display = "none";
-          if (videoOverlay) videoOverlay.style.display = "none";
-        }
-      } else {
-        if (driveIframe) driveIframe.style.display = "none";
-        if (video) {
-          video.style.display = "block";
-          if (videoOverlay) videoOverlay.style.display = "flex";
-          video.src = vUrl || "/uploads/berkeley_cs61c.mp4";
-          video.load();
-        }
+      const streamEndpoint = `${API_BASE}/api/lessons/${lesson.id}/stream`;
+
+      if (driveIframe) driveIframe.style.display = "none";
+      if (video) {
+        video.style.display = "block";
+        if (videoOverlay) videoOverlay.style.display = "flex";
+
+        // Fallback: If native player hits format or CORS issues, gracefully fall back to Drive preview
+        video.onerror = () => {
+          console.warn("[Stream Notice] Native stream error event. Attempting Google Drive preview fallback...");
+          const match = vUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          const fileId = match ? match[1] : null;
+          if (fileId && driveIframe) {
+            video.style.display = "none";
+            if (videoOverlay) videoOverlay.style.display = "none";
+            driveIframe.dataset.fileId = fileId;
+            driveIframe.src = `https://drive.google.com/file/d/${fileId}/preview`;
+            driveIframe.style.display = "block";
+          }
+        };
+
+        // Stream from backend endpoint (supports 3-min, 11-min, and 3-hour long production videos)
+        video.src = streamEndpoint;
+        video.load();
       }
+
+      // Reset AI Chat to fresh separate session for this lecture
+      resetChatSession(lesson.title);
 
       updateQuickChips(lesson.id);
       renderUtterances(currentUtterances);
@@ -2177,8 +2188,37 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ==========================================
-  // 7. AI DOUBT MENTOR
+  // 7. AI DOUBT MENTOR (Per-Student Isolated Session with Anti-Hallucination Grounding)
   // ==========================================
+  let currentChatSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+  function resetChatSession(lessonTitle = "this lecture") {
+    const oldSession = currentChatSessionId;
+    currentChatSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    
+    if (chatMessages) {
+      chatMessages.innerHTML = `
+        <div class="message-wrapper ai">
+          <div class="msg-avatar">AI</div>
+          <div class="msg-content">
+            <div class="msg-bubble">
+              👋 <strong>Namaste! I'm your AI Professor for ${escapeHtml(lessonTitle)}.</strong><br>
+              I am grounded strictly in this video lecture's transcript. Ask me any conceptual doubt, and I will explain step-by-step with interactive video timestamps <code>[MM:SS]</code>.
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (oldSession) {
+      fetch("/api/chat/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: oldSession })
+      }).catch(() => {});
+    }
+  }
+
   if (chatForm) {
     chatForm.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -2191,16 +2231,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnClearChat) {
     btnClearChat.addEventListener("click", () => {
-      chatMessages.innerHTML = `
-        <div class="message-wrapper ai">
-          <div class="msg-avatar">AI</div>
-          <div class="msg-content">
-            <div class="msg-bubble">
-              Chat cleared. Ask any doubt to test grounded retrieval and clickable timestamp jump badges <code>[MM:SS]</code>.
-            </div>
-          </div>
-        </div>
-      `;
+      resetChatSession(lectureTitle ? lectureTitle.textContent : "this lecture");
     });
   }
 
@@ -2214,7 +2245,8 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          lesson_id: currentLessonId || "masterclass_os_3hours"
+          lesson_id: currentLessonId || "masterclass_os_3hours",
+          session_id: currentChatSessionId
         })
       });
 
@@ -2230,7 +2262,6 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       removeElement(thinkingId);
       appendAiMessage(`Connection error: ${err.message}`, []);
-    }
   }
 
   function appendUserMessage(text) {
