@@ -1529,120 +1529,125 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("course_id", courseId);
       formData.append("course_name", courseName);
 
-      if (modalVideoMode === "file") {
-        if (!modalSelectedVideoFile) {
-          alert("Please select a video file to upload.");
-          return;
+      try {
+        if (modalVideoMode === "file") {
+          if (!modalSelectedVideoFile) {
+            alert("Please select a video file to upload.");
+            return;
+          }
+
+          modalBtnSubmitVideo.disabled = true;
+          modalBtnSubmitVideo.textContent = "Uploading to Drive...";
+          modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Starting direct upload to 5TB Drive Vault (0 MB Cloud Run load)...</span>`;
+
+          // 1. Get Google Drive direct resumable upload URL
+          const initRes = await fetch("/api/drive/init-upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: modalSelectedVideoFile.name,
+              mime_type: modalSelectedVideoFile.type || "video/mp4",
+              file_size: modalSelectedVideoFile.size
+            })
+          });
+
+          if (!initRes.ok) {
+            const errData = await initRes.json().catch(() => ({}));
+            throw new Error(errData.detail || "Could not initialize Google Drive direct upload session.");
+          }
+
+          const { upload_url } = await initRes.json();
+
+          // 2. Stream video file DIRECTLY from browser to Google Drive (Bypasses Cloud Run 32MB limit!)
+          const driveFile = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("PUT", upload_url, true);
+            xhr.setRequestHeader("Content-Type", modalSelectedVideoFile.type || "video/mp4");
+
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Direct Upload to Drive Vault: <strong>${pct}%</strong></span>`;
+                if (pct >= 100) {
+                  modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Finalizing Google Drive Vault file: <strong>100%</strong> (saving...)</span>`;
+                }
+              }
+            };
+
+            xhr.onload = () => {
+              if (xhr.status === 200 || xhr.status === 201) {
+                try {
+                  resolve(JSON.parse(xhr.responseText));
+                } catch (ex) {
+                  const m = xhr.responseText.match(/"id"\s*:\s*"([^"]+)"/);
+                  if (m) resolve({ id: m[1] });
+                  else resolve({ id: null, raw: xhr.responseText });
+                }
+              } else {
+                reject(new Error(`Google Drive returned HTTP ${xhr.status}: ${xhr.responseText || xhr.statusText}`));
+              }
+            };
+
+            xhr.onerror = () => reject(new Error("Network error during direct Drive upload. Please check connection."));
+            xhr.send(modalSelectedVideoFile);
+          });
+
+          const driveFileId = driveFile.id;
+          if (!driveFileId) {
+            throw new Error("Google Drive did not return a valid file ID.");
+          }
+
+          modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">✓ Saved to Google Drive Vault! Starting AI pipeline...</span>`;
+          formData.append("media_url", `https://drive.google.com/file/d/${driveFileId}/view`);
+        } else {
+          const urlVal = modalMediaUrlInput.value.trim();
+          if (!urlVal) {
+            alert("Please select a video from Central Drive Vault or enter a video URL.");
+            return;
+          }
+          formData.append("media_url", urlVal);
         }
+
+        // Stepper UI in modal
+        modalStepperProgress.style.display = "block";
+        const s1 = document.getElementById("modal-step-1");
+        const s2 = document.getElementById("modal-step-2");
+        const s3 = document.getElementById("modal-step-3");
+        const s4 = document.getElementById("modal-step-4");
+        const modalSteps = [s1, s2, s3, s4];
+
+        modalSteps.forEach(s => {
+          s.classList.remove("completed", "processing");
+          s.querySelector(".step-status").textContent = "Pending";
+        });
+
+        s1.classList.add("processing");
+        s1.querySelector(".step-status").textContent = "Running...";
+
+        setTimeout(() => {
+          s1.classList.remove("processing"); s1.classList.add("completed");
+          s1.querySelector(".step-status").textContent = "Done";
+          s2.classList.add("processing");
+          s2.querySelector(".step-status").textContent = "Transcribing...";
+        }, 3000);
+
+        setTimeout(() => {
+          s2.classList.remove("processing"); s2.classList.add("completed");
+          s2.querySelector(".step-status").textContent = "Done";
+          s3.classList.add("processing");
+          s3.querySelector(".step-status").textContent = "Chunking...";
+        }, 7000);
+
+        setTimeout(() => {
+          s3.classList.remove("processing"); s3.classList.add("completed");
+          s3.querySelector(".step-status").textContent = "Done";
+          s4.classList.add("processing");
+          s4.querySelector(".step-status").textContent = "Embedding...";
+        }, 11000);
 
         modalBtnSubmitVideo.disabled = true;
-        modalBtnSubmitVideo.textContent = "Uploading to Drive...";
-        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Uploading directly to 5TB Google Drive Vault (0 MB Cloud Run load)...</span>`;
+        modalBtnSubmitVideo.textContent = "Processing Lecture Pipeline...";
 
-        // 1. Get Google Drive direct resumable upload URL
-        const initRes = await fetch("/api/drive/init-upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: modalSelectedVideoFile.name,
-            mime_type: modalSelectedVideoFile.type || "video/mp4",
-            file_size: modalSelectedVideoFile.size
-          })
-        });
-
-        if (!initRes.ok) {
-          const errData = await initRes.json().catch(() => ({}));
-          throw new Error(errData.detail || "Could not initialize Google Drive direct upload session.");
-        }
-
-        const { upload_url } = await initRes.json();
-
-        // 2. Stream video file DIRECTLY from browser to Google Drive (Bypasses Cloud Run 32MB limit!)
-        const driveFile = await new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("PUT", upload_url, true);
-          xhr.setRequestHeader("Content-Type", modalSelectedVideoFile.type || "video/mp4");
-
-          xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-              const pct = Math.round((e.loaded / e.total) * 100);
-              modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">☁️ Direct Upload to Drive Vault: <strong>${pct}%</strong></span>`;
-            }
-          };
-
-          xhr.onload = () => {
-            if (xhr.status === 200 || xhr.status === 201) {
-              try {
-                resolve(JSON.parse(xhr.responseText));
-              } catch (ex) {
-                resolve({ id: null });
-              }
-            } else {
-              reject(new Error(`Drive direct upload failed (${xhr.status}): ${xhr.responseText}`));
-            }
-          };
-
-          xhr.onerror = () => reject(new Error("Network error during direct Drive upload. Check internet connection."));
-          xhr.send(modalSelectedVideoFile);
-        });
-
-        const driveFileId = driveFile.id;
-        if (!driveFileId) {
-          throw new Error("Google Drive did not return a valid file ID.");
-        }
-
-        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">✓ Saved to Google Drive Vault! Starting AI pipeline...</span>`;
-        formData.append("media_url", `https://drive.google.com/file/d/${driveFileId}/view`);
-      } else {
-        const urlVal = modalMediaUrlInput.value.trim();
-        if (!urlVal) {
-          alert("Please select a video from Central Drive Vault or enter a video URL.");
-          return;
-        }
-        formData.append("media_url", urlVal);
-      }
-
-      // Stepper UI in modal
-      modalStepperProgress.style.display = "block";
-      const s1 = document.getElementById("modal-step-1");
-      const s2 = document.getElementById("modal-step-2");
-      const s3 = document.getElementById("modal-step-3");
-      const s4 = document.getElementById("modal-step-4");
-      const modalSteps = [s1, s2, s3, s4];
-
-      modalSteps.forEach(s => {
-        s.classList.remove("completed", "processing");
-        s.querySelector(".step-status").textContent = "Pending";
-      });
-
-      s1.classList.add("processing");
-      s1.querySelector(".step-status").textContent = "Running...";
-
-      setTimeout(() => {
-        s1.classList.remove("processing"); s1.classList.add("completed");
-        s1.querySelector(".step-status").textContent = "Done";
-        s2.classList.add("processing");
-        s2.querySelector(".step-status").textContent = "Transcribing...";
-      }, 3000);
-
-      setTimeout(() => {
-        s2.classList.remove("processing"); s2.classList.add("completed");
-        s2.querySelector(".step-status").textContent = "Done";
-        s3.classList.add("processing");
-        s3.querySelector(".step-status").textContent = "Chunking...";
-      }, 7000);
-
-      setTimeout(() => {
-        s3.classList.remove("processing"); s3.classList.add("completed");
-        s3.querySelector(".step-status").textContent = "Done";
-        s4.classList.add("processing");
-        s4.querySelector(".step-status").textContent = "Embedding...";
-      }, 11000);
-
-      modalBtnSubmitVideo.disabled = true;
-      modalBtnSubmitVideo.textContent = "Processing Lecture Pipeline...";
-
-      try {
         const res = await fetch("/api/process-video", {
           method: "POST",
           body: formData

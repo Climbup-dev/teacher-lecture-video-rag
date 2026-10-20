@@ -490,7 +490,7 @@ class InitDriveUploadRequest(BaseModel):
     file_size: Optional[int] = 0
 
 @app.post("/api/drive/init-upload")
-async def init_drive_upload(req: InitDriveUploadRequest):
+async def init_drive_upload(req: InitDriveUploadRequest, request: Request):
     """
     Initializes a Google Drive Resumable Upload session.
     Returns upload_url directly to frontend so the browser can stream heavy 500MB-2GB video files
@@ -510,6 +510,15 @@ async def init_drive_upload(req: InitDriveUploadRequest):
     }
     if req.file_size and req.file_size > 0:
         headers['X-Upload-Content-Length'] = str(req.file_size)
+
+    # Browser Origin header is strictly required by Google Drive to emit Access-Control-Allow-Origin on PUT response
+    raw_origin = request.headers.get("origin") or request.headers.get("referer") or ""
+    if raw_origin:
+        from urllib.parse import urlparse
+        p = urlparse(raw_origin)
+        headers['Origin'] = f"{p.scheme}://{p.netloc}"
+    else:
+        headers['Origin'] = "http://127.0.0.1:8000"
 
     safe_name = req.filename.encode("ascii", "ignore").decode("ascii") or "lecture_video.mp4"
     meta = {
