@@ -14,6 +14,49 @@ class RAGEngine:
         self.embedder = VectorEmbedder(gemini_api_key)
         self.generation_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
 
+    def _extract_temporal_seconds(self, query: str) -> Optional[int]:
+        """
+        Extracts explicit timestamp references from student query in Hindi, Hinglish, or English.
+        Handles: '24 min', '24:00', '1 hour 15 min', 'minute 24', '24th minute', '01:23:45', etc.
+        """
+        q = (query or "").lower().strip()
+        # 1. Format HH:MM:SS or MM:SS (e.g. "01:25:30", "24:00", "05:12")
+        m = re.search(r'\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b', q)
+        if m:
+            h, mn, s = m.groups()
+            return (int(h or 0) * 3600) + (int(mn) * 60) + int(s)
+
+        # 2. Format: X hour/hr/ghante Y min (e.g. "1 hour 15 min", "2 ghante 10 minute")
+        m = re.search(r'(\d+)\s*(?:hours?|hrs?|ghante?|h)\s*(?:and\s*)?(?:(\d+)\s*(?:mins?|minutes?|m\b))?', q)
+        if m:
+            h = int(m.group(1))
+            mn = int(m.group(2) or 0)
+            return (h * 3600) + (mn * 60)
+
+        # 3. Format: X min / X minute / Xth min (e.g. "24 min", "24 minute", "24th min", "24m")
+        m = re.search(r'(\d+)(?:st|nd|rd|th)?\s*(?:mins?|minutes?|m\b)', q)
+        if m:
+            return int(m.group(1)) * 60
+
+        # 4. Format: "minute 24" or "min 24"
+        m = re.search(r'(?:minute|min)\s*(\d+)', q)
+        if m:
+            return int(m.group(1)) * 60
+
+        return None
+
+    def _is_overview_query(self, query: str) -> bool:
+        """Detects whether student is asking for a global lecture outline or summary across the full 4 hours."""
+        q = (query or "").lower().strip()
+        overview_terms = [
+            "summary", "summarize", "overview", "outline", "syllabus", "roadmap",
+            "poore lecture", "poori video", "whole video", "all topics", "what topics",
+            "kya kya padhaya", "topics covered", "all chapters", "table of contents",
+            "what is this lecture about", "what is this video about", "course content",
+            "what was taught in this video", "kya sikhaya"
+        ]
+        return any(term in q for term in overview_terms)
+
     def answer_query(
         self,
         query: str,
@@ -21,49 +64,129 @@ class RAGEngine:
         session_id: str = "default-session"
     ) -> Dict[str, Any]:
         """
-        Executes a high-precision RAG query against the indexed lecture video.
-        Retrieves top relevant chunks, builds grounded context, and prompts Gemini 2.5 Flash
-        to output an authoritative answer with clickable [MM:SS] video jump timestamps.
+        Executes a high-precision, student-centric RAG query against the indexed lecture video.
+        - Supports exact temporal queries (e.g. '24 min pr kya hua tha').
+        - Supports global 4-hour roadmap/outline queries.
+        - Uses hybrid semantic + keyword reranking across 7-8 chunks for deep technical accuracy.
+        - Prompts Gemini with an empathetic, pedagogy-first persona and clickable [MM:SS] timestamps.
         """
         lesson = self.db.get_lesson(lesson_id)
         lesson_title = lesson.get("title", "Lecture") if lesson else "Lecture"
 
-        # 1. Embed student query
-        query_emb = self.embedder.get_embedding(query)
+        # Fetch all chronological chunks for this lecture
+        all_chunks = self.db.get_all_chunks_for_lesson(lesson_id)
+        if not all_chunks:
+            # Fallback to direct search if all_chunks empty
+            query_emb = self.embedder.get_embedding(query)
+            all_chunks = self.db.search_similar_chunks(query_embedding=query_emb, lesson_id=lesson_id, top_k=6)
 
-        # 2. Retrieve top-4 most semantically similar chunks
-        retrieved_chunks = self.db.search_similar_chunks(
-            query_embedding=query_emb,
-            lesson_id=lesson_id,
-            top_k=4
-        )
-
-        if not retrieved_chunks:
+        if not all_chunks:
             return {
                 "answer": "No lecture content has been indexed for this lesson yet. Please process the video first.",
                 "retrieved_evidence": [],
                 "video_timestamps": []
             }
 
+        # Check for temporal intent (e.g. "24 min pr kya hua tha")
+        target_seconds = self._extract_temporal_seconds(query)
+        is_overview = self._is_overview_query(query)
+
+        retrieved_chunks = []
+        query_mode = "semantic"
+
+        if target_seconds is not None:
+            # --- 1. TEMPORAL RETRIEVAL ---
+            query_mode = "temporal"
+            # Find the chunk containing target_seconds, or closest chunk
+            best_idx = 0
+            min_dist = float("inf")
+            for idx, c in enumerate(all_chunks):
+                s = c.get("start_seconds", 0)
+                e = c.get("end_seconds", 0)
+                if s <= target_seconds <= e:
+                    best_idx = idx
+                    min_dist = 0
+                    break
+                dist = min(abs(s - target_seconds), abs(e - target_seconds))
+                if dist < min_dist:
+                    min_dist = dist
+                    best_idx = idx
+
+            # Window: Take 1-2 chunks before and 1-2 chunks after for full contiguous explanation
+            start_i = max(0, best_idx - 1)
+            end_i = min(len(all_chunks), best_idx + 3)
+            retrieved_chunks = all_chunks[start_i:end_i]
+            for c in retrieved_chunks:
+                c["similarity_score"] = 0.99
+
+        elif is_overview:
+            # --- 2. GLOBAL OVERVIEW / ROADMAP RETRIEVAL ---
+            query_mode = "overview"
+            # Sample representative chunks across the full 4-hour timeline
+            step = max(1, len(all_chunks) // 8)
+            retrieved_chunks = all_chunks[::step][:8]
+            for c in retrieved_chunks:
+                c["similarity_score"] = 0.95
+
+        else:
+            # --- 3. HYBRID SEMANTIC + CONCEPT RETRIEVAL (8 chunks for 4-hr videos) ---
+            query_emb = self.embedder.get_embedding(query)
+            q_tokens = set(re.findall(r'\w+', query.lower()))
+
+            scored_chunks = []
+            for c in all_chunks:
+                emb = c.get("embedding", [])
+                cos_sim = self.embedder.cosine_similarity(query_emb, emb) if emb else 0.0
+
+                # Keyword match bonus for key_concepts, topic_name, and hypothetical_questions
+                concept_text = " ".join([
+                    c.get("topic_name", ""),
+                    " ".join(c.get("key_concepts", []) or []),
+                    " ".join(c.get("hypothetical_questions", []) or []),
+                    c.get("cleaned_text", "")[:300]
+                ]).lower()
+                c_tokens = set(re.findall(r'\w+', concept_text))
+                overlap = len(q_tokens.intersection(c_tokens))
+                kw_bonus = min(overlap * 0.05, 0.25)
+
+                final_score = (cos_sim * 0.75) + kw_bonus
+                scored_chunks.append({
+                    **c,
+                    "similarity_score": round(final_score, 4)
+                })
+
+            scored_chunks.sort(key=lambda x: x["similarity_score"], reverse=True)
+            retrieved_chunks = scored_chunks[:7]
+
         # 3. Assemble Grounded Context
         context_blocks = []
         for i, c in enumerate(retrieved_chunks):
-            start_m, start_s = divmod(int(c['start_seconds']), 60)
-            end_m, end_s = divmod(int(c['end_seconds']), 60)
+            start_m, start_s = divmod(int(c.get('start_seconds', 0)), 60)
+            end_m, end_s = divmod(int(c.get('end_seconds', 0)), 60)
             ts_badge = f"{start_m:02d}:{start_s:02d}"
-            
+
             block = (
-                f"--- EVIDENCE CHUNK #{i+1} ---\n"
+                f"--- EVIDENCE SEGMENT #{i+1} ---\n"
                 f"Topic: {c.get('topic_name', 'Concept')}\n"
-                f"Timestamp: [{ts_badge}] (Seconds: {c['start_seconds']} to {c['end_seconds']})\n"
+                f"Timestamp: [{ts_badge}] ({c.get('start_seconds', 0)}s - {c.get('end_seconds', 0)}s)\n"
                 f"Speaker: {c.get('speaker_label', 'Teacher')}\n"
+                f"Key Concepts: {', '.join(c.get('key_concepts', []) or [])}\n"
                 f"Transcript Content:\n{c.get('cleaned_text', c.get('chunk_text', ''))}\n"
             )
             context_blocks.append(block)
 
         context_str = "\n".join(context_blocks)
 
-        # 3b. Retrieve prior conversation context for this specific session (last 3-4 turns)
+        # Build 4-Hour Course Chapters Outline if overview mode
+        roadmap_str = ""
+        if is_overview or len(all_chunks) > 10:
+            outline_lines = []
+            for c in all_chunks[:30]:  # Up to 30 main chapters
+                sm, ss = divmod(int(c.get("start_seconds", 0)), 60)
+                outline_lines.append(f"- [{sm:02d}:{ss:02d}] {c.get('topic_name', 'Lecture Section')}")
+            roadmap_str = "\n".join(outline_lines)
+
+        # 3b. Retrieve prior conversation context for this specific session
         history_msgs = []
         if hasattr(self.db, "get_chat_history") and session_id and session_id != "default-session":
             raw_history = self.db.get_chat_history(session_id, limit=4)
@@ -73,81 +196,84 @@ class RAGEngine:
                 history_msgs.append(f"- {sender_label}: {msg_snip}")
 
         history_summary = "\n".join(history_msgs) if history_msgs else "New conversation session (no previous messages)."
-
-        # Sanitize query against prompt injection & oversized payloads
         safe_query = re.sub(r'[\r\n]+', ' ', (query or "").strip())[:1000]
-        if not safe_query:
-            return {
-                "answer": "Please provide a valid question regarding the lecture.",
-                "retrieved_evidence": [],
-                "video_timestamps": []
-            }
 
-        # 4. Prompt Gemini for High-Quality Grounded Answer with Anti-Hallucination Guardrails
-        system_instructions = f"""You are the Intelligent AI Professor & Mentor for the university course lecture: "{lesson_title}".
-A student has asked a doubt. Your mission is to provide an ELITE, CLEAR, HIGHLY ENGAGING, and PEDAGOGICALLY SOUND explanation grounded strictly in the provided lecture transcript evidence.
+        # Mode-specific instruction banner
+        mode_instruction = ""
+        if query_mode == "temporal":
+            target_m, target_s = divmod(target_seconds, 60)
+            mode_instruction = f"""
+🚨 TEMPORAL TIMESTAMP QUERY DETECTED:
+The student specifically asked about what happens at timestamp: [{target_m:02d}:{target_s:02d}] ({target_seconds} seconds).
+1. IMMEDIATELY in your very first sentence, state what the professor is explaining, demonstrating, or coding at minute {target_m}:{target_s:02d}.
+2. Use the exact transcript evidence from that segment to provide a complete, crystal-clear explanation.
+"""
+        elif query_mode == "overview":
+            mode_instruction = f"""
+📋 GLOBAL 4-HOUR LECTURE OVERVIEW QUERY:
+The student asked for an overview/summary of the whole lecture.
+Use the course chapter outline below to provide a structured, chronological roadmap of the full 4 hours:
+{roadmap_str}
+"""
 
-RECENT CONVERSATION CONTEXT (For pronoun & conversational continuity only; NEVER use this to invent external facts):
+        # 4. Prompt Gemini for Elite Pedagogical Teaching
+        system_instructions = f"""You are the Brilliant, Highly Empathetic AI Professor & Mentor for the university course lecture: "{lesson_title}".
+A student has asked a doubt. Your mission is to provide an ACCURATE, HIGHLY ENGAGING, PEDAGOGICALLY SOUND, and PRACTICAL explanation strictly grounded in the provided lecture video.
+
+{mode_instruction}
+
+RECENT CONVERSATION CONTEXT:
 {history_summary}
 
-LECTURE EVIDENCE FROM VIDEO:
+LECTURE TRANSCRIPT EVIDENCE (From 4-Hour Video):
 {context_str}
 
-STUDENT QUESTION (Bounded):
+STUDENT QUESTION:
 <<<
 {safe_query}
 >>>
 
-MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
-1. 🛡️ ABSOLUTE GROUNDING & ZERO HALLUCINATION:
-   - ALL technical facts, code examples, concepts, and explanations MUST be strictly verified against the LECTURE EVIDENCE above.
-   - Do NOT invent, assume, or hallucinate facts that are absent from the video.
-   - If the student's question is NOT covered in the provided lecture video, state politely:
-     "⚠️ Note: Professor does not specifically discuss this topic in this lecture. Based on what is covered in this video, the lecture focuses on [briefly mention relevant topic]..."
-   - The RECENT CONVERSATION CONTEXT is strictly for understanding follow-up questions (like "why does that happen?" or "explain step 2 again"). Never use it to contradict the lecture.
+TEACHING & FORMATTING GUIDELINES:
+1. 🎯 DIRECT & ENGAGING START:
+   - Answer the student's exact doubt in the first 1-2 sentences. No generic robotic pleasantries.
+   - Speak warmly and encouragingly like an exceptional professor (e.g., "Great doubt!", "Here is exactly how this works...").
 
-2. 🎯 SMART & FLUID EXPLANATION (ZERO INLINE CLUTTER):
-   - Provide a clean, highly intelligent, natural explanation like a world-class mentor.
-   - ABSOLUTE RULE: DO NOT put any bracketed timestamps like `[MM:SS]` inside the explanation paragraphs, headings, or bullet points!
-   - Keep the body text 100% clean, fluid, and effortless to read. Use clear bold keywords, bullet points, and steps.
+2. 🧠 CONCEPTUAL CLARITY & REAL-WORLD EXAMPLES:
+   - Break down complex logic into clear, bulleted points or numbered steps.
+   - If SQL / code is taught in this video, provide clean code blocks with syntax highlighting (` ```sql `).
+   - Explain the "WHY" behind the concept, not just a dry recitation of text.
 
-3. ⏱️ DEDICATED VIDEO JUMP POINTS AT THE END ONLY:
-   - All video timestamps MUST be placed EXCLUSIVELY in a dedicated `### ⏱️ Video Jump Points` section at the bottom.
-   - Format:
+3. ⏱️ ACCURATE TIMESTAMPS & ZERO INLINE BRACKET CLUTTER:
+   - Keep the explanation body 100% clean and effortless to read.
+   - Place all video jump points EXCLUSIVELY in a dedicated section at the bottom:
      ```
      ### ⏱️ Video Jump Points
-     * ⏱️ [MM:SS] - Topic / Key Moment 1
-     * ⏱️ [MM:SS] - Topic / Key Moment 2
+     * ⏱️ [MM:SS] - Concept or moment in lecture
+     * ⏱️ [MM:SS] - Next key demonstration
      ```
-   - This keeps the explanation smart and readable while providing instant 1-click video navigation.
+   - (The frontend makes `[MM:SS]` clickable so students can jump straight into that moment of the 4-hour video!)
 
-4. 🎨 VIBRANT EMOJIS & CLEAN VISUAL HIERARCHY:
-   - Use meaningful emojis tastefully to highlight section headings and key takeaways (🎯, 💡, ⏱️, 🚀, 📌, ❓).
-   - Never overdo emojis on every line; use them on section titles and highlights for a sleek, modern look.
-
-5. 🌐 MULTILINGUAL EXCELLENCE (Hindi / Hinglish / Marathi / English):
+4. 🌐 MULTILINGUAL EMPATHY (Hindi / Hinglish / Marathi / English):
    - Match the student's language naturally:
-     * If asked in **Hindi / Hinglish**: Explain in smooth, friendly, natural Hindi/Hinglish without awkward literal translations.
-     * If asked in **Marathi**: Explain clearly and warmly in natural Marathi.
-     * If asked in **English**: Provide an articulate, smart explanation.
-   - Preserve the bracketed `[MM:SS]` format strictly in the `### ⏱️ Video Jump Points` section so the video player can seek.
+     * If the student asks in **Hindi / Hinglish**: Explain warmly in natural, student-friendly Hindi/Hinglish (e.g., "SQL me JOINs ka main purpose hota hai do tables ko relate karna...").
+     * If the student asks in **English**: Provide an articulate, crystal-clear academic explanation.
 
-6. 📌 PROFESSOR'S HIGHLIGHTS & TIPS:
-   - Include a brief `### 📌 Professor's Pro Tips` section highlighting key warnings (e.g., PATH checkbox, key syntax rules) without any inline timestamps.
+5. 📌 PROFESSOR'S PRO TIPS:
+   - Include a brief `### 📌 Professor's Pro Tips` with 1-2 practical insights or common pitfalls to avoid.
 
-7. ❓ 2 PRACTICE QUESTIONS:
-   - Conclude with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to test the student's understanding.
+6. ❓ 2 PRACTICE QUESTIONS:
+   - Conclude with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to help the student test their mastery.
 """
 
         payload = {
             "contents": [{"parts": [{"text": system_instructions}]}],
             "generationConfig": {
-                "temperature": 0.2,
+                "temperature": 0.25,
                 "topP": 0.95
             }
         }
 
-        # Model priority list (Fast, reliable, free-tier compatible)
+        # Model priority list
         models_to_try = [
             "gemini-2.5-flash",
             "gemini-3.5-flash",
@@ -170,16 +296,15 @@ MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
                         if raw_answer:
                             break
                 elif res.status_code in (429, 503):
-                    continue  # Try next available model on quota/concurrency limits
-            except Exception as e:
+                    continue
+            except Exception:
                 continue
 
         if not raw_answer:
             raw_answer = "Could not generate answer due to AI service temporary availability. Please try again in a moment."
 
-        # 5. Extract all timestamps mentioned in the answer (supports MM:SS, MMM:SS, HH:MM:SS)
+        # Extract timestamps for video jump badges
         extracted = re.findall(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]', raw_answer)
-        # Deduplicate while preserving chronological order
         seen = set()
         found_timestamps = []
         for ts in extracted:
@@ -187,7 +312,7 @@ MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
                 seen.add(ts)
                 found_timestamps.append(ts)
 
-        # 6. Record interaction in database
+        # Record interaction in database
         self.db.record_chat_message(
             session_id=session_id,
             sender="student",
@@ -198,21 +323,21 @@ MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
             sender="ai",
             message=raw_answer,
             timestamp_ref={"timestamps": found_timestamps},
-            retrieved_chunk_ids=[c["id"] for c in retrieved_chunks]
+            retrieved_chunk_ids=[c.get("id", "") for c in retrieved_chunks if c.get("id")]
         )
 
         # Format evidence for frontend display
         evidence_summary = []
         for c in retrieved_chunks:
             evidence_summary.append({
-                "id": c["id"],
+                "id": c.get("id", ""),
                 "topic_name": c.get("topic_name", "Concept"),
                 "start_seconds": c.get("start_seconds", 0),
                 "end_seconds": c.get("end_seconds", 0),
                 "timestamp_label": c.get("timestamp_label", ""),
                 "speaker_label": c.get("speaker_label", "Teacher"),
                 "similarity_score": c.get("similarity_score", 0),
-                "text_snippet": c.get("cleaned_text", c.get("chunk_text", ""))[:220] + "..."
+                "text_snippet": (c.get("cleaned_text") or c.get("chunk_text") or "")[:220] + "..."
             })
 
         return {
@@ -220,3 +345,4 @@ MANDATORY RESPONSE GUIDELINES (Anti-Hallucination, Clean & Grounded Teaching):
             "retrieved_evidence": evidence_summary,
             "video_timestamps": found_timestamps
         }
+

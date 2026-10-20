@@ -398,6 +398,27 @@ class DBAdapter:
         scored_chunks.sort(key=lambda x: x["similarity_score"], reverse=True)
         return scored_chunks[:top_k]
 
+    def get_all_chunks_for_lesson(self, lesson_id: str) -> List[Dict[str, Any]]:
+        """Retrieves all indexed chunks for a lesson, ordered chronologically by start_seconds."""
+        chunks = []
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}&select=*&order=start_seconds.asc"
+                res = self.session.get(url, headers=headers, timeout=8)
+                if res.ok:
+                    chunks = res.json()
+            except Exception as e:
+                print(f"[Supabase] get_all_chunks_for_lesson error: {e}")
+
+        if not chunks:
+            store = self._read_local_store()
+            all_c = store.get("chunks", [])
+            chunks = [c for c in all_c if c.get("lesson_id") == lesson_id]
+
+        chunks.sort(key=lambda x: x.get("start_seconds", 0))
+        return chunks
+
     def get_lesson(self, lesson_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves a single lesson from Supabase."""
         if self.supabase_url and self.supabase_key:
@@ -1016,11 +1037,14 @@ class DBAdapter:
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         store = self._read_local_store()
-        job = store.get("jobs", {}).get(job_id) or self.get_job(job_id)
+        if "jobs" not in store or not isinstance(store["jobs"], dict):
+            store["jobs"] = {}
+
+        job = store["jobs"].get(job_id) or self.get_job(job_id)
         if not job:
             return False
 
-        if job["status"] in ("COMPLETED", "FAILED", "CANCELLED"):
+        if job.get("status") in ("COMPLETED", "FAILED", "CANCELLED"):
             return False
 
         job["status"] = "CANCELLED"
@@ -1028,6 +1052,9 @@ class DBAdapter:
         job["stage_message"] = "Job cancelled by instructor."
         job["updated_at"] = now_iso
 
+        store = self._read_local_store()
+        if "jobs" not in store or not isinstance(store["jobs"], dict):
+            store["jobs"] = {}
         store["jobs"][job_id] = job
         self._write_local_store(store)
 
