@@ -32,3 +32,12 @@ Thumbs.db
 
 # Logs & temp
 *.log
+
+# Local data stores & benchmark artifacts (kept locally, not pushed)
+data/chunks/local_store.json
+tests/*_results.json
+tests/*_samples.json
+tests/test_1000_questions.py
+tests/test_rag_baseline.py
+tests/generate_live_qa_samples.py
+
