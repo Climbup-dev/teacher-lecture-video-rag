@@ -38,7 +38,9 @@ from backend.security import (
     detect_download_attempt,
     get_client_ip,
     generate_signed_stream_token,
-    verify_signed_stream_token
+    verify_signed_stream_token,
+    check_rate_limit,
+    verify_admin_or_instructor_auth
 )
 
 # Configure structured production logging
@@ -168,7 +170,12 @@ def get_courses():
     return db.list_courses()
 
 @app.post("/api/courses")
-def create_course(req: CourseCreateRequest):
+def create_course(
+    req: CourseCreateRequest,
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
     reload_config()
     if not req.title or not req.title.strip():
         raise HTTPException(status_code=400, detail="Course title is required")
@@ -184,13 +191,23 @@ def create_course(req: CourseCreateRequest):
     return {"status": "success", "message": f"Course '{req.title}' created successfully.", "course": course}
 
 @app.delete("/api/courses/{course_id}")
-def delete_course(course_id: str):
+def delete_course(
+    course_id: str,
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
     reload_config()
     success = db.delete_course(course_id)
     return {"status": "success", "message": f"Course {course_id} deleted.", "deleted": success}
 
 @app.delete("/api/resources/{resource_id}")
-def delete_resource(resource_id: str):
+def delete_resource(
+    resource_id: str,
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
     reload_config()
     store = db._read_local_store()
     if "resources" in store:
@@ -204,7 +221,12 @@ def delete_resource(resource_id: str):
     return {"status": "success", "message": "Resource deleted successfully."}
 
 @app.delete("/api/lessons/{lesson_id}")
-def delete_lesson(lesson_id: str):
+def delete_lesson(
+    lesson_id: str,
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
     reload_config()
     store = db._read_local_store()
     if lesson_id in store.get("lessons", {}):
@@ -323,18 +345,8 @@ def update_config(
             detail="Configuration updates are disabled in this environment (READONLY_CONFIG=true)."
         )
 
-    # Enforce admin authentication if ADMIN_API_KEY is configured
-    admin_secret = Config.ADMIN_API_KEY
-    if admin_secret:
-        auth_token = None
-        if authorization and authorization.startswith("Bearer "):
-            auth_token = authorization.split(" ", 1)[1].strip()
-        provided = x_admin_key or auth_token
-        if not provided or provided != admin_secret:
-            raise HTTPException(
-                status_code=401,
-                detail="Unauthorized: Valid X-Admin-Key or Authorization Bearer token required to modify configuration."
-            )
+    # Enforce strict admin verification
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
 
     env_lines = []
     if Config.ENV_PATH.exists():
@@ -494,9 +506,13 @@ async def create_lesson_stream_token(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
+    client_ip = get_client_ip(request)
+    allowed, retry_after = check_rate_limit(client_ip, "stream_token", max_requests=40, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {retry_after} seconds before requesting a new stream token.")
+
     course_id = lesson.get("course_id")
     is_free_preview = bool(lesson.get("is_free_preview", False))
-    client_ip = get_client_ip(request)
 
     user_id = "anonymous_preview"
     if not is_free_preview:
@@ -536,22 +552,16 @@ async def stream_lesson_video(
     - Streams byte ranges directly from private storage without buffering in memory.
     """
     reload_config()
-    lesson = db.get_lesson(lesson_id)
-    if not lesson:
-        raise HTTPException(status_code=404, detail="Lesson not found.")
-
     client_ip = get_client_ip(request)
     user_agent = request.headers.get("user-agent", "")
-    course_id = lesson.get("course_id")
-    is_free_preview = bool(lesson.get("is_free_preview", False))
 
-    # --- 1. ANTI-SCRAPER & DOWNLOAD TOOL DEFENSE ---
+    # --- 1. ANTI-SCRAPER & DOWNLOAD TOOL DEFENSE (Check FIRST before DB lookups) ---
     threat = detect_download_attempt(request)
     if threat:
         threat_type, threat_details = threat
         db.log_security_threat(
             lesson_id=lesson_id,
-            lesson_title=lesson.get("title", "Lecture Video"),
+            lesson_title="Target Lesson",
             threat_type=threat_type,
             ip_address=client_ip,
             user_agent=user_agent,
@@ -561,6 +571,18 @@ async def stream_lesson_video(
             status_code=403,
             detail="Security Alert: Automated downloader tools and direct downloads are strictly prohibited. Attempt logged for instructor review."
         )
+
+    # --- 2. RATE LIMIT CHECK ---
+    allowed, retry_after = check_rate_limit(client_ip, f"stream_{lesson_id}", max_requests=120, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Streaming rate limit reached. Please wait {retry_after} seconds.")
+
+    lesson = db.get_lesson(lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+
+    course_id = lesson.get("course_id")
+    is_free_preview = bool(lesson.get("is_free_preview", False))
 
     # --- 2. AUTHENTICATION & TOKEN VERIFICATION ---
     verified_user_id = None
@@ -694,18 +716,24 @@ async def stream_drive_file(
     file_id: str,
     request: Request,
     token: Optional[str] = Query(None),
-    authorization: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    st: Optional[str] = Query(None)
 ):
-    """Direct Google Drive video streaming endpoint with byte-range support."""
+    """
+    Protected Google Drive streaming endpoint with byte-range support:
+    - Rejects automated downloaders and address-bar downloads.
+    - Requires valid signed stream token (st) OR verified Supabase course enrollment.
+    - Prevents arbitrary Google Drive file access.
+    """
     reload_config()
     clean_id = GoogleDriveManager.extract_file_id(file_id)
     if not clean_id or not drive_mgr.is_configured():
         raise HTTPException(status_code=400, detail="Google Drive storage service not configured.")
 
+    client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
     if threat:
         threat_type, threat_details = threat
-        client_ip = get_client_ip(request)
         db.log_security_threat(
             lesson_id=clean_id,
             lesson_title="Direct Drive Media",
@@ -719,8 +747,26 @@ async def stream_drive_file(
             detail="Security Alert: Automated downloader tools and direct downloads are strictly prohibited."
         )
 
-    if not token and not authorization:
-        raise HTTPException(status_code=401, detail="Authentication required to stream protected video.")
+    # Verify authorization: signed stream token or Supabase enrollment
+    if st:
+        is_valid, uid, err_reason = verify_signed_stream_token(st, clean_id, client_ip)
+        if not is_valid:
+            # Also check if token was signed for a lesson matching this drive file
+            matched_lesson = next((l for l in db.list_lessons() if clean_id in l.get("video_url", "")), None)
+            if matched_lesson:
+                is_valid, uid, err_reason = verify_signed_stream_token(st, matched_lesson.get("id"), client_ip)
+        if not is_valid:
+            raise HTTPException(status_code=403, detail=f"Stream token invalid or expired: {err_reason}")
+    else:
+        if not token and not authorization:
+            raise HTTPException(status_code=401, detail="Authentication required to stream protected video.")
+        # Find course for this file
+        matched_lesson = next((l for l in db.list_lessons() if clean_id in l.get("video_url", "")), None)
+        if matched_lesson and matched_lesson.get("course_id"):
+            verify_supabase_user_and_enrollment(authorization, token, matched_lesson.get("course_id"))
+        else:
+            # If not in catalog, require admin authentication
+            verify_admin_or_instructor_auth(authorization)
 
     range_header = request.headers.get("Range")
     try:
@@ -737,7 +783,12 @@ async def stream_drive_file(
 
 
 @app.get("/api/admin/security/alerts")
-def get_security_alerts(limit: int = 50):
+def get_security_alerts(
+    limit: int = 50,
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
     """Admin endpoint to inspect live blocked download attempts, scrapers, and unauthorized viewers."""
     threats = db.get_security_threats(limit=limit)
     return {
@@ -748,7 +799,11 @@ def get_security_alerts(limit: int = 50):
 
 
 @app.post("/api/admin/security/alerts/clear")
-def clear_security_alerts():
+def clear_security_alerts(
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
     """Admin endpoint to clear threat logs."""
     db.clear_security_threats()
     return {"status": "success", "message": "Security threat logs cleared."}
@@ -818,12 +873,21 @@ async def init_drive_upload(req: InitDriveUploadRequest, request: Request):
 
 @app.post("/api/process-video")
 async def process_video(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     title: str = Form("Applied AI: Vector RAG Architectures"),
     course_name: str = Form("Applied AI & GenAI with RAG Architectures"),
     course_id: str = Form("course-applied-ai-rag"),
-    media_url: Optional[str] = Form(None)
+    media_url: Optional[str] = Form(None),
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
 ):
+    # Enforce admin authentication & rate limit
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
+    client_ip = get_client_ip(request)
+    allowed, retry_after = check_rate_limit(client_ip, "process_video", max_requests=6, window_seconds=600)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Processing rate limit reached. Please wait {retry_after} seconds.")
     """
     Asynchronous RAG Ingestion Endpoint:
     Accepts video upload or Google Drive media URL, initializes a durable job record,
@@ -1000,7 +1064,11 @@ def cancel_job(job_id: str):
 
 
 @app.post("/api/chat")
-def chat_query(req: ChatRequest):
+def chat_query(req: ChatRequest, request: Request):
+    client_ip = get_client_ip(request)
+    allowed, retry_after = check_rate_limit(client_ip, "chat", max_requests=30, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {retry_after} seconds before asking another doubt.")
     reload_config()
     if not Config.GEMINI_API_KEY:
         raise HTTPException(status_code=400, detail="Gemini API Key is not configured.")
