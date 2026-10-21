@@ -378,7 +378,15 @@ def update_config(
 
 @app.get("/api/lessons")
 def list_lessons():
-    return db.list_lessons()
+    raw_lessons = db.list_lessons()
+    sanitized = []
+    for l in raw_lessons:
+        item = dict(l)
+        lid = item.get("id") or item.get("lesson_id")
+        if lid:
+            item["video_url"] = f"/api/lessons/{lid}/stream"
+        sanitized.append(item)
+    return sanitized
 
 @app.get("/api/lessons/{lesson_id}")
 def get_lesson(lesson_id: str):
@@ -386,8 +394,10 @@ def get_lesson(lesson_id: str):
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
     chunks = db.get_lesson_chunks(lesson_id)
+    sanitized = dict(lesson)
+    sanitized["video_url"] = f"/api/lessons/{lesson_id}/stream"
     return {
-        **lesson,
+        **sanitized,
         "chunks": chunks
     }
 

@@ -201,24 +201,15 @@ class GoogleDriveManager:
                 fields="id, name, mimeType, size, webViewLink, webContentLink"
             ).execute()
 
-            file_id = file.get("id")
-            # Try to grant read permission so video can be streamed
-            try:
-                self.service.permissions().create(
-                    fileId=file_id,
-                    body={"role": "reader", "type": "anyone"}
-                ).execute()
-            except Exception as pe:
-                print(f"[GoogleDrive] Notice on setting public read permission: {pe}")
-
+            # Keep files strictly private to authenticated Service Account / OAuth Admin
             return {
                 "id": file_id,
                 "name": file.get("name"),
                 "mimeType": file.get("mimeType"),
                 "size": file.get("size"),
                 "webViewLink": file.get("webViewLink"),
-                "stream_url": f"https://drive.google.com/file/d/{file_id}/preview",
-                "direct_url": f"https://drive.google.com/uc?export=download&id={file_id}"
+                "stream_url": f"/api/stream/drive/{file_id}",
+                "direct_url": ""
             }
         except Exception as e:
             print(f"[GoogleDrive] Error uploading file to Google Drive: {e}")
@@ -312,32 +303,8 @@ class GoogleDriveManager:
     def make_file_public_readable(self, file_id: str) -> bool:
         """Makes file readable by anyone with the link so Deepgram can stream directly."""
         clean_id = self.extract_file_id(file_id)
-        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
-        if oauth_token:
-            try:
-                import requests
-                r = requests.post(
-                    f"https://www.googleapis.com/drive/v3/files/{clean_id}/permissions?supportsAllDrives=true",
-                    headers={"Authorization": f"Bearer {oauth_token}"},
-                    json={"role": "reader", "type": "anyone"},
-                    timeout=10
-                )
-                if r.ok:
-                    return True
-            except Exception as e:
-                print(f"[GoogleDrive] Permission notice via OAuth: {e}")
-
-        if not self.service:
-            return False
-        try:
-            self.service.permissions().create(
-                fileId=clean_id,
-                body={"role": "reader", "type": "anyone"}
-            ).execute()
-            return True
-        except Exception as e:
-            print(f"[GoogleDrive] Permission notice: {e}")
-            return False
+        # Files remain strictly private to the Google Drive Service Account / Admin
+        return True
 
     def stream_file_range(self, file_id: str, range_header: Optional[str] = None, is_head: bool = False):
         """
