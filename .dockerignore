@@ -17,7 +17,6 @@ data/uploads/*.wav
 data/uploads/*.mp3
 data/uploads/*.m4a
 data/uploads/*.tmp
-data/chunks/local_store.json
 tests/
 scratch/
 *.log

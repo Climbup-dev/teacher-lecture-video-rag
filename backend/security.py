@@ -226,9 +226,9 @@ def verify_admin_or_instructor_auth(
     if user_metadata.get("role") in allowed_roles:
         return {"role": user_metadata.get("role"), "user_id": user_id, "user": user_data}
 
-    # 2. Check users or profiles table
+    # 2. Check profiles table
     try:
-        prof_url = f"{Config.SUPABASE_URL}/rest/v1/users?user_id=eq.{user_id}&select=role"
+        prof_url = f"{Config.SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=role"
         prof_res = requests.get(prof_url, headers=service_headers, timeout=5)
         if prof_res.ok and prof_res.json():
             role = prof_res.json()[0].get("role", "")

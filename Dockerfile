@@ -23,9 +23,10 @@ RUN groupadd -g 10001 appgroup && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application directories
+# Copy application directories and seed catalog
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
+COPY data/chunks/local_store.json ./data/chunks/local_store.json
 
 # Create application data directories and assign permissions to non-root user
 RUN mkdir -p /app/data/uploads /app/data/chunks && \
