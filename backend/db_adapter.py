@@ -35,27 +35,56 @@ class DBAdapter:
 
     def _init_local_store(self):
         with self._store_lock:
+            seed_file = Path(__file__).resolve().parent / "seed_catalog.json"
             if not self.storage_file.exists():
-                initial_data = {
-                    "courses": {},
-                    "lessons": {},
-                    "chunks": [],
-                    "jobs": {},
-                    "chat_sessions": {},
-                    "chat_messages": []
-                }
-                with open(self.storage_file, "w", encoding="utf-8") as f:
-                    json.dump(initial_data, f, indent=2)
+                initial_data = None
+                if seed_file.exists():
+                    try:
+                        with open(seed_file, "r", encoding="utf-8") as sf:
+                            initial_data = json.load(sf)
+                    except Exception:
+                        initial_data = None
+
+                if not initial_data:
+                    initial_data = {
+                        "courses": {},
+                        "lessons": {},
+                        "chunks": [],
+                        "jobs": {},
+                        "chat_sessions": {},
+                        "chat_messages": []
+                    }
+                try:
+                    self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(self.storage_file, "w", encoding="utf-8") as f:
+                        json.dump(initial_data, f, indent=2)
+                except Exception as e:
+                    print(f"[DBAdapter] Notice creating local storage: {e}")
 
     def _read_local_store(self) -> Dict[str, Any]:
         with self._store_lock:
+            seed_file = Path(__file__).resolve().parent / "seed_catalog.json"
             try:
                 with open(self.storage_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    if not data.get("lessons") and seed_file.exists():
+                        try:
+                            with open(seed_file, "r", encoding="utf-8") as sf:
+                                seed = json.load(sf)
+                                data["lessons"] = seed.get("lessons", {})
+                                data["courses"] = seed.get("courses", {})
+                        except Exception:
+                            pass
                     if "jobs" not in data:
                         data["jobs"] = {}
                     return data
             except Exception:
+                if seed_file.exists():
+                    try:
+                        with open(seed_file, "r", encoding="utf-8") as sf:
+                            return json.load(sf)
+                    except Exception:
+                        pass
                 return {"courses": {}, "lessons": {}, "chunks": [], "jobs": {}, "chat_sessions": {}, "chat_messages": []}
 
     def _write_local_store(self, data: Dict[str, Any]):
