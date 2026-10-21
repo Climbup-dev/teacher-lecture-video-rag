@@ -326,13 +326,28 @@ class DBAdapter:
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
+                # 1. Clean previous chunks for this lesson in Supabase to prevent duplicates
+                try:
+                    self.session.delete(
+                        f"{self.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}",
+                        headers=headers,
+                        timeout=8
+                    )
+                except Exception as del_err:
+                    print(f"[Supabase] previous chunks delete notice: {del_err}")
+
                 supabase_rows = []
                 for c in chunks:
+                    topic = c.get("topic_name") or ""
+                    concepts = ", ".join(c.get("key_concepts") or [])
+                    raw_txt = c.get("cleaned_text") or c.get("chunk_text") or ""
+                    formatted_txt = f"[{topic}]\nConcepts: {concepts}\n{raw_txt}" if (topic and not raw_txt.startswith("[")) else raw_txt
+
                     row = {
                         "lesson_id": lesson_id,
                         "course_id": course_id,
                         "chunk_index": c.get("chunk_index", 1),
-                        "chunk_text": c.get("cleaned_text") or c.get("chunk_text", ""),
+                        "chunk_text": formatted_txt,
                         "start_seconds": float(c.get("start_seconds", 0.0)),
                         "end_seconds": float(c.get("end_seconds", 0.0)),
                         "timestamp_label": c.get("timestamp_label", ""),
@@ -358,11 +373,45 @@ class DBAdapter:
         self,
         query_embedding: List[float],
         lesson_id: Optional[str] = None,
+        course_id: Optional[str] = None,
         top_k: int = 4
     ) -> List[Dict[str, Any]]:
         """
-        Retrieves top-k most semantically relevant chunks from Supabase transcript_chunks_vector.
+        Retrieves top-k most semantically relevant chunks.
+        Strategy 1: Fast in-database pgvector RPC search (zero vector transfer overhead).
+        Strategy 2: Resilient local fallback with Python cosine similarity.
         """
+        # 1. Primary: Indexed pgvector search via Supabase RPC
+        if self.supabase_url and self.supabase_key and query_embedding:
+            try:
+                headers = self._get_headers()
+                rpc_payload = {
+                    "query_embedding": query_embedding,
+                    "match_threshold": 0.0,
+                    "match_count": top_k,
+                    "filter_course_id": course_id or "",
+                    "filter_lesson_id": lesson_id or ""
+                }
+                rpc_res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/rpc/match_transcript_chunks",
+                    headers=headers,
+                    json=rpc_payload,
+                    timeout=8
+                )
+                if rpc_res.ok:
+                    matches = rpc_res.json()
+                    if isinstance(matches, list) and len(matches) > 0:
+                        scored = []
+                        for m in matches:
+                            scored.append({
+                                **m,
+                                "similarity_score": round(float(m.get("similarity", 0.0)), 4)
+                            })
+                        return scored
+            except Exception as rpc_e:
+                print(f"[Supabase RPC] Vector search notice: {rpc_e}")
+
+        # 2. Fallback: Local store / REST download
         chunks_to_search = []
         if self.supabase_url and self.supabase_key:
             try:
@@ -385,8 +434,17 @@ class DBAdapter:
         if not chunks_to_search:
             return []
 
+        # Deduplicate candidates by chunk_index
+        seen_indices = set()
+        unique_chunks = []
+        for c in chunks_to_search:
+            idx = c.get("chunk_index", 0)
+            if idx not in seen_indices:
+                seen_indices.add(idx)
+                unique_chunks.append(c)
+
         scored_chunks = []
-        for chunk in chunks_to_search:
+        for chunk in unique_chunks:
             emb = chunk.get("embedding", [])
             if emb:
                 score = VectorEmbedder.cosine_similarity(query_embedding, emb)
@@ -399,25 +457,47 @@ class DBAdapter:
         return scored_chunks[:top_k]
 
     def get_all_chunks_for_lesson(self, lesson_id: str) -> List[Dict[str, Any]]:
-        """Retrieves all indexed chunks for a lesson, ordered chronologically by start_seconds."""
-        chunks = []
+        """Retrieves all indexed chunks for a lesson, deduplicated and ordered chronologically by start_seconds."""
+        raw_chunks = []
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
                 url = f"{self.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}&select=*&order=start_seconds.asc"
                 res = self.session.get(url, headers=headers, timeout=8)
                 if res.ok:
-                    chunks = res.json()
+                    raw_chunks = res.json()
             except Exception as e:
                 print(f"[Supabase] get_all_chunks_for_lesson error: {e}")
 
-        if not chunks:
-            store = self._read_local_store()
-            all_c = store.get("chunks", [])
-            chunks = [c for c in all_c if c.get("lesson_id") == lesson_id]
+        store = self._read_local_store()
+        local_chunks = [c for c in store.get("chunks", []) if c.get("lesson_id") == lesson_id]
 
-        chunks.sort(key=lambda x: x.get("start_seconds", 0))
-        return chunks
+        # Build local metadata index: chunk_index -> local metadata
+        local_meta_map = {c.get("chunk_index"): c for c in local_chunks if c.get("chunk_index")}
+
+        chunks_source = raw_chunks if raw_chunks else local_chunks
+
+        # Deduplicate by chunk_index while enriching with local metadata
+        seen_indices = set()
+        deduped = []
+        for c in chunks_source:
+            idx = c.get("chunk_index", 0)
+            if idx not in seen_indices:
+                seen_indices.add(idx)
+                # Merge local enrichments if available
+                enriched = dict(c)
+                if idx in local_meta_map:
+                    lm = local_meta_map[idx]
+                    if not enriched.get("topic_name") and lm.get("topic_name"):
+                        enriched["topic_name"] = lm.get("topic_name")
+                    if not enriched.get("key_concepts") and lm.get("key_concepts"):
+                        enriched["key_concepts"] = lm.get("key_concepts")
+                    if not enriched.get("hypothetical_questions") and lm.get("hypothetical_questions"):
+                        enriched["hypothetical_questions"] = lm.get("hypothetical_questions")
+                deduped.append(enriched)
+
+        deduped.sort(key=lambda x: x.get("start_seconds", 0.0))
+        return deduped
 
     def get_lesson(self, lesson_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves a single lesson from Supabase."""

@@ -1,7 +1,7 @@
 import json
 import re
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from backend.vector_embedder import VectorEmbedder
 from backend.db_adapter import DBAdapter
 
@@ -14,39 +14,103 @@ class RAGEngine:
         self.embedder = VectorEmbedder(gemini_api_key)
         self.generation_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
 
-    def _extract_temporal_seconds(self, query: str) -> Optional[int]:
+    STOP_WORDS = {
+        'hai', 'kya', 'in', 'the', 'a', 'an', 'sir', 'tell', 'explain', 'about',
+        'what', 'is', 'of', 'to', 'and', 'me', 'ke', 'ki', 'ka', 'ko', 'par',
+        'pe', 'tha', 'thi', 'se', 'kar', 'batao', 'bataiye', 'how', 'why', 'when',
+        'where', 'hua', 'kuch', 'bhi', 'karein', 'karta', 'hoti', 'hota', 'hain',
+        'or', 'for', 'with', 'be', 'do', 'does', 'did', 'this', 'that', 'it', 'at',
+        'ne', 'aap', 'hum', 'sirf', 'konsi', 'konsa', 'kisko', 'kis', 'kisi', 'kare',
+        'which', 'who', 'whom', 'whose', 'can', 'you', 'my', 'your', 'we',
+        'our', 'us', 'he', 'she', 'they', 'them', 'their', 'use', 'using', 'used',
+        'make', 'made', 'say', 'said', 'please', 'give', 'find', 'show', 'calculate',
+        'difference', 'between', 'question', 'doubt', 'lecture', 'video', 'class',
+        'course', 'topic', 'teacher', 'professor', 'time', 'minute', 'hour', 'second',
+        'rule', 'rules', 'algorithm', 'algorithms', 'step', 'steps', 'method', 'methods'
+    }
+
+    FOLLOW_UP_INDICATORS = {
+        'isme', 'usme', 'ise', 'use', 'ye', 'yeh', 'wo', 'woh', 'this', 'that',
+        'it', 'why', 'again', 'how so', 'above', 'previous', 'point', 'second',
+        'first', 'third', 'overhead', 'drawback', 'advantage', 'reason'
+    }
+
+    @staticmethod
+    def _format_timestamp(seconds: int) -> str:
+        """Formats seconds into [HH:MM:SS] if >= 1 hour, or [MM:SS] if < 1 hour."""
+        seconds = max(0, int(seconds))
+        h, rem = divmod(seconds, 3600)
+        m, s = divmod(rem, 60)
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    def _extract_time_range(self, query: str) -> Tuple[Optional[int], Optional[int]]:
         """
-        Extracts explicit timestamp references from student query in Hindi, Hinglish, or English.
-        Handles: '24 min', '24:00', '1 hour 15 min', 'minute 24', '24th minute', '01:23:45', etc.
+        Extracts timestamp intervals or points from student query across all video durations (10m to 4h).
+        Returns (start_seconds, end_seconds).
+        - '1st hour' / 'pehla ghanta' -> (0, 3600)
+        - '2nd hour' / 'doosra ghanta' -> (3600, 7200)
+        - '3rd hour' -> (7200, 10800)
+        - '4th hour' -> (10800, 14400)
+        - '1 se 2 ghante ke beech' -> (3600, 7200)
+        - 'between 2 and 3 hours' -> (7200, 10800)
+        - '5 se 8 minute ke beech' -> (300, 480)
+        - '02:15:30' -> (8130, 8130)
+        - '24 min' -> (1440, 1440)
+        - '03:10' -> (190, 190)
         """
         q = (query or "").lower().strip()
-        # 1. Format HH:MM:SS or MM:SS (e.g. "01:25:30", "24:00", "05:12")
-        m = re.search(r'\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b', q)
-        if m:
-            h, mn, s = m.groups()
-            return (int(h or 0) * 3600) + (int(mn) * 60) + int(s)
 
-        # 2. Format: X hour/hr/ghante Y min (e.g. "1 hour 15 min", "2 ghante 10 minute")
-        m = re.search(r'(\d+)\s*(?:hours?|hrs?|ghante?|h)\s*(?:and\s*)?(?:(\d+)\s*(?:mins?|minutes?|m\b))?', q)
-        if m:
-            h = int(m.group(1))
-            mn = int(m.group(2) or 0)
-            return (h * 3600) + (mn * 60)
+        # Check hour-related queries
+        if any(hw in q for hw in ('hour', 'ghanta', 'ghante', 'hr')):
+            # 1. Word & Number Ordinals: '1st hour', '2nd hour', 'first hour', 'second hour', '3rd hour', 'third hour', '4th hour', 'fourth hour'
+            word_ords = {'first': 1, '1st': 1, 'second': 2, '2nd': 2, 'third': 3, '3rd': 3, 'fourth': 4, '4th': 4}
+            for w, num in word_ords.items():
+                if re.search(r'\b' + w + r'\s*[- ]*(?:hour|ghanta|ghante|hr)\b', q):
+                    return ((num - 1) * 3600, num * 3600)
 
-        # 3. Format: X min / X minute / Xth min (e.g. "24 min", "24 minute", "24th min", "24m")
+            # 2. Multi-Hour Interval: '1 to 2 hours', '1 se 2 ghante', 'between 2 and 3 hours'
+            m_hr_range = re.search(r'(?:between\s*)?(\d+)\s*(?:to|se|-|and)\s*(\d+)\s*(?:hours?|hrs?|ghante?)', q)
+            if m_hr_range:
+                h1 = int(m_hr_range.group(1)) * 3600
+                h2 = int(m_hr_range.group(2)) * 3600
+                return (min(h1, h2), max(h1, h2))
+
+            # 3. Compound: X hour Y min (e.g. '2 hour 15 min', '1 ghanta 10 minute', '2-hour 15-min')
+            m_h_m = re.search(r'(\d+)\s*[- ]*(?:hours?|hrs?|ghante?|h)\s*(?:and\s*)?(\d+)\s*(?:mins?|minutes?|m\b)', q)
+            if m_h_m:
+                sec = int(m_h_m.group(1)) * 3600 + int(m_h_m.group(2)) * 60
+                return (sec, sec)
+
+            # 4. Point Hour: 'around the 2-hour mark', '2-hour mark', 'at the 2 hour mark', '2 hours', '2 ghante'
+            m_pt = re.search(r'(?:around|at|near)?\s*(\d+)\s*[- ]*(?:hours?|hrs?|ghante?|h)(?:\s*(?:mark|point))?', q)
+            if m_pt:
+                sec = int(m_pt.group(1)) * 3600
+                return (sec, sec)
+
+        # 5. Minute Interval: X se Y min / X to Y min / between X and Y mins
+        m = re.search(r'(?:between\s*)?(\d+)\s*(?:se|to|-|and)\s*(\d+)\s*(?:mins?|minutes?|m\b)', q)
+        if m:
+            s = int(m.group(1)) * 60
+            e = int(m.group(2)) * 60
+            return (min(s, e), max(s, e))
+
+        # 6. Specific minute point (e.g. "24 min", "24th min", "minute 24")
         m = re.search(r'(\d+)(?:st|nd|rd|th)?\s*(?:mins?|minutes?|m\b)', q)
         if m:
-            return int(m.group(1)) * 60
+            sec = int(m.group(1)) * 60
+            return (sec, sec)
 
-        # 4. Format: "minute 24" or "min 24"
         m = re.search(r'(?:minute|min)\s*(\d+)', q)
         if m:
-            return int(m.group(1)) * 60
+            sec = int(m.group(1)) * 60
+            return (sec, sec)
 
-        return None
+        return (None, None)
 
     def _is_overview_query(self, query: str) -> bool:
-        """Detects whether student is asking for a global lecture outline or summary across the full 4 hours."""
+        """Detects whether student is asking for a global lecture outline or summary across the full lecture."""
         q = (query or "").lower().strip()
         overview_terms = [
             "summary", "summarize", "overview", "outline", "syllabus", "roadmap",
@@ -57,6 +121,17 @@ class RAGEngine:
         ]
         return any(term in q for term in overview_terms)
 
+    def _is_reverse_temporal_query(self, query: str) -> bool:
+        """Detects if student is asking WHEN a topic was discussed (e.g. 'At what time was X explained?')."""
+        q = (query or "").lower().strip()
+        indicators = ["when was", "at what time", "which minute", "kab bataya", "kab sikhaya", "kis time pe", "kis minute"]
+        return any(ind in q for ind in indicators)
+
+    def _extract_domain_keywords(self, text: str) -> List[str]:
+        """Extracts significant non-stopword tokens from student query for keyword reranking."""
+        tokens = re.findall(r'\b[a-zA-Z_]{3,}\b', (text or "").lower())
+        return [t for t in tokens if t not in self.STOP_WORDS]
+
     def answer_query(
         self,
         query: str,
@@ -65,13 +140,15 @@ class RAGEngine:
     ) -> Dict[str, Any]:
         """
         Executes a high-precision, student-centric RAG query against the indexed lecture video.
-        - Supports exact temporal queries (e.g. '24 min pr kya hua tha').
-        - Supports global 4-hour roadmap/outline queries.
-        - Uses hybrid semantic + keyword reranking across 7-8 chunks for deep technical accuracy.
-        - Prompts Gemini with an empathetic, pedagogy-first persona and clickable [MM:SS] timestamps.
+        - Precision time-range & point timestamp extraction.
+        - Antecedent follow-up resolution using conversation history.
+        - Stopword-filtered domain keyword reranking.
+        - Strict abstention guardrails for out-of-scope inquiries.
+        - Clickable [MM:SS] video jump points.
         """
         lesson = self.db.get_lesson(lesson_id)
         lesson_title = lesson.get("title", "Lecture") if lesson else "Lecture"
+        course_id = lesson.get("course_id", "") if lesson else ""
 
         # Fetch all chronological chunks for this lecture
         all_chunks = self.db.get_all_chunks_for_lesson(lesson_id)
@@ -94,117 +171,170 @@ class RAGEngine:
         duration_mins = raw_duration // 60 if raw_duration else (len(all_chunks) * 2)
         total_chunks = len(all_chunks)
 
+        # Retrieve prior conversation context for this specific session
+        history_msgs = []
+        last_student_msg = ""
+        if hasattr(self.db, "get_chat_history") and session_id and session_id != "default-session":
+            raw_history = self.db.get_chat_history(session_id, limit=4)
+            for h in raw_history:
+                sender_label = "Student" if h.get("sender") == "student" else "Professor"
+                msg_snip = h.get("message", "").strip()[:500]  # Expand to 500 chars to avoid truncating technical code
+                history_msgs.append(f"- {sender_label}: {msg_snip}")
+                if h.get("sender") == "student" and not last_student_msg:
+                    last_student_msg = h.get("message", "").strip()
+
+        history_summary = "\n".join(history_msgs) if history_msgs else "New conversation session (no previous messages)."
+        safe_query = re.sub(r'[\r\n]+', ' ', (query or "").strip())[:1000]
+
+        # Follow-up query resolution: augment query with prior topic if pronoun/reference detected
+        search_query = safe_query
+        q_tokens = set(re.findall(r'\b[a-zA-Z0-9_]+\b', safe_query.lower()))
+        has_followup_marker = bool(q_tokens.intersection(self.FOLLOW_UP_INDICATORS))
+        if has_followup_marker and last_student_msg:
+            search_query = f"{last_student_msg} {safe_query}"
+
         # -------------------------------------------------------------
         # DURATION-ADAPTIVE RETRIEVAL STRATEGY:
-        # Tier 1 (<= 15 min, e.g. 10m): 100% Full-Video Context (zero blind spots)
+        # Tier 1 (<= 15 min, e.g. 10m): Focused window (4-8 chunks)
         # Tier 2 (15 - 60 min, e.g. 1h): Focused 6-Chunk Semantic Window
         # Tier 3 (1 - 2.5 hr, e.g. 2h): Deep 8-Chunk Hybrid Expansion
         # Tier 4 (2.5 - 5+ hr, e.g. 4h): Comprehensive 10-Chunk Hybrid + Chapter Roadmap
         # -------------------------------------------------------------
         if duration_mins <= 15 or total_chunks <= 8:
-            duration_tier = "MICRO_LESSON"  # 10 min
-            top_k_target = total_chunks     # Full 100% transcript passed to Gemini
+            duration_tier = "MICRO_LESSON"
+            top_k_target = min(4, total_chunks)
         elif duration_mins <= 60 or total_chunks <= 35:
-            duration_tier = "STANDARD_LECTURE"  # 1 hour
+            duration_tier = "STANDARD_LECTURE"
             top_k_target = min(6, total_chunks)
         elif duration_mins <= 150 or total_chunks <= 75:
-            duration_tier = "EXTENDED_LECTURE"  # 2 hours
+            duration_tier = "EXTENDED_LECTURE"
             top_k_target = min(8, total_chunks)
         else:
-            duration_tier = "MARATHON_MASTERCLASS"  # 4+ hours
+            duration_tier = "MARATHON_MASTERCLASS"
             top_k_target = min(10, total_chunks)
 
-        # Check for temporal intent (e.g. "24 min pr kya hua tha")
-        target_seconds = self._extract_temporal_seconds(query)
-        is_overview = self._is_overview_query(query)
+        # Check for temporal intent & intervals
+        range_start, range_end = self._extract_time_range(safe_query)
+        is_overview = self._is_overview_query(safe_query)
+        is_reverse_temporal = self._is_reverse_temporal_query(safe_query)
 
         retrieved_chunks = []
         query_mode = "semantic"
 
-        if target_seconds is not None:
-            # --- 1. TEMPORAL RETRIEVAL ---
+        if range_start is not None and range_end is not None:
+            # --- 1. TEMPORAL RANGE / POINT RETRIEVAL ---
             query_mode = "temporal"
-            best_idx = 0
-            min_dist = float("inf")
+            # Bounds check against video duration
+            max_duration = max((c.get("end_seconds", 0) for c in all_chunks), default=0)
+            if max_duration > 0 and range_start > (max_duration + 60):
+                formatted_ts = self._format_timestamp(range_start)
+                formatted_max = self._format_timestamp(max_duration)
+                return {
+                    "answer": f"⚠️ **Timestamp Beyond Video Duration:** The requested timestamp [{formatted_ts}] is beyond the end of this lecture video (Total length: ~{formatted_max}).\n\nPlease check the timestamp and ask questions about the material covered within this video!",
+                    "retrieved_evidence": [],
+                    "video_timestamps": []
+                }
+
+            # Find all chunks overlapping with [range_start, range_end]
+            matching_indices = []
             for idx, c in enumerate(all_chunks):
                 s = c.get("start_seconds", 0)
                 e = c.get("end_seconds", 0)
-                if s <= target_seconds <= e:
-                    best_idx = idx
-                    min_dist = 0
-                    break
-                dist = min(abs(s - target_seconds), abs(e - target_seconds))
-                if dist < min_dist:
-                    min_dist = dist
-                    best_idx = idx
+                if s <= range_end and e >= range_start:
+                    matching_indices.append(idx)
 
-            # Dynamic Temporal Window:
-            # Short video: 1 chunk before/after; 4-hour video: 2 chunks before/after for broad conversational context
-            pad = 2 if duration_tier in ("EXTENDED_LECTURE", "MARATHON_MASTERCLASS") else 1
-            start_i = max(0, best_idx - pad)
-            end_i = min(len(all_chunks), best_idx + pad + 2)
-            retrieved_chunks = all_chunks[start_i:end_i]
+            if not matching_indices:
+                # Find single nearest chunk
+                best_idx = min(range(len(all_chunks)), key=lambda i: abs(all_chunks[i].get("start_seconds", 0) - range_start))
+                matching_indices = [best_idx]
+
+            # Context window: Pad ±1 chunk
+            min_i = max(0, min(matching_indices) - 1)
+            max_i = min(len(all_chunks), max(matching_indices) + 2)
+            retrieved_chunks = all_chunks[min_i:max_i]
             for c in retrieved_chunks:
                 c["similarity_score"] = 0.99
 
         elif is_overview:
             # --- 2. GLOBAL OVERVIEW / ROADMAP RETRIEVAL ---
             query_mode = "overview"
-            if duration_tier == "MICRO_LESSON":
-                retrieved_chunks = list(all_chunks)
-            else:
-                step = max(1, len(all_chunks) // 10)
-                retrieved_chunks = all_chunks[::step][:10]
+            step = max(1, len(all_chunks) // 8)
+            retrieved_chunks = all_chunks[::step][:8]
             for c in retrieved_chunks:
                 c["similarity_score"] = 0.95
 
-        elif duration_tier == "MICRO_LESSON":
-            # --- 3A. 10-MINUTE VIDEO: FULL CONTEXT (Zero Blind Spots) ---
-            query_mode = "full_video"
-            retrieved_chunks = list(all_chunks)
-            for c in retrieved_chunks:
-                c["similarity_score"] = 1.0
-
         else:
-            # --- 3B. 1-HR, 2-HR & 4-HR VIDEOS: HYBRID SEMANTIC + CONCEPT RERANKING ---
-            query_emb = self.embedder.get_embedding(query)
-            q_tokens = set(re.findall(r'\w+', query.lower()))
+            # --- 3. HYBRID SEMANTIC + DOMAIN KEYWORD RERANKING ---
+            query_emb = self.embedder.get_embedding(search_query)
+            domain_tokens = set(self._extract_domain_keywords(search_query))
+
+            # Fetch candidates from indexed pgvector RPC first
+            rpc_matches = self.db.search_similar_chunks(
+                query_embedding=query_emb,
+                lesson_id=lesson_id,
+                course_id=course_id,
+                top_k=max(top_k_target * 2, 12)
+            )
+
+            # Map candidates by chunk_index
+            candidates = rpc_matches if rpc_matches else all_chunks
 
             scored_chunks = []
-            for c in all_chunks:
+            for c in candidates:
                 emb = c.get("embedding", [])
-                cos_sim = self.embedder.cosine_similarity(query_emb, emb) if emb else 0.0
+                cos_sim = c.get("similarity_score")
+                if cos_sim is None:
+                    cos_sim = self.embedder.cosine_similarity(query_emb, emb) if emb else 0.0
 
-                concept_text = " ".join([
-                    c.get("topic_name", ""),
-                    " ".join(c.get("key_concepts", []) or []),
-                    " ".join(c.get("hypothetical_questions", []) or []),
-                    c.get("cleaned_text", "")[:300]
-                ]).lower()
-                c_tokens = set(re.findall(r'\w+', concept_text))
-                overlap = len(q_tokens.intersection(c_tokens))
-                kw_bonus = min(overlap * 0.05, 0.25)
+                # Weighted Domain Keyword Matching:
+                topic_txt = (c.get("topic_name") or "").lower()
+                concepts_txt = " ".join(c.get("key_concepts") or []).lower()
+                body_txt = (c.get("cleaned_text") or c.get("chunk_text") or "")[:400].lower()
 
-                final_score = (cos_sim * 0.75) + kw_bonus
+                kw_score = 0.0
+                for token in domain_tokens:
+                    if token in topic_txt:
+                        kw_score += 0.12
+                    elif token in concepts_txt:
+                        kw_score += 0.09
+                    elif token in body_txt:
+                        kw_score += 0.04
+
+                kw_bonus = min(kw_score, 0.30)
+                final_score = (float(cos_sim) * 0.70) + kw_bonus
+
                 scored_chunks.append({
                     **c,
-                    "similarity_score": round(final_score, 4)
+                    "similarity_score": round(final_score, 4),
+                    "raw_cos_sim": round(float(cos_sim), 4),
+                    "kw_bonus": round(kw_bonus, 4)
                 })
 
             scored_chunks.sort(key=lambda x: x["similarity_score"], reverse=True)
             retrieved_chunks = scored_chunks[:top_k_target]
 
+            # --- 4. ABSTENTION GUARDRAIL FOR OUT-OF-SCOPE QUESTIONS ---
+            max_sim = max((c["raw_cos_sim"] for c in scored_chunks), default=0.0)
+            max_kw = max((c["kw_bonus"] for c in scored_chunks), default=0.0)
+
+            # If semantic similarity is under 0.53 and zero domain keywords match
+            if max_sim < 0.53 and max_kw < 0.05 and not has_followup_marker:
+                return {
+                    "answer": f"⚠️ **Topic Not Discussed:** The professor does not discuss or cover \"{safe_query}\" in this lecture (Yeh topic is lecture me cover nahi kiya gaya hai).\n\nThis lecture focuses strictly on **{lesson_title}**. Please feel free to ask questions about the concepts taught in this class!",
+                    "retrieved_evidence": [],
+                    "video_timestamps": []
+                }
+
         # 3. Assemble Grounded Context
         context_blocks = []
         for i, c in enumerate(retrieved_chunks):
-            start_m, start_s = divmod(int(c.get('start_seconds', 0)), 60)
-            end_m, end_s = divmod(int(c.get('end_seconds', 0)), 60)
-            ts_badge = f"{start_m:02d}:{start_s:02d}"
+            start_ts = self._format_timestamp(c.get('start_seconds', 0))
+            end_ts = self._format_timestamp(c.get('end_seconds', 0))
 
             block = (
                 f"--- EVIDENCE SEGMENT #{i+1} ---\n"
                 f"Topic: {c.get('topic_name', 'Concept')}\n"
-                f"Timestamp: [{ts_badge}] ({c.get('start_seconds', 0)}s - {c.get('end_seconds', 0)}s)\n"
+                f"Timestamp: [{start_ts}] ({c.get('start_seconds', 0)}s - {c.get('end_seconds', 0)}s)\n"
                 f"Speaker: {c.get('speaker_label', 'Teacher')}\n"
                 f"Key Concepts: {', '.join(c.get('key_concepts', []) or [])}\n"
                 f"Transcript Content:\n{c.get('cleaned_text', c.get('chunk_text', ''))}\n"
@@ -213,42 +343,54 @@ class RAGEngine:
 
         context_str = "\n".join(context_blocks)
 
-        # Build 4-Hour Course Chapters Outline if overview mode
+        # Build Course Chapters Outline evenly sampled across full lecture duration (1h, 2h, 3h, 4h)
         roadmap_str = ""
-        if is_overview or len(all_chunks) > 10:
+        if is_overview or len(all_chunks) > 8:
             outline_lines = []
-            for c in all_chunks[:30]:  # Up to 30 main chapters
-                sm, ss = divmod(int(c.get("start_seconds", 0)), 60)
-                outline_lines.append(f"- [{sm:02d}:{ss:02d}] {c.get('topic_name', 'Lecture Section')}")
+            if len(all_chunks) <= 25:
+                sampled = all_chunks
+            else:
+                stride = (len(all_chunks) - 1) / 24.0
+                indices = sorted(list({int(round(i * stride)) for i in range(25)}))
+                sampled = [all_chunks[idx] for idx in indices if idx < len(all_chunks)]
+
+            for c in sampled:
+                ts_str = self._format_timestamp(c.get("start_seconds", 0))
+                topic = c.get('topic_name', 'Lecture Section')
+                outline_lines.append(f"- [{ts_str}] {topic}")
             roadmap_str = "\n".join(outline_lines)
-
-        # 3b. Retrieve prior conversation context for this specific session
-        history_msgs = []
-        if hasattr(self.db, "get_chat_history") and session_id and session_id != "default-session":
-            raw_history = self.db.get_chat_history(session_id, limit=4)
-            for h in raw_history:
-                sender_label = "Student" if h.get("sender") == "student" else "Professor"
-                msg_snip = h.get("message", "").strip()[:180]
-                history_msgs.append(f"- {sender_label}: {msg_snip}")
-
-        history_summary = "\n".join(history_msgs) if history_msgs else "New conversation session (no previous messages)."
-        safe_query = re.sub(r'[\r\n]+', ' ', (query or "").strip())[:1000]
 
         # Mode-specific instruction banner
         mode_instruction = ""
-        if query_mode == "temporal":
-            target_m, target_s = divmod(target_seconds, 60)
-            mode_instruction = f"""
-🚨 TEMPORAL TIMESTAMP QUERY DETECTED:
-The student specifically asked about what happens at timestamp: [{target_m:02d}:{target_s:02d}] ({target_seconds} seconds).
-1. IMMEDIATELY in your very first sentence, state what the professor is explaining, demonstrating, or coding at minute {target_m}:{target_s:02d}.
-2. Use the exact transcript evidence from that segment to provide a complete, crystal-clear explanation.
+        if query_mode == "temporal" and range_start is not None:
+            start_badge = self._format_timestamp(range_start)
+            end_badge = self._format_timestamp(range_end)
+            if range_start == range_end:
+                mode_instruction = f"""
+🚨 EXACT TIMESTAMP QUERY DETECTED:
+The student specifically asked about what happens at timestamp: [{start_badge}] ({range_start} seconds).
+1. IMMEDIATELY in your very first sentence, state what the professor is explaining or demonstrating at [{start_badge}].
+2. Use the exact transcript evidence from that segment to provide a complete explanation.
+"""
+            else:
+                mode_instruction = f"""
+🚨 TIME INTERVAL QUERY DETECTED:
+The student specifically asked about the interval from [{start_badge}] to [{end_badge}] ({range_start}s to {range_end}s).
+1. IMMEDIATELY in your very first sentence, summarize what was taught during this specific time span ({start_badge} - {end_badge}).
+2. Detail the topics discussed chronologically across this interval.
+"""
+        elif is_reverse_temporal:
+            mode_instruction = """
+⏱️ REVERSE TEMPORAL QUERY DETECTED:
+The student wants to know WHEN a concept was explained.
+1. State the exact timestamp in the first sentence: "The professor explained [Topic] at timestamp [MM:SS]..."
+2. Explain the concept and attach the video jump point.
 """
         elif query_mode == "overview":
             mode_instruction = f"""
-📋 GLOBAL 4-HOUR LECTURE OVERVIEW QUERY:
-The student asked for an overview/summary of the whole lecture.
-Use the course chapter outline below to provide a structured, chronological roadmap of the full 4 hours:
+📋 GLOBAL LECTURE OVERVIEW QUERY:
+The student asked for an overview/summary of the lecture.
+Use the course chapter outline below to provide a structured, chronological roadmap:
 {roadmap_str}
 """
 
