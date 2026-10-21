@@ -573,7 +573,7 @@ async def stream_lesson_video(
         )
 
     # --- 2. RATE LIMIT CHECK ---
-    allowed, retry_after = check_rate_limit(client_ip, f"stream_{lesson_id}", max_requests=120, window_seconds=60)
+    allowed, retry_after = check_rate_limit(client_ip, f"stream_{lesson_id}", max_requests=360, window_seconds=60)
     if not allowed:
         raise HTTPException(status_code=429, detail=f"Streaming rate limit reached. Please wait {retry_after} seconds.")
 
