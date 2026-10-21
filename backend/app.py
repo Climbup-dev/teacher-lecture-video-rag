@@ -858,7 +858,12 @@ def chat_query(req: ChatRequest):
         raise HTTPException(status_code=400, detail="Gemini API Key is not configured.")
 
     try:
-        engine = RAGEngine(Config.GEMINI_API_KEY, db)
+        engine = RAGEngine(
+            Config.GEMINI_API_KEY,
+            db,
+            groq_api_key=Config.GROQ_API_KEY,
+            groq_model=Config.GROQ_MODEL
+        )
         response = engine.answer_query(
             query=req.query,
             lesson_id=req.lesson_id,

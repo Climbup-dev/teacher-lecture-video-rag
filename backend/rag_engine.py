@@ -4,15 +4,17 @@ import requests
 from typing import Dict, Any, List, Optional, Tuple
 from backend.vector_embedder import VectorEmbedder
 from backend.db_adapter import DBAdapter
+from backend.groq_intelligence import GroqIntelligence
 
 class RAGEngine:
-    def __init__(self, gemini_api_key: str, db_adapter: DBAdapter):
+    def __init__(self, gemini_api_key: str, db_adapter: DBAdapter, groq_api_key: Optional[str] = None, groq_model: Optional[str] = None):
         if not gemini_api_key:
             raise ValueError("Gemini API Key is required.")
         self.api_key = gemini_api_key
         self.db = db_adapter
         self.embedder = VectorEmbedder(gemini_api_key)
         self.generation_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
+        self.groq = GroqIntelligence(api_key=groq_api_key, model=groq_model)
 
     STOP_WORDS = {
         'hai', 'kya', 'in', 'the', 'a', 'an', 'sir', 'tell', 'explain', 'about',
@@ -218,6 +220,61 @@ class RAGEngine:
         is_overview = self._is_overview_query(safe_query)
         is_reverse_temporal = self._is_reverse_temporal_query(safe_query)
 
+        # -------------------------------------------------------------
+        # GROQ QUERY INTELLIGENCE & INTENT ROUTING
+        # -------------------------------------------------------------
+        groq_keywords = []
+        if hasattr(self, "groq") and self.groq.is_available:
+            lesson_overview = ""
+            if all_chunks:
+                sample_topics = [c.get("topic_name", "") for c in all_chunks[:6] if c.get("topic_name")]
+                sample_concepts = [c.get("key_concepts", "") for c in all_chunks[:6] if c.get("key_concepts")]
+                lesson_overview = f"Topics: {', '.join(sample_topics)}. Concepts: {', '.join(sample_concepts)}"
+
+            groq_analysis = self.groq.analyze_query(
+                query=safe_query,
+                lesson_title=lesson_title,
+                lesson_overview=lesson_overview,
+                chat_history=raw_history if 'raw_history' in locals() else None
+            )
+
+            if groq_analysis:
+                # 1. OUT OF SCOPE / IRRELEVANT QUERY WITH HELPFUL DIRECT ANSWER
+                if groq_analysis.get("is_lecture_related") is False:
+                    direct_ans = (groq_analysis.get("out_of_scope_direct_answer") or "").strip()
+                    if direct_ans:
+                        warning_msg = (
+                            "> ⚠️ **Note:** Yeh sawaal is lecture video ke topics se sambandhit nahi hai. Kripya video lecture aur uske concepts se jude doubts poochein!\n\n"
+                            "---\n\n"
+                            f"### 💡 Answer:\n{direct_ans}"
+                        )
+                    else:
+                        warning_msg = (
+                            f"⚠️ **Topic Not Discussed:** Yeh sawaal is lecture video ke topics se direct sambandhit nahi hai.\n\n"
+                            f"Yeh lecture **{lesson_title}** par focused hai. Kripya video lecture aur uske concepts se jude doubts poochein!"
+                        )
+                    return {
+                        "answer": warning_msg,
+                        "retrieved_evidence": [],
+                        "video_timestamps": []
+                    }
+
+                # 2. TEMPORAL BOUNDS EXTRACTED BY GROQ
+                time_range = groq_analysis.get("time_range")
+                if time_range and isinstance(time_range, dict):
+                    t_start = time_range.get("start_seconds")
+                    t_end = time_range.get("end_seconds")
+                    if t_start is not None and t_end is not None:
+                        range_start, range_end = int(t_start), int(t_end)
+
+                # 3. QUERY REWRITING FOR DENSE EMBEDDING
+                opt_dense_q = (groq_analysis.get("optimized_dense_query") or "").strip()
+                if opt_dense_q:
+                    search_query = opt_dense_q
+
+                # 4. KEYWORDS FOR SPARSE MATCHING
+                groq_keywords = [k.lower().strip() for k in (groq_analysis.get("extracted_keywords") or []) if k.strip()]
+
         retrieved_chunks = []
         query_mode = "semantic"
 
@@ -267,6 +324,8 @@ class RAGEngine:
             # --- 3. HYBRID SEMANTIC + DOMAIN KEYWORD RERANKING ---
             query_emb = self.embedder.get_embedding(search_query)
             domain_tokens = set(self._extract_domain_keywords(search_query))
+            if groq_keywords:
+                domain_tokens.update(groq_keywords)
 
             # Fetch candidates from indexed pgvector RPC first
             rpc_matches = self.db.search_similar_chunks(

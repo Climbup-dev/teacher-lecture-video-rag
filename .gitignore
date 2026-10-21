@@ -38,6 +38,9 @@ data/chunks/local_store.json
 tests/*_results.json
 tests/*_samples.json
 tests/test_1000_questions.py
+tests/test_groq*.py
+tests/test_out_of_scope.py
+tests/test_live_groq_rag.py
 tests/test_rag_baseline.py
 tests/generate_live_qa_samples.py
 
