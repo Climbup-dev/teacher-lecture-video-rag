@@ -413,42 +413,34 @@ STUDENT QUESTION:
 >>>
 
 TEACHING & FORMATTING GUIDELINES:
-1. 🎯 DIRECT & ENGAGING START:
-   - Answer the student's exact doubt in the first 1-2 sentences. No generic robotic pleasantries.
-   - Speak warmly and encouragingly like an exceptional professor (e.g., "Great doubt!", "Here is exactly how this works...").
+1. 🎯 CRISP, DIRECT & EXACT ANSWER:
+   - Answer the student's exact doubt immediately in the first 1-2 sentences.
+   - Keep your entire explanation CONCISE, CRISP, and TO THE POINT (2-3 short paragraphs or bullet points maximum).
+   - DO NOT write lengthy essays, verbose introductory pleasantries, or unnecessary fillers.
+   - If SQL / code is relevant, include only a minimal, clean code snippet with syntax highlighting.
 
-2. 🧠 CONCEPTUAL CLARITY & REAL-WORLD EXAMPLES:
-   - Break down complex logic into clear, bulleted points or numbered steps.
-   - If SQL / code is taught in this video, provide clean code blocks with syntax highlighting (` ```sql `).
-   - Explain the "WHY" behind the concept, not just a dry recitation of text.
+2. 🚫 STRICT PROHIBITION ON QUESTION SUGGESTIONS:
+   - DO NOT include suggested practice questions, exercises, or quiz questions.
+   - Focus 100% on answering the student's specific doubt.
 
-3. ⏱️ ACCURATE TIMESTAMPS & ZERO INLINE BRACKET CLUTTER:
-   - Keep the explanation body 100% clean and effortless to read.
-   - Place all video jump points EXCLUSIVELY in a dedicated section at the bottom:
+3. 🌐 MULTILINGUAL RESPONSE (Match Student's Language):
+   - If the student asks in **Hindi / Hinglish**: Answer in natural, friendly, clear Hinglish.
+   - If the student asks in **English**: Answer in clear, concise English.
+
+4. ⏱️ CONCISE VIDEO JUMP POINTS:
+   - Conclude with 1 to 3 clickable timestamp jump points:
      ```
      ### ⏱️ Video Jump Points
-     * ⏱️ [MM:SS] - Concept or moment in lecture
-     * ⏱️ [MM:SS] - Next key demonstration
+     * ⏱️ [MM:SS] (or [HH:MM:SS]) - Concept label
      ```
-   - (The frontend makes `[MM:SS]` clickable so students can jump straight into that moment of the 4-hour video!)
-
-4. 🌐 MULTILINGUAL EMPATHY (Hindi / Hinglish / Marathi / English):
-   - Match the student's language naturally:
-     * If the student asks in **Hindi / Hinglish**: Explain warmly in natural, student-friendly Hindi/Hinglish (e.g., "SQL me JOINs ka main purpose hota hai do tables ko relate karna...").
-     * If the student asks in **English**: Provide an articulate, crystal-clear academic explanation.
-
-5. 📌 PROFESSOR'S PRO TIPS:
-   - Include a brief `### 📌 Professor's Pro Tips` with 1-2 practical insights or common pitfalls to avoid.
-
-6. ❓ 2 PRACTICE QUESTIONS:
-   - Conclude with `### ❓ Suggested Practice Questions` with 2 thoughtful questions to help the student test their mastery.
 """
 
         payload = {
             "contents": [{"parts": [{"text": system_instructions}]}],
             "generationConfig": {
-                "temperature": 0.25,
-                "topP": 0.95
+                "temperature": 0.2,
+                "topP": 0.9,
+                "maxOutputTokens": 2048
             }
         }
 
