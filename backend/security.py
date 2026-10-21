@@ -132,6 +132,7 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
     ua = (headers.get("user-agent") or "").lower().strip()
     sec_fetch_dest = (headers.get("sec-fetch-dest") or "").lower().strip()
     sec_fetch_mode = (headers.get("sec-fetch-mode") or "").lower().strip()
+    client_ip = get_client_ip(request)
 
     # 1. Check known scraper / downloader user agents
     for tool in BLOCKED_TOOL_SUBSTRINGS:
@@ -139,10 +140,19 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
             return "BLOCKED_DOWNLOADER_TOOL", f"Known downloader tool '{tool}' detected in User-Agent ({ua[:60]})."
 
     # 2. Check direct browser address-bar download or 'Save Link As'
-    # HTML5 video elements use sec-fetch-dest: 'video' or 'audio' or 'empty', mode: 'no-cors' or 'cors'
-    # Direct browser tab opening or download uses sec-fetch-dest: 'document' and sec-fetch-mode: 'navigate'
     if sec_fetch_dest == "document" and sec_fetch_mode == "navigate":
         return "DIRECT_URL_DOWNLOAD_ATTEMPT", "Direct browser navigation/download attempted outside authorized video player."
+
+    # 3. Check for Chrome Extension / Multi-threaded Chunk Dumping (More than 8 chunk requests in 3 seconds)
+    dump_allowed, retry_after = check_rate_limit(client_ip, "chunk_dumping_defense", max_requests=8, window_seconds=3)
+    if not dump_allowed:
+        return "BULK_CHUNK_DUMPING_DETECTED", f"Automated parallel chunk dumping detected (exceeded 8 chunks/3s). Throttled for {retry_after}s."
+
+    # 4. Check for browser extension background download triggers
+    if sec_fetch_dest == "empty" and not headers.get("range") and not headers.get("x-climbup-player"):
+        accept = (headers.get("accept") or "").lower()
+        if "video" not in accept and not request.query_params.get("st"):
+            return "EXTENSION_DOWNLOAD_ATTEMPT", "External extension background download intercepted."
 
     return None
 
