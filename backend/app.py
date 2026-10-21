@@ -34,6 +34,12 @@ from backend.db_adapter import DBAdapter
 from backend.rag_engine import RAGEngine
 from backend.google_drive import GoogleDriveManager
 from backend.job_manager import get_job_manager
+from backend.security import (
+    detect_download_attempt,
+    get_client_ip,
+    generate_signed_stream_token,
+    verify_signed_stream_token
+)
 
 # Configure structured production logging
 logging.basicConfig(
@@ -462,18 +468,16 @@ def verify_supabase_user_and_enrollment(
     return {"user_id": user_id, "user": user_data}
 
 
-@app.api_route("/api/lessons/{lesson_id}/stream", methods=["GET", "HEAD"])
-async def stream_lesson_video(
+@app.post("/api/lessons/{lesson_id}/stream-token")
+async def create_lesson_stream_token(
     lesson_id: str,
     request: Request,
     token: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None)
 ):
     """
-    Secure Video Streaming Endpoint:
-    - Verifies student identity and course enrollment against Supabase.
-    - Supports HTTP Range requests (206 Partial Content) and HEAD requests for seeking.
-    - Streams byte ranges directly from private Google Drive or local storage without buffering full video in RAM.
+    Generates a cryptographically signed one-time stream token (HMAC-SHA256, 5-minute expiry).
+    Guarantees that video links cannot be copied, shared, or passed to external download tools.
     """
     reload_config()
     lesson = db.get_lesson(lesson_id)
@@ -482,15 +486,114 @@ async def stream_lesson_video(
 
     course_id = lesson.get("course_id")
     is_free_preview = bool(lesson.get("is_free_preview", False))
+    client_ip = get_client_ip(request)
 
-    # Perform authorization check if not a free preview lesson
-    if not is_free_preview and (token or authorization):
+    user_id = "anonymous_preview"
+    if not is_free_preview:
+        if not token and not authorization:
+            raise HTTPException(status_code=401, detail="Authentication required to request a secure stream token.")
+        auth_data = verify_supabase_user_and_enrollment(authorization, token, course_id)
+        user_id = auth_data.get("user_id", "enrolled_student")
+
+    signed_token = generate_signed_stream_token(
+        lesson_id=lesson_id,
+        user_id=user_id,
+        client_ip=client_ip,
+        ttl_seconds=300
+    )
+    return {
+        "status": "success",
+        "lesson_id": lesson_id,
+        "signed_token": signed_token,
+        "expires_in_seconds": 300
+    }
+
+
+@app.api_route("/api/lessons/{lesson_id}/stream", methods=["GET", "HEAD"])
+async def stream_lesson_video(
+    lesson_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    st: Optional[str] = Query(None)
+):
+    """
+    Hardened Video Streaming Endpoint:
+    - Blocks all known download tools (IDM, Wget, curl, yt-dlp, scrapers).
+    - Blocks direct address bar / 'Save Link As' browser downloads.
+    - Validates short-lived HMAC signed tokens (5-minute expiry) or verified session tokens.
+    - Logs every unauthorized download attempt to the Admin Threat Tracker.
+    - Streams byte ranges directly from private storage without buffering in memory.
+    """
+    reload_config()
+    lesson = db.get_lesson(lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+
+    client_ip = get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
+    course_id = lesson.get("course_id")
+    is_free_preview = bool(lesson.get("is_free_preview", False))
+
+    # --- 1. ANTI-SCRAPER & DOWNLOAD TOOL DEFENSE ---
+    threat = detect_download_attempt(request)
+    if threat:
+        threat_type, threat_details = threat
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title=lesson.get("title", "Lecture Video"),
+            threat_type=threat_type,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            details=threat_details
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Security Alert: Automated downloader tools and direct downloads are strictly prohibited. Attempt logged for instructor review."
+        )
+
+    # --- 2. AUTHENTICATION & TOKEN VERIFICATION ---
+    verified_user_id = None
+    if st:
+        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+        if not is_valid:
+            db.log_security_threat(
+                lesson_id=lesson_id,
+                lesson_title=lesson.get("title", "Lecture Video"),
+                threat_type="EXPIRED_OR_INVALID_STREAM_TOKEN",
+                ip_address=client_ip,
+                user_agent=user_agent,
+                details=err_reason
+            )
+            raise HTTPException(status_code=403, detail=f"Signed stream token invalid or expired: {err_reason}")
+        verified_user_id = uid
+    elif not is_free_preview:
+        if not token and not authorization:
+            db.log_security_threat(
+                lesson_id=lesson_id,
+                lesson_title=lesson.get("title", "Lecture Video"),
+                threat_type="UNAUTHORIZED_ACCESS_ATTEMPT",
+                ip_address=client_ip,
+                user_agent=user_agent,
+                details="Attempted direct stream without authentication token."
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required to stream this protected lecture video."
+            )
         try:
-            verify_supabase_user_and_enrollment(authorization, token, course_id)
+            auth_info = verify_supabase_user_and_enrollment(authorization, token, course_id)
+            verified_user_id = auth_info.get("user_id")
         except HTTPException as he:
-            if he.status_code == 403:
-                raise he
-            print(f"[Stream Auth Notice]: Stream auth verification: {he.detail}")
+            db.log_security_threat(
+                lesson_id=lesson_id,
+                lesson_title=lesson.get("title", "Lecture Video"),
+                threat_type="ENROLLMENT_VERIFICATION_FAILED",
+                ip_address=client_ip,
+                user_agent=user_agent,
+                details=he.detail
+            )
+            raise he
 
     video_url = lesson.get("video_url", "").strip()
     range_header = request.headers.get("Range")
@@ -589,6 +692,23 @@ async def stream_drive_file(
     if not clean_id or not drive_mgr.is_configured():
         raise HTTPException(status_code=400, detail="Google Drive storage service not configured.")
 
+    threat = detect_download_attempt(request)
+    if threat:
+        threat_type, threat_details = threat
+        client_ip = get_client_ip(request)
+        db.log_security_threat(
+            lesson_id=clean_id,
+            lesson_title="Direct Drive Media",
+            threat_type=threat_type,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details=threat_details
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Security Alert: Automated downloader tools and direct downloads are strictly prohibited."
+        )
+
     if not token and not authorization:
         raise HTTPException(status_code=401, detail="Authentication required to stream protected video.")
 
@@ -604,6 +724,24 @@ async def stream_drive_file(
     except Exception as e:
         print(f"[Streaming Error] stream_drive_file error: {e}")
         raise HTTPException(status_code=502, detail="Failed to stream media from Google Drive storage.")
+
+
+@app.get("/api/admin/security/alerts")
+def get_security_alerts(limit: int = 50):
+    """Admin endpoint to inspect live blocked download attempts, scrapers, and unauthorized viewers."""
+    threats = db.get_security_threats(limit=limit)
+    return {
+        "status": "success",
+        "total_threats": len(threats),
+        "threats": threats
+    }
+
+
+@app.post("/api/admin/security/alerts/clear")
+def clear_security_alerts():
+    """Admin endpoint to clear threat logs."""
+    db.clear_security_threats()
+    return {"status": "success", "message": "Security threat logs cleared."}
 
 class InitDriveUploadRequest(BaseModel):
     filename: str

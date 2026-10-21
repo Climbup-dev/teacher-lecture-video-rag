@@ -1173,5 +1173,76 @@ class DBAdapter:
         jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return jobs[:limit]
 
+    def log_security_threat(
+        self,
+        lesson_id: str,
+        lesson_title: str,
+        threat_type: str,
+        ip_address: str,
+        user_agent: str,
+        user_id: Optional[str] = None,
+        user_email: Optional[str] = None,
+        details: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Records an illegal download attempt or scraper activity."""
+        import datetime
+        threat_id = f"threat_{uuid.uuid4().hex[:12]}"
+        record = {
+            "id": threat_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "lesson_id": lesson_id,
+            "lesson_title": lesson_title,
+            "threat_type": threat_type,
+            "ip_address": ip_address,
+            "user_agent": (user_agent or "")[:250],
+            "user_id": user_id or "anonymous",
+            "user_email": user_email or "unknown",
+            "details": details or "",
+            "action_taken": "BLOCKED_403"
+        }
+
+        store = self._read_local_store()
+        if "security_threats" not in store:
+            store["security_threats"] = []
+        store["security_threats"].insert(0, record)
+        store["security_threats"] = store["security_threats"][:500]
+        self._write_local_store(store)
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                self.session.post(
+                    f"{self.supabase_url}/rest/v1/security_threat_logs",
+                    headers=headers,
+                    json=record,
+                    timeout=5
+                )
+            except Exception:
+                pass
+
+        return record
+
+    def get_security_threats(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieves recent security threats for admin dashboard."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/security_threat_logs?select=*&order=timestamp.desc&limit={limit}"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok and isinstance(res.json(), list) and len(res.json()) > 0:
+                    return res.json()
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        return store.get("security_threats", [])[:limit]
+
+    def clear_security_threats(self) -> bool:
+        """Clears security threat records."""
+        store = self._read_local_store()
+        store["security_threats"] = []
+        self._write_local_store(store)
+        return True
+
 
 
