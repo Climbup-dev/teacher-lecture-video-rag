@@ -711,6 +711,123 @@ async def stream_lesson_video(
     raise HTTPException(status_code=404, detail="Video media source not found or format unsupported.")
 
 
+# --- ENCRYPTED HLS ANTI-PIRACY STREAMING (Udemy/Hotstar grade AES-128) ---
+@app.get("/api/lessons/{lesson_id}/hls/master.m3u8")
+async def get_lesson_hls_playlist(
+    lesson_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    st: Optional[str] = Query(None)
+):
+    """
+    Serves AES-128 encrypted HLS playlist.
+    If HLS directory exists for lesson_id, returns master.m3u8 with tokenized key URI.
+    If not yet transcoded to HLS, returns 404 so client cleanly falls back to progressive stream.
+    """
+    hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
+    playlist_file = hls_dir / "master.m3u8"
+    if not playlist_file.exists():
+        raise HTTPException(status_code=404, detail="HLS stream not yet packaged for this lesson.")
+
+    lesson = db.get_lesson(lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+
+    is_free_preview = bool(lesson.get("is_free_preview", False))
+    if not is_free_preview and not st:
+        if not token and not authorization:
+            raise HTTPException(status_code=401, detail="Authentication required for lecture playlist.")
+        verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
+
+    content = playlist_file.read_text(encoding="utf-8")
+    auth_query = f"?token={token}" if token else (f"?st={st}" if st else "")
+    if auth_query:
+        content = content.replace(f"/api/lessons/{lesson_id}/hls/key", f"/api/lessons/{lesson_id}/hls/key{auth_query}")
+
+    return Response(
+        content=content,
+        media_type="application/vnd.apple.mpegurl",
+        headers={
+            "Cache-Control": "private, no-cache, no-store, must-revalidate",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+
+
+@app.get("/api/lessons/{lesson_id}/hls/key")
+async def get_lesson_hls_key(
+    lesson_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    st: Optional[str] = Query(None)
+):
+    """
+    Guarded AES-128 decryption key endpoint.
+    Only releases the 16-byte key to authorized, enrolled students playing within the app.
+    Downloaders and scrapers cannot decrypt .ts segments without this key.
+    """
+    threat = detect_download_attempt(request)
+    if threat:
+        raise HTTPException(status_code=403, detail="Key access blocked.")
+
+    lesson = db.get_lesson(lesson_id)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+
+    is_free_preview = bool(lesson.get("is_free_preview", False))
+    if not is_free_preview and not st:
+        if not token and not authorization:
+            raise HTTPException(status_code=401, detail="Authentication required for key.")
+        verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
+
+    key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
+    if not key_file.exists():
+        raise HTTPException(status_code=404, detail="Encryption key not found.")
+
+    key_bytes = key_file.read_bytes()
+    return Response(
+        content=key_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store, must-revalidate",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+
+
+@app.get("/api/lessons/{lesson_id}/hls/{segment_name}")
+async def get_lesson_hls_segment(
+    lesson_id: str,
+    segment_name: str,
+    request: Request
+):
+    """
+    Serves AES-128 encrypted media transport stream (.ts) segments.
+    Without the dynamic AES key, segments are pure scrambled ciphertext.
+    """
+    clean_seg = Path(segment_name).name
+    if not clean_seg.endswith(".ts"):
+        raise HTTPException(status_code=400, detail="Invalid media segment.")
+
+    seg_file = (Config.CHUNKS_DIR / "hls" / lesson_id / clean_seg).resolve()
+    if not str(seg_file).startswith(str((Config.CHUNKS_DIR / "hls").resolve())):
+        raise HTTPException(status_code=400, detail="Access denied.")
+
+    if not seg_file.exists():
+        raise HTTPException(status_code=404, detail="Segment not found.")
+
+    return FileResponse(
+        path=str(seg_file),
+        media_type="video/mp2t",
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+
+
 @app.api_route("/api/stream/drive/{file_id}", methods=["GET", "HEAD"])
 async def stream_drive_file(
     file_id: str,
