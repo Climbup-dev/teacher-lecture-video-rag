@@ -11,8 +11,64 @@
   <link rel="stylesheet" href="style.css?v=3">
   <!-- Enterprise Encrypted HLS Streaming Engine (Udemy/Hotstar grade) -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
+  <!-- ========================================== -->
+  <!-- STRICT ADMIN GATEKEEPER OVERLAY (OTP)     -->
+  <!-- ========================================== -->
+  <div id="admin-gatekeeper-overlay" class="gatekeeper-overlay">
+    <div class="gatekeeper-card glass-panel">
+      <div class="gatekeeper-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        <span>Strict Administrator Access</span>
+      </div>
+      <h2 class="gatekeeper-title">ClimbUP Teacher Hub</h2>
+      <p class="gatekeeper-subtitle">
+        Secure university operations command center. Access restricted exclusively to <strong>amirshaikh@gmail.com</strong>.
+      </p>
+
+      <div id="gatekeeper-alert" class="gatekeeper-alert" style="display: none;"></div>
+
+      <!-- Step 1: Email Form -->
+      <form id="gatekeeper-email-form">
+        <div class="form-group" style="text-align: left; margin-bottom: 18px;">
+          <label style="font-size: 0.82rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); display: block; margin-bottom: 6px;">
+            Administrator Email
+          </label>
+          <input type="email" id="gatekeeper-email-input" class="form-input" value="amirshaikh@gmail.com" required placeholder="amirshaikh@gmail.com" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1.5px solid rgba(56, 211, 153, 0.35); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 0.92rem;">
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-send-admin-otp" style="width: 100%; padding: 13px; font-weight: 700; border-radius: 10px; font-size: 0.95rem; box-shadow: 0 4px 18px rgba(56, 211, 153, 0.35);">
+          Request Secure OTP Code
+        </button>
+        <p style="font-size: 0.76rem; color: var(--text-muted); margin: 16px 0 0 0;">
+          🔒 Powered by Supabase Auth with strict email whitelisting.
+        </p>
+      </form>
+
+      <!-- Step 2: OTP Form -->
+      <form id="gatekeeper-otp-form" style="display: none;">
+        <p style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.85); margin-bottom: 16px;">
+          Enter the 6-digit verification code sent to <strong>amirshaikh@gmail.com</strong>:
+        </p>
+        <div class="otp-inputs-row" style="display: flex; gap: 8px; justify-content: center; margin-bottom: 20px;">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="0">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="1">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="2">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="3">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="4">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="5">
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-verify-admin-otp" style="width: 100%; padding: 13px; font-weight: 700; border-radius: 10px; font-size: 0.95rem; margin-bottom: 12px;">
+          Verify OTP & Unlock Studio
+        </button>
+        <button type="button" id="btn-gatekeeper-back" style="background: transparent; border: none; color: #38d399; font-size: 0.82rem; cursor: pointer; text-decoration: underline;">
+          ← Back to Email
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- App Container -->
   <div class="app-container">
     
@@ -53,6 +109,13 @@
 
       <!-- Nav Right: Settings & Account -->
       <div class="nav-right">
+        <div class="admin-user-badge" id="admin-user-badge" style="display: none;">
+          <span class="live-dot-mini"></span>
+          <span>amirshaikh@gmail.com</span>
+        </div>
+        <button class="btn btn-sm btn-logout" id="btn-admin-logout" style="display: none;" title="Exit Studio & Lock Screen">
+          Lock Studio
+        </button>
         <button class="btn btn-icon" id="btn-settings" title="Settings & AI Keys">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"></circle>
@@ -492,7 +555,10 @@
                   Manage problem sets, assignments with due dates & max points, lecture notes, slides, and syllabus.
                 </p>
               </div>
-              <button class="btn btn-primary" id="btn-add-course-level-material">
+              <button class="btn btn-primary" id="btn-open-ai-assignment-generator" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); margin-right: 8px;">
+                ⚡ Generate Dual-AI Assignment
+              </button>
+              <button class="btn btn-secondary" id="btn-add-course-level-material">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
                 + Upload Assignment or Resource
               </button>
@@ -1022,5 +1088,99 @@
   </div>
 
   <script src="app.js?v=6"></script>
+
+    <!-- ============================================================ -->
+    <!-- MODAL: DUAL-AI ASSIGNMENT STUDIO & EDITABLE PUBLISHER       -->
+    <!-- ============================================================ -->
+    <div class="modal" id="modal-ai-assignment-editor" style="display: none;">
+      <div class="modal-dialog ai-assignment-modal-dialog">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 16px;">
+          <div>
+            <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 999px; margin-bottom: 8px;">
+              <span>✦</span> Dual-AI Assignment Studio
+            </div>
+            <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin: 0;">
+              Synthesize & Edit Milestone Assignment
+            </h2>
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 4px 0 0 0;">
+              Grounded in 1–4 hour video lecture audio & transcripts. Review, customize, and publish to enrolled students.
+            </p>
+          </div>
+          <button type="button" class="btn btn-icon" id="btn-close-ai-assign-modal" style="font-size: 1.3rem;">&times;</button>
+        </div>
+
+        <!-- Lecture Selection & Synthesize Action Bar -->
+        <div style="background: rgba(18, 30, 52, 0.7); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1;">
+            <div>
+              <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">TARGET LECTURE:</label>
+              <select id="ai-assign-lecture-select" class="styled-dropdown-mini" style="background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.35); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 0.88rem; outline: none;"></select>
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-trigger-ai-synthesis" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800;">
+            ⚡ Synthesize Assignment with AI
+          </button>
+        </div>
+
+        <!-- Synthesis Status Banner -->
+        <div id="ai-assign-status-banner" style="display: none; padding: 12px 16px; border-radius: 10px; margin-bottom: 20px; font-size: 0.88rem;"></div>
+
+        <!-- EDITABLE ASSIGNMENT FORM -->
+        <form id="ai-assign-edit-form" style="display: none;">
+          <!-- Title & Meta Row -->
+          <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; margin-bottom: 18px;">
+            <div>
+              <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">Assignment Title:</label>
+              <input type="text" id="ai-edit-title" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 10px 12px; color: #fff;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">Due Date Label:</label>
+              <input type="text" id="ai-edit-due" class="form-input" value="Next Sunday, 11:59 PM" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 10px 12px; color: #fff;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">Max Score:</label>
+              <input type="number" id="ai-edit-maxscore" class="form-input" value="100" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 10px 12px; color: #fff;">
+            </div>
+          </div>
+
+          <!-- Enterprise Scenario Context Box (Editable) -->
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 700; color: #38d399; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em;">
+              🏭 Real-World Enterprise Scenario Context (Editable):
+            </label>
+            <textarea id="ai-edit-scenario" rows="3" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.35); border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 0.88rem; line-height: 1.5;"></textarea>
+          </div>
+
+          <!-- 3-Tier Progressive Challenges (Editable) -->
+          <div style="margin-bottom: 22px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <label style="font-size: 0.82rem; font-weight: 700; color: #38d399; text-transform: uppercase; letter-spacing: 0.05em;">
+                ⚡ 3-Tier Progressive Implementation Challenges:
+              </label>
+            </div>
+            <div id="ai-edit-challenges-list"></div>
+          </div>
+
+          <!-- Starter Code Boilerplate (Editable) -->
+          <div style="margin-bottom: 22px;">
+            <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">
+              💻 Starter Boilerplate Code Console (Editable):
+            </label>
+            <textarea id="ai-edit-starter" rows="6" class="form-input" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 12px 14px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.84rem; line-height: 1.5;"></textarea>
+          </div>
+
+          <!-- Action Buttons Bar -->
+          <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 20px; flex-wrap: wrap; gap: 14px;">
+            <button type="button" class="btn btn-secondary" id="btn-view-submissions-modal">
+              📋 View Cohort Submissions & AI Grades
+            </button>
+            <button type="submit" class="btn btn-primary" id="btn-confirm-publish-assignment" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800; padding: 12px 28px; font-size: 0.95rem; box-shadow: 0 4px 18px rgba(56, 211, 153, 0.4);">
+              ✓ Verify & Publish Assignment to Enrolled Students
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
 </body>
 </html>

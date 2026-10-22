@@ -2546,3 +2546,416 @@ document.addEventListener("DOMContentLoaded", () => {
 
   init();
 });
+
+
+// ============================================================
+// STRICT ADMIN AUTHENTICATION & AI ASSIGNMENT STUDIO ENGINE
+// ============================================================
+
+const AUTHORIZED_ADMIN_EMAIL = "amirshaikh@gmail.com";
+const SUPABASE_PROJECT_URL = "https://jueoglgbseoxszygpjdb.supabase.co";
+const SUPABASE_PUBLIC_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1ZW9nbGdic2VveHN6eWdwamRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3ODUwMjYsImV4cCI6MjA5NzM2MTAyNn0.PmVKzsVVHYS384PahpfCHB-_DZLg4gTlQN1sVOYfa8w";
+
+let supabaseClient = null;
+if (window.supabase && typeof window.supabase.createClient === "function") {
+  supabaseClient = window.supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_PUBLIC_KEY);
+}
+
+// 1. Strict Gatekeeper Screen & Session Guard
+async function checkStrictAdminAuth() {
+  const overlay = document.getElementById("admin-gatekeeper-overlay");
+  const userBadge = document.getElementById("admin-user-badge");
+  const logoutBtn = document.getElementById("btn-admin-logout");
+
+  if (!supabaseClient) {
+    console.warn("Supabase client not loaded, checking local admin flag");
+    const localSess = localStorage.getItem("climbup_admin_verified");
+    if (localSess === "true") {
+      if (overlay) overlay.style.display = "none";
+      if (userBadge) userBadge.style.display = "inline-flex";
+      if (logoutBtn) logoutBtn.style.display = "inline-flex";
+      return true;
+    }
+    return false;
+  }
+
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    const verifiedLocal = localStorage.getItem("climbup_admin_verified");
+
+    if (
+      (session?.user?.email?.toLowerCase().trim() === AUTHORIZED_ADMIN_EMAIL) ||
+      (verifiedLocal === "true")
+    ) {
+      if (overlay) overlay.style.display = "none";
+      if (userBadge) userBadge.style.display = "inline-flex";
+      if (logoutBtn) logoutBtn.style.display = "inline-flex";
+      return true;
+    }
+  } catch (err) {
+    console.error("Auth check error:", err);
+  }
+
+  // Lock Studio if not authenticated
+  if (overlay) overlay.style.display = "flex";
+  if (userBadge) userBadge.style.display = "none";
+  if (logoutBtn) logoutBtn.style.display = "none";
+  return false;
+}
+
+// 2. Setup Gatekeeper Form Listeners
+function setupGatekeeperListeners() {
+  const emailForm = document.getElementById("gatekeeper-email-form");
+  const otpForm = document.getElementById("gatekeeper-otp-form");
+  const emailInput = document.getElementById("gatekeeper-email-input");
+  const alertBox = document.getElementById("gatekeeper-alert");
+  const sendBtn = document.getElementById("btn-send-admin-otp");
+  const verifyBtn = document.getElementById("btn-verify-admin-otp");
+  const backBtn = document.getElementById("btn-gatekeeper-back");
+  const logoutBtn = document.getElementById("btn-admin-logout");
+  const otpBoxes = document.querySelectorAll(".otp-digit-box");
+
+  function showAlert(msg, isSuccess = false) {
+    if (!alertBox) return;
+    alertBox.textContent = msg;
+    alertBox.className = `gatekeeper-alert ${isSuccess ? "success" : "error"}`;
+    alertBox.style.display = "block";
+  }
+
+  // OTP auto-advance
+  otpBoxes.forEach((box, idx) => {
+    box.addEventListener("input", (e) => {
+      const val = e.target.value.replace(/\D/g, "");
+      e.target.value = val;
+      if (val && idx < otpBoxes.length - 1) {
+        otpBoxes[idx + 1].focus();
+      }
+    });
+
+    box.addEventListener("keydown", (e) => {
+      if (e.key === "Backspace" && !e.target.value && idx > 0) {
+        otpBoxes[idx - 1].focus();
+      }
+    });
+  });
+
+  // Step 1: Send OTP
+  if (emailForm) {
+    emailForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      alertBox.style.display = "none";
+
+      const cleanEmail = (emailInput?.value || "").trim().toLowerCase();
+      if (cleanEmail !== AUTHORIZED_ADMIN_EMAIL) {
+        showAlert(`Access Denied: Portal is strictly restricted to ${AUTHORIZED_ADMIN_EMAIL}.`);
+        return;
+      }
+
+      if (sendBtn) {
+        sendBtn.disabled = true;
+        sendBtn.textContent = "Sending Secure OTP...";
+      }
+
+      try {
+        if (!supabaseClient) throw new Error("Supabase client not initialized.");
+
+        const { error } = await supabaseClient.auth.signInWithOtp({
+          email: AUTHORIZED_ADMIN_EMAIL,
+          options: { shouldCreateUser: true }
+        });
+
+        if (error) throw error;
+
+        showAlert(`Secure 6-digit OTP code sent to ${AUTHORIZED_ADMIN_EMAIL}. Please check your inbox.`, true);
+        if (emailForm) emailForm.style.display = "none";
+        if (otpForm) otpForm.style.display = "block";
+        if (otpBoxes[0]) otpBoxes[0].focus();
+      } catch (err) {
+        console.error("OTP send error:", err);
+        showAlert(err.message || "Failed to send OTP code. Please check SMTP configuration.");
+      } finally {
+        if (sendBtn) {
+          sendBtn.disabled = false;
+          sendBtn.textContent = "Request Secure OTP Code";
+        }
+      }
+    });
+  }
+
+  // Step 2: Verify OTP
+  if (otpForm) {
+    otpForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      alertBox.style.display = "none";
+
+      let otpCode = "";
+      otpBoxes.forEach(b => { otpCode += b.value.trim(); });
+
+      if (otpCode.length !== 6) {
+        showAlert("Please enter the complete 6-digit OTP code.");
+        return;
+      }
+
+      if (verifyBtn) {
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = "Verifying Code...";
+      }
+
+      try {
+        if (!supabaseClient) throw new Error("Supabase client not initialized.");
+
+        const { data, error } = await supabaseClient.auth.verifyOtp({
+          email: AUTHORIZED_ADMIN_EMAIL,
+          token: otpCode,
+          type: "email"
+        });
+
+        if (error) throw error;
+
+        if (!data.user || data.user.email?.toLowerCase().trim() !== AUTHORIZED_ADMIN_EMAIL) {
+          await supabaseClient.auth.signOut();
+          throw new Error("Unauthorized identity. Verification rejected.");
+        }
+
+        localStorage.setItem("climbup_admin_verified", "true");
+        showAlert("Verification successful! Unlocking studio...", true);
+
+        setTimeout(() => {
+          checkStrictAdminAuth();
+        }, 600);
+      } catch (err) {
+        console.error("OTP verify error:", err);
+        showAlert(err.message || "Invalid or expired OTP. Please try again.");
+      } finally {
+        if (verifyBtn) {
+          verifyBtn.disabled = false;
+          verifyBtn.textContent = "Verify OTP & Unlock Studio";
+        }
+      }
+    });
+  }
+
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      if (otpForm) otpForm.style.display = "none";
+      if (emailForm) emailForm.style.display = "block";
+      alertBox.style.display = "none";
+    });
+  }
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      if (confirm("Lock Administrator Studio and logout?")) {
+        try {
+          if (supabaseClient) await supabaseClient.auth.signOut();
+        } catch (e) {}
+        localStorage.removeItem("climbup_admin_verified");
+        location.reload();
+      }
+    });
+  }
+}
+
+// 3. AI Assignment Studio & Editable Components Engine
+let currentGeneratedAssignment = null;
+
+function setupAiAssignmentStudio() {
+  const openBtn = document.getElementById("btn-open-ai-assignment-generator");
+  const modal = document.getElementById("modal-ai-assignment-editor");
+  const closeBtn = document.getElementById("btn-close-ai-assign-modal");
+  const lectureSelect = document.getElementById("ai-assign-lecture-select");
+  const triggerBtn = document.getElementById("btn-trigger-ai-synthesis");
+  const statusBanner = document.getElementById("ai-assign-status-banner");
+  const editForm = document.getElementById("ai-assign-edit-form");
+
+  if (!modal) return;
+
+  function populateLectureDropdown() {
+    if (!lectureSelect) return;
+    lectureSelect.innerHTML = "";
+
+    const activeCourseId = currentCourseId || (coursesCache[0]?.id);
+    const lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
+
+    if (lessons.length === 0) {
+      lectureSelect.innerHTML = "<option value=''>No lectures found in this course</option>";
+      return;
+    }
+
+    lessons.forEach(l => {
+      const opt = document.createElement("option");
+      opt.value = l.id;
+      opt.textContent = `${l.title} (${l.duration || "Video"})`;
+      lectureSelect.appendChild(opt);
+    });
+  }
+
+  if (openBtn) {
+    openBtn.addEventListener("click", () => {
+      populateLectureDropdown();
+      if (statusBanner) statusBanner.style.display = "none";
+      if (editForm) editForm.style.display = "none";
+      modal.style.display = "flex";
+    });
+  }
+
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      modal.style.display = "none";
+    });
+  }
+
+  // Synthesize Assignment with Dual AI
+  if (triggerBtn) {
+    triggerBtn.addEventListener("click", async () => {
+      const lessonId = lectureSelect?.value;
+      if (!lessonId) {
+        alert("Please select a lecture first.");
+        return;
+      }
+
+      triggerBtn.disabled = true;
+      triggerBtn.textContent = "⚡ Synthesizing with Dual-AI...";
+      if (statusBanner) {
+        statusBanner.style.display = "block";
+        statusBanner.style.background = "rgba(56, 211, 153, 0.12)";
+        statusBanner.style.color = "#38d399";
+        statusBanner.textContent = "Scanning lecture transcript chunks and synthesizing enterprise scenarios...";
+      }
+
+      try {
+        const response = await fetch(`/api/admin/lessons/${lessonId}/assignments/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ difficulty: "intermediate" })
+        });
+
+        if (!response.ok) throw new Error("AI assignment generation failed on server.");
+
+        const data = await response.json();
+        currentGeneratedAssignment = data.assignment;
+
+        // Populate Editable Fields
+        const titleInput = document.getElementById("ai-edit-title");
+        const scenarioInput = document.getElementById("ai-edit-scenario");
+        const starterInput = document.getElementById("ai-edit-starter");
+        const maxScoreInput = document.getElementById("ai-edit-maxscore");
+        const challengesList = document.getElementById("ai-edit-challenges-list");
+
+        if (titleInput) titleInput.value = currentGeneratedAssignment.title || "Enterprise Milestone Assignment";
+        if (scenarioInput) scenarioInput.value = currentGeneratedAssignment.scenario_context || "";
+        if (starterInput) starterInput.value = currentGeneratedAssignment.starter_code || "";
+        if (maxScoreInput) maxScoreInput.value = currentGeneratedAssignment.maxScore || currentGeneratedAssignment.rubric?.max_score || 100;
+
+        // Render Editable Challenges
+        if (challengesList) {
+          challengesList.innerHTML = "";
+          const problems = currentGeneratedAssignment.problems || [];
+          problems.forEach((prob, idx) => {
+            const card = document.createElement("div");
+            card.className = "ai-challenge-card";
+            card.innerHTML = `
+              <div class="ai-challenge-header">
+                <span class="tier-badge-pill ${prob.tier?.toLowerCase() || 'basic'}">
+                  Challenge ${idx + 1}: ${prob.tier || 'Core'}
+                </span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="font-size: 0.78rem; color: #94a3b8;">Marks:</span>
+                  <input type="number" class="edit-prob-marks" value="${prob.marks || 30}" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 0.8rem;">
+                </div>
+              </div>
+              <textarea class="edit-prob-desc form-input" rows="2" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem; margin-bottom: 8px;">${prob.problem_statement || ''}</textarea>
+              <div style="font-size: 0.75rem; color: #38d399; font-weight: 700; margin-bottom: 4px;">ACCEPTANCE CRITERIA:</div>
+              <div class="edit-criteria-tags" style="display: grid; gap: 4px;">
+                ${(prob.acceptance_criteria || []).map(c => `
+                  <div style="font-size: 0.78rem; color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.03); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.06);">
+                    ✓ ${c}
+                  </div>
+                `).join('')}
+              </div>
+            `;
+            challengesList.appendChild(card);
+          });
+        }
+
+        if (statusBanner) {
+          statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
+          statusBanner.textContent = "✓ Assignment synthesized successfully! Review and edit components below before publishing.";
+        }
+
+        if (editForm) editForm.style.display = "block";
+      } catch (err) {
+        console.error("Assignment synthesis error:", err);
+        if (statusBanner) {
+          statusBanner.style.background = "rgba(239, 68, 68, 0.15)";
+          statusBanner.style.color = "#fca5a5";
+          statusBanner.textContent = "Error synthesizing assignment: " + err.message;
+        }
+      } finally {
+        triggerBtn.disabled = false;
+        triggerBtn.textContent = "⚡ Synthesize Assignment with AI";
+      }
+    });
+  }
+
+  // Publish Verified Assignment
+  if (editForm) {
+    editForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!currentGeneratedAssignment) return;
+
+      const confirmBtn = document.getElementById("btn-confirm-publish-assignment");
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "Publishing to Students...";
+      }
+
+      try {
+        // Collect updated values
+        const title = document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment.title;
+        const scenario = document.getElementById("ai-edit-scenario")?.value || currentGeneratedAssignment.scenario_context;
+        const starter = document.getElementById("ai-edit-starter")?.value || currentGeneratedAssignment.starter_code;
+        const maxScore = parseInt(document.getElementById("ai-edit-maxscore")?.value) || 100;
+        const due = document.getElementById("ai-edit-due")?.value || "Next Sunday";
+
+        const response = await fetch(`/api/admin/assignments/${currentGeneratedAssignment.id}/publish`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            is_published: true,
+            title,
+            scenario_context: scenario,
+            starter_code: starter,
+            max_score: maxScore,
+            due_date: due
+          })
+        });
+
+        if (!response.ok) throw new Error("Failed to publish assignment.");
+
+        alert("Assignment successfully verified and published to all enrolled students!");
+        modal.style.display = "none";
+
+        // Reload course materials
+        if (currentCourseId && typeof loadCourseResources === "function") {
+          loadCourseResources(currentCourseId);
+        }
+      } catch (err) {
+        console.error("Publish error:", err);
+        alert("Publish failed: " + err.message);
+      } finally {
+        if (confirmBtn) {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = "✓ Verify & Publish Assignment to Enrolled Students";
+        }
+      }
+    });
+  }
+}
+
+// Auto-run Gatekeeper & Studio on DOM ready
+document.addEventListener("DOMContentLoaded", () => {
+  checkStrictAdminAuth();
+  setupGatekeeperListeners();
+  setupAiAssignmentStudio();
+});
