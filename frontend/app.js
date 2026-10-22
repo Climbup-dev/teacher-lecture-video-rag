@@ -2633,8 +2633,19 @@ function setupGatekeeperListeners() {
     alertBox.style.display = "block";
   }
 
-  // OTP auto-advance
+  // OTP auto-advance & Paste Handler
   otpBoxes.forEach((box, idx) => {
+    box.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const pasteData = (e.clipboardData || window.clipboardData).getData("text").replace(/\D/g, "").slice(0, otpBoxes.length);
+      if (!pasteData) return;
+      pasteData.split("").forEach((char, i) => {
+        if (otpBoxes[i]) otpBoxes[i].value = char;
+      });
+      const nextIdx = Math.min(pasteData.length, otpBoxes.length - 1);
+      if (otpBoxes[nextIdx]) otpBoxes[nextIdx].focus();
+    });
+
     box.addEventListener("input", (e) => {
       const val = e.target.value.replace(/\D/g, "");
       e.target.value = val;
@@ -2679,7 +2690,7 @@ function setupGatekeeperListeners() {
 
         if (error) throw error;
 
-        showAlert(`Secure 6-digit OTP code sent to ${activeAttemptEmail}. Please check your inbox.`, true);
+        showAlert(`Secure 8-digit OTP code sent to ${activeAttemptEmail}. Please check your inbox.`, true);
         if (emailForm) emailForm.style.display = "none";
         if (otpForm) otpForm.style.display = "block";
         if (otpBoxes[0]) otpBoxes[0].focus();
@@ -2704,8 +2715,8 @@ function setupGatekeeperListeners() {
       let otpCode = "";
       otpBoxes.forEach(b => { otpCode += b.value.trim(); });
 
-      if (otpCode.length !== 6) {
-        showAlert("Please enter the complete 6-digit OTP code.");
+      if (otpCode.length < 6 || otpCode.length > 8) {
+        showAlert("Please enter the complete 8-digit OTP code.");
         return;
       }
 

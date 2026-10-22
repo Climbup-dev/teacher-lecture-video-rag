@@ -49,15 +49,17 @@
       <!-- Step 2: OTP Form -->
       <form id="gatekeeper-otp-form" style="display: none;">
         <p style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.85); margin-bottom: 16px;">
-          Enter the 6-digit verification code sent to <strong id="gatekeeper-target-email">amirshaikh320340@gmail.com</strong>:
+          Enter the 8-digit verification code sent to <strong id="gatekeeper-target-email">amirshaikh320340@gmail.com</strong>:
         </p>
-        <div class="otp-inputs-row" style="display: flex; gap: 8px; justify-content: center; margin-bottom: 20px;">
-          <input type="text" class="otp-digit-box" maxlength="1" data-index="0">
+        <div class="otp-inputs-row" style="display: flex; gap: 6px; justify-content: center; margin-bottom: 20px; flex-wrap: nowrap;">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="0" autofocus>
           <input type="text" class="otp-digit-box" maxlength="1" data-index="1">
           <input type="text" class="otp-digit-box" maxlength="1" data-index="2">
           <input type="text" class="otp-digit-box" maxlength="1" data-index="3">
           <input type="text" class="otp-digit-box" maxlength="1" data-index="4">
           <input type="text" class="otp-digit-box" maxlength="1" data-index="5">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="6">
+          <input type="text" class="otp-digit-box" maxlength="1" data-index="7">
         </div>
         <button type="submit" class="btn btn-primary" id="btn-verify-admin-otp" style="width: 100%; padding: 13px; font-weight: 700; border-radius: 10px; font-size: 0.95rem; margin-bottom: 12px;">
           Verify OTP & Unlock Studio
@@ -1276,6 +1278,6 @@
 
   </div>
 
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

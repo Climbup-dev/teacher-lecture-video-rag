@@ -82,12 +82,12 @@
 }
 
 .otp-digit-box {
-  width: 44px;
-  height: 52px;
+  width: 36px;
+  height: 48px;
   text-align: center;
-  font-size: 1.4rem;
+  font-size: 1.25rem;
   font-weight: 800;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1.5px solid rgba(56, 211, 153, 0.3);
   background: rgba(18, 30, 52, 0.9);
   color: #38d399;
