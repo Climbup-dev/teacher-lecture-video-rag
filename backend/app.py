@@ -935,9 +935,9 @@ async def get_lesson_hls_key(
         is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
         if not is_valid:
             raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
+    elif not is_authorized_player(request) and not token and not authorization:
+        raise HTTPException(status_code=401, detail="Authentication or authorized player token required for key.")
     elif not is_free_preview and not is_authorized_player(request):
-        if not token and not authorization:
-            raise HTTPException(status_code=401, detail="Authentication required for key.")
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
@@ -1023,12 +1023,13 @@ async def get_lesson_hls_segment(
         is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
         if not is_valid:
             raise HTTPException(status_code=403, detail=f"Signed segment token invalid or expired: {err_reason}")
+    elif not is_authorized_player(request) and not token and not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication or authorized player token required for media segment."
+        )
     elif not is_free_preview and not is_authorized_player(request):
-        if not token and not authorization:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication or authorized player token required for media segment."
-            )
+        verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id") if lesson else None)
 
     return FileResponse(
         path=str(seg_file),

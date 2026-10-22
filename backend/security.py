@@ -180,18 +180,34 @@ def get_client_ip(request: Request) -> str:
 
 
 def verify_admin_or_instructor_auth(
-    authorization_header: Optional[str] = None,
-    x_admin_key: Optional[str] = None
+    authorization_header: Optional[Any] = None,
+    x_admin_key: Optional[str] = None,
+    request: Optional[Request] = None,
+    *args,
+    **kwargs
 ) -> Dict[str, Any]:
     """
     Enforces authorization for administrative and destructive operations:
     1. Direct match with configured ADMIN_API_KEY / X-Admin-Key.
     2. Supabase Bearer token with verified role: admin, instructor, coordinator.
     Raises HTTPException 401 or 403 on failure.
+    Supports being called as (request, authorization, admin_key) or (authorization, admin_key).
     """
+    # Handle case where Request object was passed as first positional arg
+    if isinstance(authorization_header, Request):
+        req = authorization_header
+        auth_hdr = x_admin_key if len(args) == 0 else (args[0] if len(args) > 0 else None)
+        admin_k = args[1] if len(args) > 1 else None
+        if not admin_k and req:
+            admin_k = req.headers.get("x-admin-key") or req.query_params.get("admin_key")
+        if not auth_hdr and req:
+            auth_hdr = req.headers.get("authorization")
+        authorization_header = auth_hdr
+        x_admin_key = admin_k
+
     admin_secret = Config.ADMIN_API_KEY
     auth_token = None
-    if authorization_header and authorization_header.startswith("Bearer "):
+    if authorization_header and isinstance(authorization_header, str) and authorization_header.startswith("Bearer "):
         auth_token = authorization_header.split(" ", 1)[1].strip()
 
     # Check 1: X-Admin-Key or admin secret match
