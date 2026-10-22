@@ -1273,5 +1273,197 @@ class DBAdapter:
         self._write_local_store(store)
         return True
 
+    # --- ASSIGNMENT & MCQ STORAGE METHODS ---
+
+    def save_assignment(self, assignment_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Saves or updates an assignment record."""
+        aid = assignment_data.get("id") or str(uuid.uuid4())
+        assignment_data["id"] = aid
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+                res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/assignments",
+                    headers=headers,
+                    json=assignment_data,
+                    timeout=8
+                )
+                if res.ok and res.json():
+                    created = res.json()[0]
+                    store = self._read_local_store()
+                    store.setdefault("assignments", {})[aid] = created
+                    self._write_local_store(store)
+                    return created
+            except Exception as e:
+                print(f"[Supabase] save_assignment notice: {e}")
+
+        store = self._read_local_store()
+        store.setdefault("assignments", {})[aid] = assignment_data
+        self._write_local_store(store)
+        return assignment_data
+
+    def get_assignment_by_id(self, assignment_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves assignment by ID."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/assignments?id=eq.{assignment_id}&select=*"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok and len(res.json()) > 0:
+                    return res.json()[0]
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        return store.get("assignments", {}).get(assignment_id)
+
+    def get_assignment_by_lesson(self, lesson_id: str, status: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Retrieves latest assignment for a lesson."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/assignments?lesson_id=eq.{lesson_id}"
+                if status:
+                    url += f"&status=eq.{status}"
+                url += "&order=created_at.desc&limit=1"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok and len(res.json()) > 0:
+                    return res.json()[0]
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        assignments = list(store.get("assignments", {}).values())
+        matching = [a for a in assignments if a.get("lesson_id") == lesson_id]
+        if status:
+            matching = [a for a in matching if a.get("status") == status]
+        return matching[-1] if matching else None
+
+    def update_assignment_status(self, assignment_id: str, status: str) -> bool:
+        """Updates assignment status (draft, published, archived)."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/assignments?id=eq.{assignment_id}"
+                res = self.session.patch(url, headers=headers, json={"status": status}, timeout=5)
+                if res.ok:
+                    store = self._read_local_store()
+                    if assignment_id in store.get("assignments", {}):
+                        store["assignments"][assignment_id]["status"] = status
+                        self._write_local_store(store)
+                    return True
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        if assignment_id in store.get("assignments", {}):
+            store["assignments"][assignment_id]["status"] = status
+            self._write_local_store(store)
+            return True
+        return False
+
+    def save_submission(self, submission_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Saves or updates a student assignment submission."""
+        sid = submission_data.get("id") or str(uuid.uuid4())
+        submission_data["id"] = sid
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+                res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/assignment_submissions",
+                    headers=headers,
+                    json=submission_data,
+                    timeout=8
+                )
+                if res.ok and res.json():
+                    created = res.json()[0]
+                    store = self._read_local_store()
+                    store.setdefault("submissions", {})[sid] = created
+                    self._write_local_store(store)
+                    return created
+            except Exception as e:
+                print(f"[Supabase] save_submission notice: {e}")
+
+        store = self._read_local_store()
+        store.setdefault("submissions", {})[sid] = submission_data
+        self._write_local_store(store)
+        return submission_data
+
+    def get_submission(self, assignment_id: str, student_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a student's submission for an assignment."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/assignment_submissions?assignment_id=eq.{assignment_id}&student_id=eq.{student_id}&limit=1"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok and len(res.json()) > 0:
+                    return res.json()[0]
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        submissions = list(store.get("submissions", {}).values())
+        for sub in submissions:
+            if sub.get("assignment_id") == assignment_id and sub.get("student_id") == student_id:
+                return sub
+        return None
+
+    def list_assignment_submissions(self, assignment_id: str) -> List[Dict[str, Any]]:
+        """Lists all student submissions for an assignment (Teacher portal)."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/assignment_submissions?assignment_id=eq.{assignment_id}&order=submitted_at.desc"
+                res = self.session.get(url, headers=headers, timeout=8)
+                if res.ok and isinstance(res.json(), list):
+                    return res.json()
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        submissions = list(store.get("submissions", {}).values())
+        return [s for s in submissions if s.get("assignment_id") == assignment_id]
+
+    def save_mcq_bank(self, lesson_id: str, questions: List[Dict[str, Any]]) -> bool:
+        """Caches a verified question bank for a lesson."""
+        payload = {"lesson_id": lesson_id, "questions": questions}
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "resolution=merge-duplicates"
+                self.session.post(
+                    f"{self.supabase_url}/rest/v1/lesson_mcq_banks",
+                    headers=headers,
+                    json=payload,
+                    timeout=5
+                )
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        store.setdefault("mcq_banks", {})[lesson_id] = questions
+        self._write_local_store(store)
+        return True
+
+    def get_mcq_bank(self, lesson_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Retrieves cached MCQ bank for a lesson."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/lesson_mcq_banks?lesson_id=eq.{lesson_id}&select=questions&limit=1"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok and len(res.json()) > 0:
+                    return res.json()[0].get("questions", [])
+            except Exception:
+                pass
+
+        store = self._read_local_store()
+        return store.get("mcq_banks", {}).get(lesson_id)
+
+
 
 

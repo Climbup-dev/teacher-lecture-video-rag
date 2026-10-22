@@ -36,6 +36,7 @@ from backend.rag_engine import RAGEngine
 from backend.google_drive import GoogleDriveManager
 from backend.hls_transcoder import HLSTranscoder
 from backend.job_manager import get_job_manager
+from backend.assignment_engine import AssignmentEngine
 from backend.security import (
     detect_download_attempt,
     get_client_ip,
@@ -118,6 +119,7 @@ def health_check():
 
 db = DBAdapter()
 drive_mgr = GoogleDriveManager()
+assignment_engine = AssignmentEngine(db)
 
 _packaging_in_progress = set()
 _packaging_lock = threading.Lock()
@@ -977,6 +979,197 @@ def admin_package_hls(
             "playlist_url": f"/api/lessons/{lesson_id}/hls/master.m3u8"
         }
     raise HTTPException(status_code=500, detail="Failed to package lesson into encrypted HLS.")
+
+
+# =============================================================================
+# ENTERPRISE ASSIGNMENTS & DYNAMIC MCQS API
+# =============================================================================
+
+class MCQVerifyRequest(BaseModel):
+    answers: Dict[str, str]
+
+class AssignmentSubmitRequest(BaseModel):
+    student_id: str
+    student_name: Optional[str] = "Student"
+    student_email: Optional[str] = ""
+    submission_content: str
+    approach_notes: Optional[str] = ""
+
+class AssignmentPublishRequest(BaseModel):
+    status: Optional[str] = "published"
+
+
+@app.api_route("/api/lessons/{lesson_id}/mcqs/quiz", methods=["GET", "POST"])
+async def get_lesson_mcq_quiz(
+    lesson_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Returns 5 randomized practice MCQs based on the lecture's core concepts.
+    SECURITY: The returned JSON payload strictly omits correct answers and explanations.
+    """
+    client_ip = get_client_ip(request)
+    allowed, remaining = check_rate_limit(client_ip, f"mcq_quiz:{lesson_id}", max_requests=30, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
+
+    res = assignment_engine.generate_mcq_quiz(lesson_id, count=5)
+    if "error" in res and not res.get("questions"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/lessons/{lesson_id}/mcqs/verify")
+async def verify_lesson_mcq_quiz(
+    lesson_id: str,
+    body: MCQVerifyRequest,
+    request: Request
+):
+    """
+    Verifies student's submitted answers against the server truth.
+    Returns score, detailed explanations, and timestamp revision hints.
+    """
+    client_ip = get_client_ip(request)
+    allowed, remaining = check_rate_limit(client_ip, f"mcq_verify:{lesson_id}", max_requests=30, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
+
+    res = assignment_engine.verify_mcq_answers(lesson_id, body.answers)
+    if "error" in res and "score" not in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/admin/lessons/{lesson_id}/assignments/generate")
+async def admin_generate_assignment(
+    lesson_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    admin_key: Optional[str] = Query(None)
+):
+    """
+    Admin/Teacher endpoint: Uses 4-milestone concept sampling to generate a high-impact,
+    practical draft assignment from 1-4 hour lectures.
+    """
+    verify_admin_or_instructor_auth(request, authorization, admin_key)
+    assignment = assignment_engine.generate_lecture_assignment(lesson_id)
+    if not assignment:
+        raise HTTPException(status_code=500, detail="Failed to synthesize assignment from lecture milestones.")
+    return {
+        "status": "success",
+        "message": "Draft assignment generated successfully. Review and publish when ready.",
+        "assignment": assignment
+    }
+
+
+@app.api_route("/api/admin/assignments/{assignment_id}/publish", methods=["POST", "PUT"])
+async def admin_publish_assignment(
+    assignment_id: str,
+    request: Request,
+    body: Optional[AssignmentPublishRequest] = None,
+    authorization: Optional[str] = Header(None),
+    admin_key: Optional[str] = Query(None)
+):
+    """
+    Admin/Teacher endpoint: Publishes draft assignment to enrolled students.
+    """
+    verify_admin_or_instructor_auth(request, authorization, admin_key)
+    new_status = body.status if body else "published"
+    success = db.update_assignment_status(assignment_id, new_status)
+    if not success:
+        raise HTTPException(status_code=404, detail="Assignment not found or update failed.")
+    return {"status": "success", "assignment_id": assignment_id, "status": new_status}
+
+
+@app.get("/api/lessons/{lesson_id}/assignment")
+async def get_lesson_assignment(
+    lesson_id: str,
+    request: Request,
+    student_id: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Student endpoint: Fetches active published assignment for the lesson.
+    If student_id is provided, attaches student's previous submission and report card.
+    """
+    assignment = db.get_assignment_by_lesson(lesson_id, status="published")
+    if not assignment:
+        draft = db.get_assignment_by_lesson(lesson_id)
+        if draft and (authorization or token):
+            return {"status": "draft", "assignment": draft, "message": "Assignment is currently in draft mode."}
+        raise HTTPException(status_code=404, detail="No published assignment found for this lesson.")
+
+    result = {
+        "assignment": assignment,
+        "submission": None
+    }
+
+    if student_id:
+        sub = db.get_submission(assignment.get("id"), student_id)
+        if sub:
+            result["submission"] = sub
+
+    return result
+
+
+@app.post("/api/assignments/{assignment_id}/submit")
+async def submit_assignment(
+    assignment_id: str,
+    body: AssignmentSubmitRequest,
+    request: Request
+):
+    """
+    Student endpoint: Submits solution code / text for automated AI evaluation.
+    Protected against Prompt Injection, payload saturation, and spam submissions.
+    """
+    client_ip = get_client_ip(request)
+    allowed, remaining = check_rate_limit(client_ip, f"assign_submit:{assignment_id}", max_requests=6, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds before submitting again.")
+
+    if not body.submission_content or len(body.submission_content.strip()) < 5:
+        raise HTTPException(status_code=400, detail="Submission content must be at least 5 characters.")
+
+    res = assignment_engine.evaluate_submission(
+        assignment_id=assignment_id,
+        student_id=body.student_id,
+        student_name=body.student_name or "Student",
+        student_email=body.student_email or "",
+        submission_code=body.submission_content,
+        approach_notes=body.approach_notes or ""
+    )
+
+    if "error" in res and "score" not in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+
+    return {
+        "status": "graded",
+        "submission_id": res.get("id"),
+        "score": res.get("ai_score"),
+        "feedback": res.get("ai_feedback")
+    }
+
+
+@app.get("/api/admin/assignments/{assignment_id}/submissions")
+async def admin_list_submissions(
+    assignment_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    admin_key: Optional[str] = Query(None)
+):
+    """
+    Teacher/Admin Portal: Lists all student submissions, AI scores, and evaluations.
+    """
+    verify_admin_or_instructor_auth(request, authorization, admin_key)
+    submissions = db.list_assignment_submissions(assignment_id)
+    return {
+        "assignment_id": assignment_id,
+        "total_submissions": len(submissions),
+        "submissions": submissions
+    }
 
 
 @app.api_route("/api/stream/drive/{file_id}", methods=["GET", "HEAD"])
