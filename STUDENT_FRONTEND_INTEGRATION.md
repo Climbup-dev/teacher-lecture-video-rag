@@ -470,3 +470,112 @@ export default function LessonViewPage({ params }: { params: { lessonId: string 
    - *"Explain Round Robin with time quantum"*
    - *"What is context switching overhead?"*
 4. Click on any `▶ [04:21]` badge and observe the video player immediately jump to that timestamp!
+
+---
+
+## 9. Enterprise Encrypted HLS Video Player (Udemy/Hotstar Grade)
+
+The EduRAG server provides AES-128 encrypted HLS packaging with short-lived HMAC signed tokens. Raw progressive MP4 streaming is blocked to prevent video scraping tools (`yt-dlp`, `IDM`, browser extensions).
+
+### Next.js HLS Player Component (`src/components/SecureHLSVideoPlayer.tsx`):
+
+```tsx
+'use client';
+
+import React, { useEffect, useRef } from 'react';
+import Hls from 'hls.js';
+
+interface SecurePlayerProps {
+  lessonId: string;
+  userEmail: string;
+  onTimeUpdate?: (currentSeconds: number) => void;
+  videoRef?: React.RefObject<HTMLVideoElement>;
+}
+
+export function SecureHLSVideoPlayer({ lessonId, userEmail, onTimeUpdate, videoRef }: SecurePlayerProps) {
+  const localRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const activeVideo = videoRef || localRef;
+  const ragBase = process.env.NEXT_PUBLIC_RAG_SERVER_URL || 'http://127.0.0.1:8000';
+
+  useEffect(() => {
+    let hls: Hls | null = null;
+    let timer: NodeJS.Timeout | null = null;
+
+    async function initSecureStream() {
+      // 1. Fetch short-lived HMAC signed stream token
+      const tokenRes = await fetch(`${ragBase}/api/lessons/${lessonId}/stream-token`, { method: 'POST' });
+      const { signed_token } = await tokenRes.json();
+
+      const playlistUrl = `${ragBase}/api/lessons/${lessonId}/hls/master.m3u8?st=${signed_token}`;
+
+      if (activeVideo.current) {
+        if (Hls.isSupported()) {
+          hls = new Hls({
+            enableWorker: true,
+            xhrSetup: (xhr, url) => {
+              if (signed_token && !url.includes('st=')) {
+                const sep = url.includes('?') ? '&' : '?';
+                xhr.open('GET', `${url}${sep}st=${signed_token}`, true);
+              }
+            }
+          });
+          hls.loadSource(playlistUrl);
+          hls.attachMedia(activeVideo.current);
+        } else if (activeVideo.current.canPlayType('application/vnd.apple.mpegurl')) {
+          activeVideo.current.src = playlistUrl;
+        }
+      }
+
+      // 2. Start Dynamic Forensic Canvas Watermark
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        const draw = () => {
+          if (!ctx) return;
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.font = "500 13px 'Inter', sans-serif";
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+          ctx.shadowBlur = 4;
+          const text = `${userEmail} • ${new Date().toLocaleTimeString()}`;
+          const x = 30 + Math.random() * (canvas.width - 240);
+          const y = 30 + Math.random() * (canvas.height - 40);
+          ctx.fillText(text, x, y);
+        };
+        draw();
+        timer = setInterval(draw, 4000);
+      }
+    }
+
+    initSecureStream();
+
+    return () => {
+      if (hls) hls.destroy();
+      if (timer) clearInterval(timer);
+    };
+  }, [lessonId, userEmail]);
+
+  return (
+    <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
+      <video
+        ref={activeVideo}
+        playsInline
+        controls
+        controlsList="nodownload noplaybackrate"
+        onContextMenu={(e) => e.preventDefault()}
+        className="w-full h-full object-contain"
+        onTimeUpdate={() => onTimeUpdate?.(activeVideo.current?.currentTime || 0)}
+      />
+      {/* Floating forensic watermark */}
+      <canvas
+        ref={canvasRef}
+        width={800}
+        height={450}
+        className="absolute inset-0 w-full h-full pointer-events-none z-10"
+      />
+    </div>
+  );
+}
+```
+

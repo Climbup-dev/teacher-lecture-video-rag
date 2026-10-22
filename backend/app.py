@@ -627,6 +627,14 @@ async def stream_lesson_video(
             )
             raise he
 
+    # Enforce Anti-Piracy: If HLS encrypted package exists, disable raw progressive MP4 stream
+    hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
+    if (hls_dir / "master.m3u8").exists():
+        raise HTTPException(
+            status_code=403,
+            detail="Direct progressive MP4 streaming is disabled for this protected lesson. Playback is strictly enforced via encrypted HLS."
+        )
+
     video_url = lesson.get("video_url", "").strip()
     range_header = request.headers.get("Range")
 
@@ -725,6 +733,11 @@ async def get_lesson_hls_playlist(
     If HLS directory exists for lesson_id, returns master.m3u8 with tokenized key URI.
     If not yet transcoded to HLS, returns 404 so client cleanly falls back to progressive stream.
     """
+    client_ip = get_client_ip(request)
+    threat = detect_download_attempt(request)
+    if threat:
+        raise HTTPException(status_code=403, detail="Automated download tools are blocked from playlist access.")
+
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
     playlist_file = hls_dir / "master.m3u8"
     if not playlist_file.exists():
@@ -735,9 +748,13 @@ async def get_lesson_hls_playlist(
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
     is_free_preview = bool(lesson.get("is_free_preview", False))
-    if not is_free_preview and not st:
-        if not token and not authorization:
-            raise HTTPException(status_code=401, detail="Authentication required for lecture playlist.")
+    if st:
+        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+        if not is_valid:
+            raise HTTPException(status_code=403, detail=f"Signed playlist token invalid or expired: {err_reason}")
+    elif not token and not authorization:
+        raise HTTPException(status_code=401, detail="Stream token or authentication required for lecture playlist.")
+    elif not is_free_preview:
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     content = playlist_file.read_text(encoding="utf-8")
@@ -768,16 +785,21 @@ async def get_lesson_hls_key(
     Only releases the 16-byte key to authorized, enrolled students playing within the app.
     Downloaders and scrapers cannot decrypt .ts segments without this key.
     """
+    client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
     if threat:
-        raise HTTPException(status_code=403, detail="Key access blocked.")
+        raise HTTPException(status_code=403, detail="Key access blocked for automated tools.")
 
     lesson = db.get_lesson(lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
     is_free_preview = bool(lesson.get("is_free_preview", False))
-    if not is_free_preview and not st:
+    if st:
+        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+        if not is_valid:
+            raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
+    elif not is_free_preview:
         if not token and not authorization:
             raise HTTPException(status_code=401, detail="Authentication required for key.")
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
@@ -807,6 +829,10 @@ async def get_lesson_hls_segment(
     Serves AES-128 encrypted media transport stream (.ts) segments.
     Without the dynamic AES key, segments are pure scrambled ciphertext.
     """
+    threat = detect_download_attempt(request)
+    if threat:
+        raise HTTPException(status_code=403, detail="Direct segment scraping prohibited.")
+
     clean_seg = Path(segment_name).name
     if not clean_seg.endswith(".ts"):
         raise HTTPException(status_code=400, detail="Invalid media segment.")
@@ -826,6 +852,7 @@ async def get_lesson_hls_segment(
             "Access-Control-Allow-Origin": "*",
         }
     )
+
 
 
 @app.api_route("/api/stream/drive/{file_id}", methods=["GET", "HEAD"])

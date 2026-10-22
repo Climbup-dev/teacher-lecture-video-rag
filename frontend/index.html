@@ -9,6 +9,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=3">
+  <!-- Enterprise Encrypted HLS Streaming Engine (Udemy/Hotstar grade) -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
 </head>
 <body>
   <!-- App Container -->
@@ -601,10 +603,13 @@
             <!-- Video Card -->
             <div class="video-card glass-panel">
               <div class="video-container" id="video-wrapper">
-                <video id="lecture-video" preload="none" playsinline poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'><rect width='800' height='450' fill='%230f141c'/><circle cx='400' cy='225' r='48' fill='%236366f1' fill-opacity='0.2'/><polygon points='390,205 425,225 390,245' fill='%23818cf8'/><text x='400' y='310' font-family='sans-serif' font-size='16' fill='%2394a3b8' text-anchor='middle'>Load or Select a Lecture to Play</text></svg>">
+                <video id="lecture-video" preload="none" playsinline controlsList="nodownload noplaybackrate" oncontextmenu="return false;" disablePictureInPicture poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'><rect width='800' height='450' fill='%230f141c'/><circle cx='400' cy='225' r='48' fill='%236366f1' fill-opacity='0.2'/><polygon points='390,205 425,225 390,245' fill='%23818cf8'/><text x='400' y='310' font-family='sans-serif' font-size='16' fill='%2394a3b8' text-anchor='middle'>Load or Select a Lecture to Play</text></svg>">
                   Your browser does not support HTML5 video.
                 </video>
                 
+                <!-- Dynamic Anti-Piracy Forensic Watermark Layer -->
+                <canvas id="watermark-canvas" class="watermark-canvas"></canvas>
+
                 <iframe id="drive-iframe" style="display: none; width: 100%; height: 100%; border: none;" allowfullscreen></iframe>
 
                 <div class="video-overlay" id="video-overlay">
@@ -842,9 +847,6 @@
                   </div>
                 </div>
                 <div style="display: flex; gap: 8px;">
-                  <a href="https://drive.google.com/drive/folders/1VDrNYA5GE6l9h21D2Co0HuuuD87Ain6d" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="font-size: 0.78rem; padding: 6px 12px; background: rgba(56, 211, 153, 0.15); border-color: rgba(56, 211, 153, 0.4); color: #38d399; text-decoration: none;">
-                    📁 Open Drive Folder ↗
-                  </a>
                   <button type="button" class="btn btn-secondary" id="modal-btn-refresh-vault" style="font-size: 0.78rem; padding: 6px 12px;" title="Refresh list of files in Google Drive">
                     🔄 Refresh
                   </button>

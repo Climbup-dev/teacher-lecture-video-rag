@@ -6,6 +6,58 @@ let videoEl = null;
 let driveIframeEl = null;
 let currentUtterances = [];
 let currentChunks = [];
+let currentHlsInstance = null;
+let watermarkTimer = null;
+
+function startForensicWatermarking(userLabel) {
+  const canvas = document.getElementById("watermark-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  function resizeCanvas() {
+    if (videoEl && videoEl.clientWidth) {
+      canvas.width = videoEl.clientWidth;
+      canvas.height = videoEl.clientHeight;
+    } else {
+      const parent = canvas.parentElement;
+      canvas.width = parent ? parent.clientWidth : 800;
+      canvas.height = parent ? parent.clientHeight : 450;
+    }
+  }
+
+  resizeCanvas();
+  window.removeEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", resizeCanvas);
+
+  if (watermarkTimer) clearInterval(watermarkTimer);
+
+  function drawWatermark() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString();
+    const label = userLabel || (appState.currentUser?.email || "Student ID: EDU-8924");
+    const fullText = `${label} • ${timeStr}`;
+
+    ctx.save();
+    ctx.font = "500 13px 'Inter', sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+    ctx.shadowBlur = 4;
+
+    const padding = 30;
+    const maxX = Math.max(padding, canvas.width - 240);
+    const maxY = Math.max(padding, canvas.height - 40);
+    const posX = padding + Math.floor(Math.random() * (maxX - padding));
+    const posY = padding + Math.floor(Math.random() * (maxY - padding));
+
+    ctx.fillText(fullText, posX, posY);
+    ctx.restore();
+  }
+
+  drawWatermark();
+  watermarkTimer = setInterval(drawWatermark, 4000);
+}
 
 export function seekVideoTo(seconds) {
   const studioTab = document.getElementById("tab-nav-studio");
@@ -166,30 +218,97 @@ export function initStudioTab() {
       if (uttCount) uttCount.textContent = currentUtterances.length;
       if (chunkCount) chunkCount.textContent = currentChunks.length;
 
-      // Video Source handling: High-performance streaming via backend stream endpoint
+      // Video Source handling: High-performance streaming via AES-128 HLS or signed progressive stream
       const vUrl = lesson.video_url || "";
-      const streamEndpoint = `/api/lessons/${lesson.id}/stream`;
+      const lessonId = lesson.id;
+
+      // 1. Fetch short-lived signed stream token (HMAC-SHA256, 5 min)
+      let streamToken = "";
+      try {
+        const tokenRes = await fetch(`/api/lessons/${lessonId}/stream-token`, {
+          method: "POST"
+        });
+        if (tokenRes.ok) {
+          const tokenData = await tokenRes.json();
+          streamToken = tokenData.signed_token || "";
+        }
+      } catch (e) {
+        console.warn("Notice fetching stream token:", e);
+      }
+
+      // 2. Start dynamic anti-piracy forensic watermark
+      startForensicWatermarking(appState.currentUser?.email || `Student: ${lesson.course_id || "ClimbUP"}`);
+
+      // 3. URLs
+      const hlsPlaylistUrl = `/api/lessons/${lessonId}/hls/master.m3u8${streamToken ? `?st=${streamToken}` : ""}`;
+      const progressiveUrl = `/api/lessons/${lessonId}/stream${streamToken ? `?st=${streamToken}` : ""}`;
 
       if (driveIframeEl) driveIframeEl.style.display = "none";
       if (videoEl) {
         videoEl.style.display = "block";
         if (videoOverlay) videoOverlay.style.display = "flex";
 
-        videoEl.onerror = () => {
-          console.warn("[Stream Notice] Native stream error, attempting preview fallback...");
-          const match = vUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-          const fileId = match ? match[1] : null;
-          if (fileId && driveIframeEl) {
-            videoEl.style.display = "none";
-            if (videoOverlay) videoOverlay.style.display = "none";
-            driveIframeEl.dataset.fileId = fileId;
-            driveIframeEl.src = `https://drive.google.com/file/d/${fileId}/preview`;
-            driveIframeEl.style.display = "block";
-          }
-        };
+        // Clean up any existing HLS instance
+        if (currentHlsInstance) {
+          currentHlsInstance.destroy();
+          currentHlsInstance = null;
+        }
 
-        videoEl.src = streamEndpoint;
-        videoEl.load();
+        // Test if HLS playlist is available
+        let hlsAvailable = false;
+        try {
+          const testHls = await fetch(hlsPlaylistUrl, { method: "HEAD" });
+          hlsAvailable = testHls.ok;
+        } catch (_) {
+          hlsAvailable = false;
+        }
+
+        if (hlsAvailable && window.Hls && window.Hls.isSupported()) {
+          console.log("[HLS Engine] Initializing AES-128 Encrypted HLS Player for:", lessonId);
+          const hls = new window.Hls({
+            enableWorker: true,
+            lowLatencyMode: false,
+            xhrSetup: (xhr, url) => {
+              if (streamToken && !url.includes("st=")) {
+                const sep = url.includes("?") ? "&" : "?";
+                xhr.open("GET", `${url}${sep}st=${streamToken}`, true);
+              }
+            }
+          });
+          currentHlsInstance = hls;
+          hls.loadSource(hlsPlaylistUrl);
+          hls.attachMedia(videoEl);
+          hls.on(window.Hls.Events.ERROR, (event, data) => {
+            if (data.fatal) {
+              console.warn("[HLS Error] Fallback to progressive stream:", data);
+              hls.destroy();
+              currentHlsInstance = null;
+              videoEl.src = progressiveUrl;
+              videoEl.load();
+            }
+          });
+        } else if (hlsAvailable && videoEl.canPlayType("application/vnd.apple.mpegurl")) {
+          // Native Safari / iOS HLS
+          videoEl.src = hlsPlaylistUrl;
+          videoEl.load();
+        } else {
+          // Standard Progressive Stream Fallback
+          videoEl.onerror = () => {
+            console.warn("[Stream Notice] Stream error, attempting preview fallback...");
+            const match = vUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+            const fileId = match ? match[1] : null;
+            if (fileId && driveIframeEl) {
+              videoEl.style.display = "none";
+              if (videoOverlay) videoOverlay.style.display = "none";
+              driveIframeEl.dataset.fileId = fileId;
+              driveIframeEl.src = `https://drive.google.com/file/d/${fileId}/preview`;
+              driveIframeEl.style.display = "block";
+            }
+          };
+
+          videoEl.src = progressiveUrl;
+          videoEl.load();
+        }
       }
 
       renderUtterances(currentUtterances);

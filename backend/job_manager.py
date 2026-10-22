@@ -14,6 +14,7 @@ from backend.deepgram_transcriber import DeepgramTranscriber
 from backend.semantic_chunker import SemanticChunker
 from backend.vector_embedder import VectorEmbedder
 from backend.google_drive import GoogleDriveManager
+from backend.hls_transcoder import HLSTranscoder
 
 logger = logging.getLogger("climbup.job_manager")
 
@@ -198,6 +199,22 @@ class IngestionJobManager:
                 # Run bounded FFmpeg audio extraction
                 clean_audio_path = extract_and_clean_audio(str(temp_media_path))
 
+                # Package into AES-128 Encrypted HLS stream if FFmpeg is available
+                hls_packaged = False
+                try:
+                    hls_output_dir = Config.CHUNKS_DIR / "hls" / lesson_id
+                    if not (hls_output_dir / "master.m3u8").exists() and HLSTranscoder.is_ffmpeg_available():
+                        logger.info(f"[HLS Ingestion] Packaging {lesson_id} into AES-128 encrypted HLS segments...")
+                        res = HLSTranscoder.package_video_to_encrypted_hls(
+                            lesson_id=lesson_id,
+                            input_file_path=temp_media_path,
+                            output_hls_dir=hls_output_dir,
+                            segment_duration=4
+                        )
+                        hls_packaged = bool(res and res.get("total_segments", 0) > 0)
+                except Exception as hls_err:
+                    logger.warning(f"[HLS Ingestion] Notice on HLS packaging: {hls_err}")
+
                 # Immediately delete temporary video file to protect 1 GB RAM / tmpfs disk!
                 if temp_media_path and temp_media_path.exists() and "temp_stream_" in temp_media_path.name:
                     try:
@@ -211,7 +228,7 @@ class IngestionJobManager:
                     stage="AUDIO_EXTRACTION",
                     progress_percent=40,
                     stage_message="Audio extraction complete (32kbps mono).",
-                    checkpoint_data={"clean_audio_path": clean_audio_path, "audio_extracted": True}
+                    checkpoint_data={"clean_audio_path": clean_audio_path, "audio_extracted": True, "hls_enabled": hls_packaged}
                 )
 
             # -----------------------------------------------------------------

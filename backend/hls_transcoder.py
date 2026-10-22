@@ -16,9 +16,20 @@ class HLSTranscoder:
     Used by streaming platforms (Udemy, Hotstar) to prevent browser extensions from downloading full videos.
     """
 
-    @staticmethod
-    def is_ffmpeg_available() -> bool:
-        return shutil.which("ffmpeg") is not None
+    @classmethod
+    def get_ffmpeg_binary(cls) -> Optional[str]:
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            return system_ffmpeg
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+
+    @classmethod
+    def is_ffmpeg_available(cls) -> bool:
+        return cls.get_ffmpeg_binary() is not None
 
     @classmethod
     def package_video_to_encrypted_hls(
@@ -33,7 +44,8 @@ class HLSTranscoder:
         Because -codec copy is used, this runs at ultra-fast speeds (~1-3 seconds for 15-minute video)
         with zero video quality loss and minimal CPU usage.
         """
-        if not cls.is_ffmpeg_available():
+        ffmpeg_bin = cls.get_ffmpeg_binary()
+        if not ffmpeg_bin:
             logger.warning("[HLS] ffmpeg is not available on this host. Skipping HLS transcoding.")
             return None
 
@@ -65,7 +77,7 @@ class HLSTranscoder:
         segment_pattern = str((output_hls_dir / "segment_%03d.ts").resolve())
 
         cmd = [
-            "ffmpeg",
+            ffmpeg_bin,
             "-y",
             "-i", str(input_file_path.resolve()),
             "-codec", "copy",
