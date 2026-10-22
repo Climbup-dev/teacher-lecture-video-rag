@@ -209,7 +209,7 @@ class IngestionJobManager:
                             lesson_id=lesson_id,
                             input_file_path=temp_media_path,
                             output_hls_dir=hls_output_dir,
-                            segment_duration=4
+                            segment_duration=6
                         )
                         hls_packaged = bool(res and res.get("total_segments", 0) > 0)
                 except Exception as hls_err:

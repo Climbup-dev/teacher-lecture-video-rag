@@ -60,10 +60,10 @@ def generate_signed_stream_token(
     lesson_id: str,
     user_id: str,
     client_ip: str = "",
-    ttl_seconds: int = 300
+    ttl_seconds: int = 86400  # 24 hours for smooth, uninterrupted multi-hour lectures (up to 5+ hours)
 ) -> str:
     """
-    Generates a cryptographically signed, short-lived (5 min default) token
+    Generates a cryptographically signed, 24-hour token
     specifically tied to a lesson, user, and IP address.
     """
     payload = {
@@ -115,7 +115,7 @@ def verify_signed_stream_token(
         return False, None, f"Failed to decode token payload: {e}"
 
     if int(payload.get("exp", 0)) < int(time.time()):
-        return False, None, "Signed stream token has expired (tokens are valid for 5 minutes only)."
+        return False, None, "Signed stream token has expired."
 
     if payload.get("lid") != lesson_id:
         return False, None, "Signed token does not match requested lesson."
@@ -132,7 +132,6 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
     ua = (headers.get("user-agent") or "").lower().strip()
     sec_fetch_dest = (headers.get("sec-fetch-dest") or "").lower().strip()
     sec_fetch_mode = (headers.get("sec-fetch-mode") or "").lower().strip()
-    client_ip = get_client_ip(request)
 
     # 1. Check known scraper / downloader user agents
     for tool in BLOCKED_TOOL_SUBSTRINGS:
@@ -143,11 +142,10 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
     if sec_fetch_dest == "document" and sec_fetch_mode == "navigate":
         return "DIRECT_URL_DOWNLOAD_ATTEMPT", "Direct browser navigation/download attempted outside authorized video player."
 
-    # 3. Check third-party downloader extension background interception
-    # Browser <video> tags always send sec-fetch-dest: "video" (or "audio").
-    # Downloader extensions (CocoCut, IDM, Video DownloadHelper) in background script send sec-fetch-dest: "empty".
-    if sec_fetch_dest == "empty" and request.url and "/stream" in request.url.path:
-        return "EXTENSION_DOWNLOAD_INTERCEPT", "Third-party extension background interception on media stream blocked."
+    # 3. Check unauthorized cross-site scraping on stream endpoints
+    sec_fetch_site = (headers.get("sec-fetch-site") or "").lower().strip()
+    if sec_fetch_site == "cross-site" and sec_fetch_mode == "no-cors" and request.url and "/stream" in request.url.path:
+        return "EXTENSION_DOWNLOAD_INTERCEPT", "Third-party cross-site interception on media stream blocked."
 
     return None
 

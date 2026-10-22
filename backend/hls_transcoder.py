@@ -37,7 +37,7 @@ class HLSTranscoder:
         lesson_id: str,
         input_file_path: Path,
         output_hls_dir: Path,
-        segment_duration: int = 4
+        segment_duration: int = 6
     ) -> Optional[Dict[str, Any]]:
         """
         Remuxes an MP4 video into AES-128 encrypted HLS segments using ffmpeg -codec copy.
@@ -74,7 +74,8 @@ class HLSTranscoder:
         keyinfo_content = f"{key_uri}\n{str(key_path.resolve())}\n{iv_hex}\n"
         keyinfo_path.write_text(keyinfo_content, encoding="utf-8")
 
-        segment_pattern = str((output_hls_dir / "segment_%04d.ts").resolve())
+        # %05d supports up to 99,999 segments (up to 150+ hours of video without integer overflow)
+        segment_pattern = str((output_hls_dir / "segment_%05d.ts").resolve())
 
         cmd = [
             ffmpeg_bin,
@@ -83,18 +84,19 @@ class HLSTranscoder:
             "-codec", "copy",
             "-hls_time", str(segment_duration),
             "-hls_list_size", "0",
+            "-hls_flags", "independent_segments",
             "-hls_key_info_file", str(keyinfo_path.resolve()),
             "-hls_segment_filename", segment_pattern,
             str(playlist_path.resolve())
         ]
 
         try:
-            logger.info(f"[HLS] Packaging {lesson_id} into encrypted HLS stream...")
+            logger.info(f"[HLS] Packaging {lesson_id} into encrypted HLS stream (segment_duration={segment_duration}s)...")
             result = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=600,
+                timeout=1800,
                 check=False
             )
 

@@ -525,13 +525,13 @@ async def create_lesson_stream_token(
         lesson_id=lesson_id,
         user_id=user_id,
         client_ip=client_ip,
-        ttl_seconds=300
+        ttl_seconds=86400
     )
     return {
         "status": "success",
         "lesson_id": lesson_id,
         "signed_token": signed_token,
-        "expires_in_seconds": 300
+        "expires_in_seconds": 86400
     }
 
 
@@ -780,7 +780,7 @@ async def get_lesson_hls_playlist(
                     lesson_id=lesson_id,
                     input_file_path=temp_media_path,
                     output_hls_dir=hls_dir,
-                    segment_duration=4
+                    segment_duration=6
                 )
         except Exception as e:
             logger.warning(f"[HLS On-Demand] Notice during packaging for {lesson_id}: {e}")
