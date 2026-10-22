@@ -895,7 +895,7 @@ async def get_lesson_hls_segment(
         path=str(seg_file),
         media_type="video/mp2t",
         headers={
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "public, max-age=86400, s-maxage=604800, immutable",
             "Access-Control-Allow-Origin": "*",
         }
     )
