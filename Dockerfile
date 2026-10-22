@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application directories (backend includes seed_catalog.json)
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
+COPY data/ ./data/
 
 # Create application data directories and assign permissions to non-root user
 RUN mkdir -p /app/data/uploads /app/data/chunks && \

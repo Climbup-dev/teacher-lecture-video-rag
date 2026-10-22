@@ -218,7 +218,7 @@ class GoogleDriveManager:
     def download_file(self, file_id: str, dest_path: Path) -> bool:
         """Streams and downloads a file from Google Drive to local disk for RAG processing."""
         clean_id = self.extract_file_id(file_id)
-        oauth_token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
+        oauth_token = self.get_access_token()
         if oauth_token:
             try:
                 import requests
