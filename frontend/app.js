@@ -2552,7 +2552,17 @@ document.addEventListener("DOMContentLoaded", () => {
 // STRICT ADMIN AUTHENTICATION & AI ASSIGNMENT STUDIO ENGINE
 // ============================================================
 
-const AUTHORIZED_ADMIN_EMAIL = "amirshaikh@gmail.com";
+const AUTHORIZED_ADMIN_EMAILS = [
+  "amirshaikh320340@gmail.com",
+  "amirshaikh@gmail.com"
+];
+
+function isAuthorizedAdminEmail(email) {
+  if (!email) return false;
+  return AUTHORIZED_ADMIN_EMAILS.includes(email.toLowerCase().trim());
+}
+
+let activeAttemptEmail = "amirshaikh320340@gmail.com";
 const SUPABASE_PROJECT_URL = "https://jueoglgbseoxszygpjdb.supabase.co";
 const SUPABASE_PUBLIC_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1ZW9nbGdic2VveHN6eWdwamRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3ODUwMjYsImV4cCI6MjA5NzM2MTAyNn0.PmVKzsVVHYS384PahpfCHB-_DZLg4gTlQN1sVOYfa8w";
 
@@ -2583,8 +2593,9 @@ async function checkStrictAdminAuth() {
     const { data: { session } } = await supabaseClient.auth.getSession();
     const verifiedLocal = localStorage.getItem("climbup_admin_verified");
 
+    const sessEmail = session?.user?.email?.toLowerCase().trim();
     if (
-      (session?.user?.email?.toLowerCase().trim() === AUTHORIZED_ADMIN_EMAIL) ||
+      isAuthorizedAdminEmail(sessEmail) ||
       (verifiedLocal === "true")
     ) {
       if (overlay) overlay.style.display = "none";
@@ -2646,10 +2657,12 @@ function setupGatekeeperListeners() {
       alertBox.style.display = "none";
 
       const cleanEmail = (emailInput?.value || "").trim().toLowerCase();
-      if (cleanEmail !== AUTHORIZED_ADMIN_EMAIL) {
-        showAlert(`Access Denied: Portal is strictly restricted to ${AUTHORIZED_ADMIN_EMAIL}.`);
+      if (!isAuthorizedAdminEmail(cleanEmail)) {
+        showAlert(`Access Denied: Portal is strictly restricted to amirshaikh320340@gmail.com.`);
         return;
       }
+
+      activeAttemptEmail = cleanEmail;
 
       if (sendBtn) {
         sendBtn.disabled = true;
@@ -2660,13 +2673,13 @@ function setupGatekeeperListeners() {
         if (!supabaseClient) throw new Error("Supabase client not initialized.");
 
         const { error } = await supabaseClient.auth.signInWithOtp({
-          email: AUTHORIZED_ADMIN_EMAIL,
+          email: activeAttemptEmail,
           options: { shouldCreateUser: true }
         });
 
         if (error) throw error;
 
-        showAlert(`Secure 6-digit OTP code sent to ${AUTHORIZED_ADMIN_EMAIL}. Please check your inbox.`, true);
+        showAlert(`Secure 6-digit OTP code sent to ${activeAttemptEmail}. Please check your inbox.`, true);
         if (emailForm) emailForm.style.display = "none";
         if (otpForm) otpForm.style.display = "block";
         if (otpBoxes[0]) otpBoxes[0].focus();
@@ -2705,14 +2718,14 @@ function setupGatekeeperListeners() {
         if (!supabaseClient) throw new Error("Supabase client not initialized.");
 
         const { data, error } = await supabaseClient.auth.verifyOtp({
-          email: AUTHORIZED_ADMIN_EMAIL,
+          email: activeAttemptEmail,
           token: otpCode,
           type: "email"
         });
 
         if (error) throw error;
 
-        if (!data.user || data.user.email?.toLowerCase().trim() !== AUTHORIZED_ADMIN_EMAIL) {
+        if (!data.user || !isAuthorizedAdminEmail(data.user.email)) {
           await supabaseClient.auth.signOut();
           throw new Error("Unauthorized identity. Verification rejected.");
         }

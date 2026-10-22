@@ -25,7 +25,7 @@
       </div>
       <h2 class="gatekeeper-title">ClimbUP Teacher Hub</h2>
       <p class="gatekeeper-subtitle">
-        Secure university operations command center. Access restricted exclusively to <strong>amirshaikh@gmail.com</strong>.
+        Secure university operations command center. Access restricted exclusively to <strong>amirshaikh320340@gmail.com</strong>.
       </p>
 
       <div id="gatekeeper-alert" class="gatekeeper-alert" style="display: none;"></div>
@@ -36,7 +36,7 @@
           <label style="font-size: 0.82rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); display: block; margin-bottom: 6px;">
             Administrator Email
           </label>
-          <input type="email" id="gatekeeper-email-input" class="form-input" value="amirshaikh@gmail.com" required placeholder="amirshaikh@gmail.com" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1.5px solid rgba(56, 211, 153, 0.35); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 0.92rem;">
+          <input type="email" id="gatekeeper-email-input" class="form-input" value="amirshaikh320340@gmail.com" required placeholder="amirshaikh320340@gmail.com" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1.5px solid rgba(56, 211, 153, 0.35); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 0.92rem;">
         </div>
         <button type="submit" class="btn btn-primary" id="btn-send-admin-otp" style="width: 100%; padding: 13px; font-weight: 700; border-radius: 10px; font-size: 0.95rem; box-shadow: 0 4px 18px rgba(56, 211, 153, 0.35);">
           Request Secure OTP Code
@@ -49,7 +49,7 @@
       <!-- Step 2: OTP Form -->
       <form id="gatekeeper-otp-form" style="display: none;">
         <p style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.85); margin-bottom: 16px;">
-          Enter the 6-digit verification code sent to <strong>amirshaikh@gmail.com</strong>:
+          Enter the 6-digit verification code sent to <strong id="gatekeeper-target-email">amirshaikh320340@gmail.com</strong>:
         </p>
         <div class="otp-inputs-row" style="display: flex; gap: 8px; justify-content: center; margin-bottom: 20px;">
           <input type="text" class="otp-digit-box" maxlength="1" data-index="0">
@@ -111,7 +111,7 @@
       <div class="nav-right">
         <div class="admin-user-badge" id="admin-user-badge" style="display: none;">
           <span class="live-dot-mini"></span>
-          <span>amirshaikh@gmail.com</span>
+          <span id="admin-user-badge-email">amirshaikh320340@gmail.com</span>
         </div>
         <button class="btn btn-sm btn-logout" id="btn-admin-logout" style="display: none;" title="Exit Studio & Lock Screen">
           Lock Studio
@@ -1276,6 +1276,6 @@
 
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>
