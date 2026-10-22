@@ -720,7 +720,7 @@ async def stream_lesson_video(
 
 
 # --- ENCRYPTED HLS ANTI-PIRACY STREAMING (Udemy/Hotstar grade AES-128) ---
-@app.get("/api/lessons/{lesson_id}/hls/master.m3u8")
+@app.api_route("/api/lessons/{lesson_id}/hls/master.m3u8", methods=["GET", "HEAD"])
 async def get_lesson_hls_playlist(
     lesson_id: str,
     request: Request,
@@ -731,17 +731,12 @@ async def get_lesson_hls_playlist(
     """
     Serves AES-128 encrypted HLS playlist.
     If HLS directory exists for lesson_id, returns master.m3u8 with tokenized key URI.
-    If not yet transcoded to HLS, returns 404 so client cleanly falls back to progressive stream.
+    If not yet transcoded to HLS, dynamically packages the source video into AES-128 HLS on-demand.
     """
     client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
     if threat:
         raise HTTPException(status_code=403, detail="Automated download tools are blocked from playlist access.")
-
-    hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
-    playlist_file = hls_dir / "master.m3u8"
-    if not playlist_file.exists():
-        raise HTTPException(status_code=404, detail="HLS stream not yet packaged for this lesson.")
 
     lesson = db.get_lesson(lesson_id)
     if not lesson:
@@ -756,6 +751,58 @@ async def get_lesson_hls_playlist(
         raise HTTPException(status_code=401, detail="Stream token or authentication required for lecture playlist.")
     elif not is_free_preview:
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
+
+    hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
+    playlist_file = hls_dir / "master.m3u8"
+
+    # On-demand HLS packaging for existing lessons that were uploaded before HLS or on fresh containers
+    if not playlist_file.exists():
+        video_url = lesson.get("video_url", "").strip()
+        temp_media_path = None
+        is_temp_download = False
+        try:
+            drive_file_id = GoogleDriveManager.extract_file_id(video_url)
+            if drive_file_id and drive_mgr.is_configured():
+                temp_media_path = Config.UPLOADS_DIR / f"hls_ondemand_{lesson_id}.tmp"
+                if not temp_media_path.exists():
+                    download_ok = drive_mgr.download_file(drive_file_id, temp_media_path)
+                    if download_ok and temp_media_path.exists():
+                        is_temp_download = True
+            elif "/uploads/" in video_url or "uploads/" in video_url:
+                local_fname = Path(video_url.replace("/uploads/", "").replace("uploads/", "")).name
+                local_fpath = (Config.UPLOADS_DIR / local_fname).resolve()
+                if local_fpath.exists():
+                    temp_media_path = local_fpath
+
+            if temp_media_path and temp_media_path.exists() and HLSTranscoder.is_ffmpeg_available():
+                logger.info(f"[HLS On-Demand] Packaging {lesson_id} into AES-128 encrypted HLS...")
+                HLSTranscoder.package_video_to_encrypted_hls(
+                    lesson_id=lesson_id,
+                    input_file_path=temp_media_path,
+                    output_hls_dir=hls_dir,
+                    segment_duration=4
+                )
+        except Exception as e:
+            logger.warning(f"[HLS On-Demand] Notice during packaging for {lesson_id}: {e}")
+        finally:
+            if is_temp_download and temp_media_path and temp_media_path.exists():
+                try:
+                    temp_media_path.unlink()
+                except Exception:
+                    pass
+
+    if not playlist_file.exists():
+        raise HTTPException(status_code=404, detail="HLS stream not yet packaged for this lesson.")
+
+    if request.method == "HEAD":
+        return Response(
+            status_code=200,
+            media_type="application/vnd.apple.mpegurl",
+            headers={
+                "Cache-Control": "private, no-cache, no-store, must-revalidate",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
 
     content = playlist_file.read_text(encoding="utf-8")
     auth_query = f"?token={token}" if token else (f"?st={st}" if st else "")
