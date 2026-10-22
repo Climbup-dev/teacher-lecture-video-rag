@@ -48,4 +48,4 @@ tests/find_users_query.py
 tests/fix_classroom_user.py
 tests/test_rag_baseline.py
 tests/generate_live_qa_samples.py
-
+scratch/

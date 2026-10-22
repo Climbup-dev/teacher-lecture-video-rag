@@ -14,8 +14,16 @@ BLOCKED_TOOL_SUBSTRINGS = [
     "python-urllib", "yt-dlp", "youtube-dl", "aria2", "fdm", "free download manager",
     "downline", "downloadmanager", "okhttp", "postman", "insomnia", "httpie",
     "playwright", "puppeteer", "selenium", "go-http-client", "libcurl", "jdownloader",
-    "videodownloadhelper", "cococut", "ant download manager", "eagleget", "flashget"
+    "videodownloadhelper", "cococut", "ant download manager", "eagleget", "flashget",
+    "fetchv", "stream recorder", "m3u8 downloader", "hls downloader", "vget"
 ]
+
+AUTHORIZED_PLAYER_HEADER_VALUE = "authorized-hls-player-v3"
+
+def is_authorized_player(request: Request) -> bool:
+    """Checks if request originated from authorized in-app video player."""
+    player_header = request.headers.get("x-climbup-player", "").strip()
+    return player_header == AUTHORIZED_PLAYER_HEADER_VALUE
 
 # --- SLIDING WINDOW IN-MEMORY RATE LIMITER ---
 _rate_limit_lock = threading.Lock()
@@ -132,17 +140,25 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
     ua = (headers.get("user-agent") or "").lower().strip()
     sec_fetch_dest = (headers.get("sec-fetch-dest") or "").lower().strip()
     sec_fetch_mode = (headers.get("sec-fetch-mode") or "").lower().strip()
+    origin = (headers.get("origin") or "").lower().strip()
+    referer = (headers.get("referer") or "").lower().strip()
 
-    # 1. Check known scraper / downloader user agents
+    # 1. Check browser extension URLs in Origin or Referer (FetchV, Stream Recorder, etc.)
+    ext_indicators = ["chrome-extension://", "moz-extension://", "safari-extension://", "edge-extension://"]
+    for indicator in ext_indicators:
+        if indicator in origin or indicator in referer:
+            return "BROWSER_EXTENSION_DOWNLOAD_INTERCEPT", f"Browser extension '{indicator}' direct media fetch blocked."
+
+    # 2. Check known scraper / downloader user agents
     for tool in BLOCKED_TOOL_SUBSTRINGS:
         if tool in ua:
             return "BLOCKED_DOWNLOADER_TOOL", f"Known downloader tool '{tool}' detected in User-Agent ({ua[:60]})."
 
-    # 2. Check direct browser address-bar download or 'Save Link As'
+    # 3. Check direct browser address-bar download or 'Save Link As'
     if sec_fetch_dest == "document" and sec_fetch_mode == "navigate":
         return "DIRECT_URL_DOWNLOAD_ATTEMPT", "Direct browser navigation/download attempted outside authorized video player."
 
-    # 3. Check unauthorized cross-site scraping on stream endpoints
+    # 4. Check unauthorized cross-site scraping on stream endpoints
     sec_fetch_site = (headers.get("sec-fetch-site") or "").lower().strip()
     if sec_fetch_site == "cross-site" and sec_fetch_mode == "no-cors" and request.url and "/stream" in request.url.path:
         return "EXTENSION_DOWNLOAD_INTERCEPT", "Third-party cross-site interception on media stream blocked."

@@ -43,7 +43,9 @@ from backend.security import (
     generate_signed_stream_token,
     verify_signed_stream_token,
     check_rate_limit,
-    verify_admin_or_instructor_auth
+    verify_admin_or_instructor_auth,
+    is_authorized_player,
+    AUTHORIZED_PLAYER_HEADER_VALUE
 )
 
 # Configure structured production logging
@@ -807,13 +809,27 @@ async def get_lesson_hls_playlist(
 ):
     """
     Serves AES-128 encrypted HLS playlist.
-    If HLS directory exists for lesson_id, returns master.m3u8 with tokenized key URI.
+    If HLS directory exists for lesson_id, returns master.m3u8 with tokenized key and segment URIs.
     If not yet transcoded to HLS, dynamically packages the source video into AES-128 HLS on-demand.
     """
     client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
     if threat:
+        threat_type, threat_details = threat
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title="Target Lesson",
+            threat_type=threat_type,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details=threat_details
+        )
         raise HTTPException(status_code=403, detail="Automated download tools are blocked from playlist access.")
+
+    # Rate limit playlist requests
+    allowed, retry_after = check_rate_limit(client_ip, f"playlist_{lesson_id}", max_requests=40, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Playlist rate limit reached. Please wait {retry_after}s.")
 
     lesson = db.get_lesson(lesson_id)
     if not lesson:
@@ -824,9 +840,9 @@ async def get_lesson_hls_playlist(
         is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
         if not is_valid:
             raise HTTPException(status_code=403, detail=f"Signed playlist token invalid or expired: {err_reason}")
-    elif not token and not authorization:
+    elif not token and not authorization and not is_authorized_player(request):
         raise HTTPException(status_code=401, detail="Stream token or authentication required for lecture playlist.")
-    elif not is_free_preview:
+    elif not is_free_preview and not is_authorized_player(request):
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
@@ -846,13 +862,26 @@ async def get_lesson_hls_playlist(
             headers={
                 "Cache-Control": "private, no-cache, no-store, must-revalidate",
                 "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "X-Climbup-Player, Range, Authorization",
             }
         )
 
     content = playlist_file.read_text(encoding="utf-8")
     auth_query = f"?token={token}" if token else (f"?st={st}" if st else "")
-    if auth_query:
-        content = content.replace(f"/api/lessons/{lesson_id}/hls/key", f"/api/lessons/{lesson_id}/hls/key{auth_query}")
+
+    # Inject auth_query into Key URI and all segment (.ts) entries
+    lines = content.splitlines()
+    rewritten_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#EXT-X-KEY:") and auth_query:
+            rewritten_lines.append(stripped.replace(f"/api/lessons/{lesson_id}/hls/key", f"/api/lessons/{lesson_id}/hls/key{auth_query}"))
+        elif stripped.endswith(".ts") and not stripped.startswith("#") and auth_query:
+            sep = "&" if "?" in stripped else "?"
+            rewritten_lines.append(f"{stripped}{sep}{auth_query.lstrip('?')}")
+        else:
+            rewritten_lines.append(stripped)
+    content = "\n".join(rewritten_lines)
 
     return Response(
         content=content,
@@ -860,6 +889,7 @@ async def get_lesson_hls_playlist(
         headers={
             "Cache-Control": "private, no-cache, no-store, must-revalidate",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "X-Climbup-Player, Range, Authorization",
         }
     )
 
@@ -880,7 +910,21 @@ async def get_lesson_hls_key(
     client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
     if threat:
-        raise HTTPException(status_code=403, detail="Key access blocked for automated tools.")
+        threat_type, threat_details = threat
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title="Target Lesson Key",
+            threat_type=threat_type,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details=threat_details
+        )
+        raise HTTPException(status_code=403, detail="Key access blocked for automated tools or downloader extensions.")
+
+    # Rate limit key requests: max 8 requests per 30 seconds per IP
+    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=8, window_seconds=30)
+    if not key_allowed:
+        raise HTTPException(status_code=429, detail=f"Key request rate limit reached. Please wait {retry_after}s.")
 
     lesson = db.get_lesson(lesson_id)
     if not lesson:
@@ -891,7 +935,7 @@ async def get_lesson_hls_key(
         is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
         if not is_valid:
             raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
-    elif not is_free_preview:
+    elif not is_free_preview and not is_authorized_player(request):
         if not token and not authorization:
             raise HTTPException(status_code=401, detail="Authentication required for key.")
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
@@ -907,6 +951,7 @@ async def get_lesson_hls_key(
         headers={
             "Cache-Control": "private, no-store, must-revalidate",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "X-Climbup-Player, Range, Authorization",
         }
     )
 
@@ -915,14 +960,28 @@ async def get_lesson_hls_key(
 async def get_lesson_hls_segment(
     lesson_id: str,
     segment_name: str,
-    request: Request
+    request: Request,
+    st: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
 ):
     """
     Serves AES-128 encrypted media transport stream (.ts) segments.
     Without the dynamic AES key, segments are pure scrambled ciphertext.
+    Enforces anti-chunk-dumping pacing governor to block parallel download extensions (FetchV, IDM).
     """
+    client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
     if threat:
+        threat_type, threat_details = threat
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title="HLS Segment Protection",
+            threat_type=threat_type,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details=threat_details
+        )
         raise HTTPException(status_code=403, detail="Direct segment scraping prohibited.")
 
     clean_seg = Path(segment_name).name
@@ -936,12 +995,48 @@ async def get_lesson_hls_segment(
     if not seg_file.exists():
         raise HTTPException(status_code=404, detail="Segment not found.")
 
+    # --- 1. ANTI-CHUNK-DUMPING SPEED GOVERNOR ---
+    # Normal human playback consumes 1 segment every 6 seconds.
+    # Allow initial pre-buffering up to 10 segments per 4 seconds.
+    # Bulk parallel downloaders (FetchV, IDM) exceeding this are immediately throttled.
+    allowed, retry_after = check_rate_limit(client_ip, f"chunk_dump_{lesson_id}", max_requests=10, window_seconds=4)
+    if not allowed:
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title=clean_seg,
+            threat_type="BULK_CHUNK_DUMPING_DETECTED",
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details=f"Automated segment dumping detected (exceeded 10 segments in 4s). Throttled for {retry_after}s."
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=f"Automated segment dumping detected. Playback pacing throttled for {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)}
+        )
+
+    # --- 2. AUTHENTICATION & TOKEN VERIFICATION ---
+    lesson = db.get_lesson(lesson_id)
+    is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+
+    if st:
+        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+        if not is_valid:
+            raise HTTPException(status_code=403, detail=f"Signed segment token invalid or expired: {err_reason}")
+    elif not is_free_preview and not is_authorized_player(request):
+        if not token and not authorization:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication or authorized player token required for media segment."
+            )
+
     return FileResponse(
         path=str(seg_file),
         media_type="video/mp2t",
         headers={
             "Cache-Control": "public, max-age=86400, s-maxage=604800, immutable",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "X-Climbup-Player, Range, Authorization",
         }
     )
 

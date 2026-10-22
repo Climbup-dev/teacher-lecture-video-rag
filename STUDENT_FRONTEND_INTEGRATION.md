@@ -514,6 +514,7 @@ export function SecureHLSVideoPlayer({ lessonId, userEmail, onTimeUpdate, videoR
           hls = new Hls({
             enableWorker: true,
             xhrSetup: (xhr, url) => {
+              xhr.setRequestHeader('X-Climbup-Player', 'authorized-hls-player-v3');
               if (signed_token && !url.includes('st=')) {
                 const sep = url.includes('?') ? '&' : '?';
                 xhr.open('GET', `${url}${sep}st=${signed_token}`, true);

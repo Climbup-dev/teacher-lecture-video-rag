@@ -154,6 +154,63 @@ class TestHLSEncryptedStreamingSecurity(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 403)
 
+    def test_07_extension_origin_blocked(self):
+        """Verify that browser extension origins (chrome-extension://, moz-extension://) are blocked with 403."""
+        valid_st = generate_signed_stream_token(self.test_lesson_id, "student_101", "testclient", ttl_seconds=300)
+        res_ext = self.client.get(
+            f"/api/lessons/{self.test_lesson_id}/hls/master.m3u8?st={valid_st}",
+            headers={"Origin": "chrome-extension://abcdefghijklmno123456"}
+        )
+        self.assertEqual(res_ext.status_code, 403)
+        self.assertIn("Automated download tools", res_ext.json().get("detail", ""))
+
+    def test_08_extension_downloader_useragent_blocked(self):
+        """Verify that FetchV, Stream Recorder, and M3U8 Downloader are blocked with 403."""
+        valid_st = generate_signed_stream_token(self.test_lesson_id, "student_101", "testclient", ttl_seconds=300)
+        for ext_ua in ["FetchV/2.1", "Stream Recorder v1.2", "M3U8 Downloader Extension"]:
+            res = self.client.get(
+                f"/api/lessons/{self.test_lesson_id}/hls/key?st={valid_st}",
+                headers={"User-Agent": ext_ua}
+            )
+            self.assertEqual(res.status_code, 403)
+
+    def test_09_chunk_dumping_defense(self):
+        """Verify that parallel chunk dumping (exceeding 10 segments in 4s) is throttled with 429."""
+        segments = list(self.hls_dir.glob("segment_*.ts"))
+        if not segments:
+            self.skipTest("No segments generated")
+
+        seg_name = segments[0].name
+        valid_st = generate_signed_stream_token(self.test_lesson_id, "student_101", "testclient", ttl_seconds=300)
+
+        # Trigger more than 10 requests within a second
+        got_429 = False
+        for _ in range(12):
+            res = self.client.get(
+                f"/api/lessons/{self.test_lesson_id}/hls/{seg_name}?st={valid_st}",
+                headers={"User-Agent": "Mozilla/5.0 Chrome/120.0"}
+            )
+            if res.status_code == 429:
+                got_429 = True
+                break
+        self.assertTrue(got_429, "Excessive parallel chunk requests must trigger 429 rate limit")
+
+    def test_10_segment_signed_token_required(self):
+        """Verify that media segments require valid signed stream token or player header."""
+        segments = list(self.hls_dir.glob("segment_*.ts"))
+        if not segments:
+            self.skipTest("No segments generated")
+
+        seg_name = segments[0].name
+        # Request with invalid token from a distinct IP
+        res_bad = self.client.get(
+            f"/api/lessons/{self.test_lesson_id}/hls/{seg_name}?st=tampered.token",
+            headers={"User-Agent": "Mozilla/5.0 Chrome/120.0", "X-Forwarded-For": "10.0.0.99"}
+        )
+        self.assertEqual(res_bad.status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

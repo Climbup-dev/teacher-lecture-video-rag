@@ -248,16 +248,24 @@ export function initStudioTab() {
         videoEl.style.display = "block";
         if (videoOverlay) videoOverlay.style.display = "flex";
 
+        // Hardened anti-piracy video element configuration
+        videoEl.setAttribute("controlsList", "nodownload noplaybackrate");
+        videoEl.setAttribute("disablePictureInPicture", "true");
+        videoEl.oncontextmenu = (e) => { e.preventDefault(); return false; };
+
         // Clean up any existing HLS instance
         if (currentHlsInstance) {
           currentHlsInstance.destroy();
           currentHlsInstance = null;
         }
 
-        // Test if HLS playlist is available
+        // Test if HLS playlist is available with player handshake
         let hlsAvailable = false;
         try {
-          const testHls = await fetch(hlsPlaylistUrl, { method: "HEAD" });
+          const testHls = await fetch(hlsPlaylistUrl, {
+            method: "HEAD",
+            headers: { "X-Climbup-Player": "authorized-hls-player-v3" }
+          });
           hlsAvailable = testHls.ok;
         } catch (_) {
           hlsAvailable = false;
@@ -269,6 +277,7 @@ export function initStudioTab() {
             enableWorker: true,
             lowLatencyMode: false,
             xhrSetup: (xhr, url) => {
+              xhr.setRequestHeader("X-Climbup-Player", "authorized-hls-player-v3");
               if (streamToken && !url.includes("st=")) {
                 const sep = url.includes("?") ? "&" : "?";
                 xhr.open("GET", `${url}${sep}st=${streamToken}`, true);
