@@ -74,7 +74,7 @@ class HLSTranscoder:
         keyinfo_content = f"{key_uri}\n{str(key_path.resolve())}\n{iv_hex}\n"
         keyinfo_path.write_text(keyinfo_content, encoding="utf-8")
 
-        segment_pattern = str((output_hls_dir / "segment_%03d.ts").resolve())
+        segment_pattern = str((output_hls_dir / "segment_%04d.ts").resolve())
 
         cmd = [
             ffmpeg_bin,
@@ -94,7 +94,7 @@ class HLSTranscoder:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=120,
+                timeout=600,
                 check=False
             )
 
