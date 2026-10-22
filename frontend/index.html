@@ -555,13 +555,18 @@
                   Manage problem sets, assignments with due dates & max points, lecture notes, slides, and syllabus.
                 </p>
               </div>
-              <button class="btn btn-primary" id="btn-open-ai-assignment-generator" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); margin-right: 8px;">
-                ⚡ Generate Dual-AI Assignment
-              </button>
-              <button class="btn btn-secondary" id="btn-add-course-level-material">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
-                + Upload Assignment or Resource
-              </button>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="btn btn-primary" id="btn-open-ai-assignment-generator" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                  ⚡ Generate Dual-AI Assignment
+                </button>
+                <button class="btn btn-secondary" id="btn-open-mcq-generator" style="border-color: rgba(56, 211, 153, 0.4);">
+                  🎯 Practice MCQ Bank
+                </button>
+                <button class="btn btn-secondary" id="btn-add-course-level-material">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                  + Upload Resource / Notes
+                </button>
+              </div>
             </div>
             <div class="materials-grid" id="cd-course-materials-grid">
               <div class="empty-state">No course files or assignments uploaded yet.</div>
@@ -775,10 +780,18 @@
                 <div class="studio-materials-pane">
                   <div class="studio-mat-header">
                     <h4>📎 Attached Notes, Slides & Problem Sets</h4>
-                    <button class="btn btn-sm btn-primary" id="btn-studio-add-material">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                      + Attach Note / Assignment
-                    </button>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                      <button class="btn btn-sm btn-primary" id="btn-studio-open-ai-assignment" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                        ⚡ AI Assignment
+                      </button>
+                      <button class="btn btn-sm btn-secondary" id="btn-studio-open-mcq" style="border-color: rgba(56, 211, 153, 0.4);">
+                        🎯 MCQs
+                      </button>
+                      <button class="btn btn-sm btn-primary" id="btn-studio-add-material">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        + Attach Note / Assignment
+                      </button>
+                    </div>
                   </div>
                   <div class="studio-mat-grid" id="studio-mat-grid">
                     <div class="empty-state">No materials attached to this lecture yet. Click '+ Attach Note / Assignment' to upload.</div>
@@ -1178,8 +1191,91 @@
       </div>
     </div>
 
+    <!-- ============================================================ -->
+    <!-- MODAL: COHORT SUBMISSIONS & AI RUBRIC GRADES                -->
+    <!-- ============================================================ -->
+    <div class="modal" id="modal-assignment-submissions" style="display: none;">
+      <div class="modal-dialog ai-assignment-modal-dialog" style="max-width: 880px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 16px;">
+          <div>
+            <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 999px; margin-bottom: 8px;">
+              <span>📊</span> Submissions Hub
+            </div>
+            <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin: 0;">
+              Cohort Submissions & AI Rubric Grades
+            </h2>
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 4px 0 0 0;">
+              Review student submitted code, approach notes, test results, and automated AI scoring.
+            </p>
+          </div>
+          <button type="button" class="btn btn-icon" id="btn-close-submissions-modal" style="font-size: 1.3rem;">&times;</button>
+        </div>
+
+        <div id="submissions-loading-banner" style="display: none; padding: 12px 16px; border-radius: 10px; background: rgba(56, 211, 153, 0.12); color: #38d399; margin-bottom: 16px; font-size: 0.88rem;">
+          Fetching student submissions and evaluation rubrics...
+        </div>
+
+        <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+          <table class="students-table" style="width: 100%;">
+            <thead>
+              <tr>
+                <th>Student Email</th>
+                <th>Submitted At</th>
+                <th>AI Score</th>
+                <th>Grade Status</th>
+                <th style="text-align: right;">Evaluation Details</th>
+              </tr>
+            </thead>
+            <tbody id="submissions-table-body">
+              <tr>
+                <td colspan="5" style="text-align: center; padding: 32px; color: var(--text-muted);">
+                  No student submissions recorded for this assignment yet.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- MODAL: ZERO-LEAKAGE MCQ PRACTICE BANK                       -->
+    <!-- ============================================================ -->
+    <div class="modal" id="modal-mcq-manager" style="display: none;">
+      <div class="modal-dialog ai-assignment-modal-dialog" style="max-width: 880px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 16px;">
+          <div>
+            <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 999px; margin-bottom: 8px;">
+              <span>🎯</span> Zero-Leakage Engine
+            </div>
+            <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin: 0;">
+              Lecture MCQ Question Bank
+            </h2>
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 4px 0 0 0;">
+              Practice quiz questions grounded directly in lecture transcripts with server-side answer verification.
+            </p>
+          </div>
+          <button type="button" class="btn btn-icon" id="btn-close-mcq-modal" style="font-size: 1.3rem;">&times;</button>
+        </div>
+
+        <div style="background: rgba(18, 30, 52, 0.7); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 12px; padding: 14px 18px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <label style="font-size: 0.75rem; font-weight: 700; color: #94a3b8;">TARGET LECTURE:</label>
+            <select id="mcq-lecture-select" class="styled-dropdown-mini" style="background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.35); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 0.88rem; outline: none;"></select>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-fetch-mcqs" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800;">
+            ⚡ Load / Synthesize MCQs
+          </button>
+        </div>
+
+        <div id="mcq-questions-container" style="max-height: 480px; overflow-y: auto; display: grid; gap: 14px;">
+          <div class="empty-state">Select a lecture and click 'Load / Synthesize MCQs' to preview practice questions.</div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
