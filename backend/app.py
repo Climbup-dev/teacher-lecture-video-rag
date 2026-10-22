@@ -18,6 +18,7 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 import time
+import threading
 import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response, Header, Query
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +34,7 @@ from backend.vector_embedder import VectorEmbedder
 from backend.db_adapter import DBAdapter
 from backend.rag_engine import RAGEngine
 from backend.google_drive import GoogleDriveManager
+from backend.hls_transcoder import HLSTranscoder
 from backend.job_manager import get_job_manager
 from backend.security import (
     detect_download_attempt,
@@ -116,6 +118,79 @@ def health_check():
 
 db = DBAdapter()
 drive_mgr = GoogleDriveManager()
+
+_packaging_in_progress = set()
+_packaging_lock = threading.Lock()
+
+def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Guarantees that a lesson is packaged into AES-128 encrypted HLS segments.
+    Uses concurrency locks to prevent multiple simultaneous packaging operations.
+    Returns True if master.m3u8 is ready, False otherwise.
+    """
+    hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
+    playlist_file = hls_dir / "master.m3u8"
+    if playlist_file.exists():
+        return True
+
+    with _packaging_lock:
+        if lesson_id in _packaging_in_progress:
+            is_active = True
+        else:
+            _packaging_in_progress.add(lesson_id)
+            is_active = False
+
+    if is_active:
+        # Another worker is already packaging this video; wait up to 90 seconds
+        for _ in range(90):
+            time.sleep(1)
+            if playlist_file.exists():
+                return True
+        return playlist_file.exists()
+
+    # We are the active worker for this packaging task
+    temp_media_path = None
+    is_temp_download = False
+    try:
+        lesson = lesson_data or db.get_lesson(lesson_id)
+        if not lesson:
+            return False
+
+        video_url = lesson.get("video_url", "").strip()
+        drive_file_id = GoogleDriveManager.extract_file_id(video_url)
+        if drive_file_id and drive_mgr.is_configured():
+            temp_media_path = Config.UPLOADS_DIR / f"hls_ondemand_{lesson_id}.tmp"
+            if not temp_media_path.exists():
+                download_ok = drive_mgr.download_file(drive_file_id, temp_media_path)
+                if download_ok and temp_media_path.exists():
+                    is_temp_download = True
+        elif "/uploads/" in video_url or "uploads/" in video_url:
+            local_fname = Path(video_url.replace("/uploads/", "").replace("uploads/", "")).name
+            local_fpath = (Config.UPLOADS_DIR / local_fname).resolve()
+            if local_fpath.exists():
+                temp_media_path = local_fpath
+
+        if temp_media_path and temp_media_path.exists() and HLSTranscoder.is_ffmpeg_available():
+            logger.info(f"[HLS Packaging] Packaging {lesson_id} into AES-128 encrypted HLS...")
+            res = HLSTranscoder.package_video_to_encrypted_hls(
+                lesson_id=lesson_id,
+                input_file_path=temp_media_path,
+                output_hls_dir=hls_dir,
+                segment_duration=6
+            )
+            return bool(res and playlist_file.exists())
+        return False
+    except Exception as e:
+        logger.warning(f"[HLS Packaging] Notice during packaging for {lesson_id}: {e}")
+        return False
+    finally:
+        if is_temp_download and temp_media_path and temp_media_path.exists():
+            try:
+                temp_media_path.unlink()
+            except Exception:
+                pass
+        with _packaging_lock:
+            _packaging_in_progress.discard(lesson_id)
 
 class ChatRequest(BaseModel):
     query: str
@@ -627,9 +702,9 @@ async def stream_lesson_video(
             )
             raise he
 
-    # Enforce Anti-Piracy: If HLS encrypted package exists, disable raw progressive MP4 stream
+    # Enforce Anti-Piracy: Disable raw progressive MP4 stream to block browser downloader extensions
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
-    if (hls_dir / "master.m3u8").exists():
+    if (hls_dir / "master.m3u8").exists() or HLSTranscoder.is_ffmpeg_available():
         raise HTTPException(
             status_code=403,
             detail="Direct progressive MP4 streaming is disabled for this protected lesson. Playback is strictly enforced via encrypted HLS."
@@ -755,41 +830,9 @@ async def get_lesson_hls_playlist(
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
     playlist_file = hls_dir / "master.m3u8"
 
-    # On-demand HLS packaging for existing lessons that were uploaded before HLS or on fresh containers
+    # On-demand HLS packaging if not yet packaged
     if not playlist_file.exists():
-        video_url = lesson.get("video_url", "").strip()
-        temp_media_path = None
-        is_temp_download = False
-        try:
-            drive_file_id = GoogleDriveManager.extract_file_id(video_url)
-            if drive_file_id and drive_mgr.is_configured():
-                temp_media_path = Config.UPLOADS_DIR / f"hls_ondemand_{lesson_id}.tmp"
-                if not temp_media_path.exists():
-                    download_ok = drive_mgr.download_file(drive_file_id, temp_media_path)
-                    if download_ok and temp_media_path.exists():
-                        is_temp_download = True
-            elif "/uploads/" in video_url or "uploads/" in video_url:
-                local_fname = Path(video_url.replace("/uploads/", "").replace("uploads/", "")).name
-                local_fpath = (Config.UPLOADS_DIR / local_fname).resolve()
-                if local_fpath.exists():
-                    temp_media_path = local_fpath
-
-            if temp_media_path and temp_media_path.exists() and HLSTranscoder.is_ffmpeg_available():
-                logger.info(f"[HLS On-Demand] Packaging {lesson_id} into AES-128 encrypted HLS...")
-                HLSTranscoder.package_video_to_encrypted_hls(
-                    lesson_id=lesson_id,
-                    input_file_path=temp_media_path,
-                    output_hls_dir=hls_dir,
-                    segment_duration=6
-                )
-        except Exception as e:
-            logger.warning(f"[HLS On-Demand] Notice during packaging for {lesson_id}: {e}")
-        finally:
-            if is_temp_download and temp_media_path and temp_media_path.exists():
-                try:
-                    temp_media_path.unlink()
-                except Exception:
-                    pass
+        ensure_lesson_hls_packaged(lesson_id, lesson)
 
     if not playlist_file.exists():
         raise HTTPException(status_code=404, detail="HLS stream not yet packaged for this lesson.")
@@ -900,6 +943,40 @@ async def get_lesson_hls_segment(
         }
     )
 
+
+@app.post("/api/admin/package-hls/{lesson_id}")
+@app.get("/api/admin/package-hls/{lesson_id}")
+def admin_package_hls(
+    lesson_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Triggers or verifies AES-128 HLS packaging for a lesson.
+    Can be used by admins or automated pre-warming tasks.
+    """
+    hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
+    playlist_file = hls_dir / "master.m3u8"
+    if playlist_file.exists():
+        segments = list(hls_dir.glob("segment_*.ts"))
+        return {
+            "status": "ready",
+            "lesson_id": lesson_id,
+            "total_segments": len(segments),
+            "playlist_url": f"/api/lessons/{lesson_id}/hls/master.m3u8"
+        }
+
+    success = ensure_lesson_hls_packaged(lesson_id)
+    if success and playlist_file.exists():
+        segments = list(hls_dir.glob("segment_*.ts"))
+        return {
+            "status": "packaged",
+            "lesson_id": lesson_id,
+            "total_segments": len(segments),
+            "playlist_url": f"/api/lessons/{lesson_id}/hls/master.m3u8"
+        }
+    raise HTTPException(status_code=500, detail="Failed to package lesson into encrypted HLS.")
 
 
 @app.api_route("/api/stream/drive/{file_id}", methods=["GET", "HEAD"])

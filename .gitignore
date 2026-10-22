@@ -35,6 +35,7 @@ Thumbs.db
 
 # Local data stores & benchmark artifacts (kept locally, not pushed)
 data/chunks/local_store.json
+data/chunks/hls/
 tests/*_results.json
 tests/*_samples.json
 tests/test_1000_questions.py
