@@ -134,6 +134,71 @@ class RAGEngine:
         tokens = re.findall(r'\b[a-zA-Z_]{3,}\b', (text or "").lower())
         return [t for t in tokens if t not in self.STOP_WORDS]
 
+    def _generate_pedagogical_answer(self, system_instructions: str, safe_query: str) -> str:
+        """
+        Dual-Engine High-Speed Generation:
+        1. Ultra-fast Groq Qwen 27B (~1.2s response time) for instant student feedback.
+        2. High-precision Gemini 2.5 Flash as robust secondary fallback.
+        """
+        # --- TIER 1: Ultra-Fast Groq Engine ---
+        if hasattr(self, "groq") and self.groq.is_available:
+            groq_key = self.groq.api_key
+            groq_endpoint = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            }
+            models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+            for gm in models:
+                try:
+                    payload = {
+                        "model": gm,
+                        "messages": [
+                            {"role": "system", "content": system_instructions},
+                            {"role": "user", "content": safe_query}
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 1024
+                    }
+                    r = requests.post(groq_endpoint, headers=headers, json=payload, timeout=8)
+                    if r.status_code == 200:
+                        choices = r.json().get("choices", [])
+                        if choices and choices[0].get("message", {}).get("content"):
+                            return choices[0]["message"]["content"].strip()
+                except Exception:
+                    continue
+
+        # --- TIER 2: Gemini Enterprise Fallback ---
+        payload = {
+            "contents": [{"parts": [{"text": f"{system_instructions}\n\nSTUDENT QUESTION:\n{safe_query}"}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "topP": 0.9,
+                "maxOutputTokens": 2048
+            }
+        }
+        models_to_try = [
+            "gemini-2.5-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-flash-latest"
+        ]
+        for model_name in models_to_try:
+            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
+            try:
+                res = requests.post(endpoint, json=payload, timeout=25)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
+                        txt = candidates[0]["content"]["parts"][0].get("text", "")
+                        if txt:
+                            return txt.strip()
+            except Exception:
+                continue
+
+        return "Could not generate answer due to AI service temporary availability. Please try again in a moment."
+
     def answer_query(
         self,
         query: str,
@@ -453,10 +518,10 @@ Use the course chapter outline below to provide a structured, chronological road
 {roadmap_str}
 """
 
-        # 4. Prompt Gemini for Elite Pedagogical Teaching
-        system_instructions = f"""You are the Brilliant, Highly Empathetic AI Professor & Mentor for the university course lecture: "{lesson_title}".
+        # 4. Prompt for Elite Pedagogical Teaching & Mentoring
+        system_instructions = f"""You are the Elite AI Professor, Dedicated Mentor & Personal Tutor for the university course lecture: "{lesson_title}".
 Course Video Profile: ~{duration_mins} Minutes ({duration_tier.replace('_', ' ').title()} - {total_chunks} Total Segments)
-A student has asked a doubt. Your mission is to provide an ACCURATE, HIGHLY ENGAGING, PEDAGOGICALLY SOUND, and PRACTICAL explanation strictly grounded in the provided lecture video.
+A student has asked a doubt. Your mission is to DEEPLY UNDERSTAND their exact question, explain it with CRYSTAL CLARITY, guide them step-by-step, and provide practical insights strictly grounded in the lecture.
 
 {mode_instruction}
 
@@ -466,72 +531,34 @@ RECENT CONVERSATION CONTEXT:
 LECTURE TRANSCRIPT EVIDENCE (From {duration_mins}-Minute Video):
 {context_str}
 
-STUDENT QUESTION:
-<<<
-{safe_query}
->>>
+PEDAGOGICAL TEACHING & FORMATTING GUIDELINES:
+1. 🎯 IMMEDIATE DIRECT ANSWER (Zero AI Filler):
+   - Answer the student's exact doubt directly in the very first sentence.
+   - NEVER start with generic pleasantries like "That is an excellent question!", "Sure!", "Certainly!", or "I would be happy to help".
+   - Start immediately with the core concept definition or explanation.
 
-TEACHING & FORMATTING GUIDELINES:
-1. 🎯 CRISP, DIRECT & EXACT ANSWER:
-   - Answer the student's exact doubt immediately in the first 1-2 sentences.
-   - Keep your entire explanation CONCISE, CRISP, and TO THE POINT (2-3 short paragraphs or bullet points maximum).
-   - DO NOT write lengthy essays, verbose introductory pleasantries, or unnecessary fillers.
-   - If SQL / code is relevant, include only a minimal, clean code snippet with syntax highlighting.
+2. 💡 SIMPLE EXPLANATION & INTUITIVE ANALOGY:
+   - Break down complex architectural/technical terms into simple, relatable concepts.
+   - Use an intuitive real-world analogy (e.g., hotel receptionist, traffic police, restaurant waiter, security guard) to make the concept stick.
 
-2. 🚫 STRICT PROHIBITION ON QUESTION SUGGESTIONS:
-   - DO NOT include suggested practice questions, exercises, or quiz questions.
-   - Focus 100% on answering the student's specific doubt.
+3. 🛠️ ACTIONABLE MECHANISM & HOW IT WORKS:
+   - Present 2 to 4 clean, structured bullet points or steps explaining how it works or how to implement it as taught in the lecture.
+   - If code or query syntax is relevant, provide a clean, minimal code block with syntax highlighting and clear comments.
 
-3. 🌐 MULTILINGUAL RESPONSE (Match Student's Language):
-   - If the student asks in **Hindi / Hinglish**: Answer in natural, friendly, clear Hinglish.
-   - If the student asks in **English**: Answer in clear, concise English.
+4. 🌐 MATCH STUDENT'S LANGUAGE & TONE NATURALLY:
+   - If the student asks in **Hindi / Hinglish**: Respond in natural, warm, friendly, clear developer Hinglish (e.g., "Dekho, simple shabdon mein...", "Basically yahan par teacher ne samjhaya hai ki...").
+   - If the student asks in **English**: Respond in crisp, well-structured, professional English.
 
-4. ⏱️ CONCISE VIDEO JUMP POINTS:
-   - Conclude with 1 to 3 clickable timestamp jump points:
-     ```
+5. ⏱️ CLICKABLE VIDEO JUMP POINTS:
+   - Conclude with 1 to 3 exact video jump points referencing where the teacher discussed or demonstrated the topic:
      ### ⏱️ Video Jump Points
-     * ⏱️ [MM:SS] (or [HH:MM:SS]) - Concept label
-     ```
+     * ⏱️ [MM:SS] - Concept or demonstration label
+
+6. 💡 PRO TIP / KEY TAKEAWAY:
+   - End with a single crisp "💡 Pro Tip" or "Key Insight" to help the student remember this for interviews or practical projects.
 """
 
-        payload = {
-            "contents": [{"parts": [{"text": system_instructions}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "topP": 0.9,
-                "maxOutputTokens": 2048
-            }
-        }
-
-        # Model priority list
-        models_to_try = [
-            "gemini-2.5-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-flash-latest",
-            "gemini-flash-lite-latest",
-            "gemini-3-flash-preview"
-        ]
-        raw_answer = ""
-
-        for model_name in models_to_try:
-            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
-            try:
-                res = requests.post(endpoint, json=payload, timeout=45)
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
-                        raw_answer = candidates[0]["content"]["parts"][0].get("text", "")
-                        if raw_answer:
-                            break
-                elif res.status_code in (429, 503):
-                    continue
-            except Exception:
-                continue
-
-        if not raw_answer:
-            raw_answer = "Could not generate answer due to AI service temporary availability. Please try again in a moment."
+        raw_answer = self._generate_pedagogical_answer(system_instructions, safe_query)
 
         # Extract timestamps for video jump badges
         extracted = re.findall(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]', raw_answer)

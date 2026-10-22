@@ -143,6 +143,12 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
     if sec_fetch_dest == "document" and sec_fetch_mode == "navigate":
         return "DIRECT_URL_DOWNLOAD_ATTEMPT", "Direct browser navigation/download attempted outside authorized video player."
 
+    # 3. Check third-party downloader extension background interception
+    # Browser <video> tags always send sec-fetch-dest: "video" (or "audio").
+    # Downloader extensions (CocoCut, IDM, Video DownloadHelper) in background script send sec-fetch-dest: "empty".
+    if sec_fetch_dest == "empty" and request.url and "/stream" in request.url.path:
+        return "EXTENSION_DOWNLOAD_INTERCEPT", "Third-party extension background interception on media stream blocked."
+
     return None
 
 
