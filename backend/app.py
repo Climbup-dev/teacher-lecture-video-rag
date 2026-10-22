@@ -22,7 +22,7 @@ import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response, Header, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
 from backend.config import Config, reload_config
