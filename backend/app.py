@@ -706,9 +706,9 @@ async def stream_lesson_video(
             )
             raise he
 
-    # Enforce Anti-Piracy: Disable raw progressive MP4 stream to block browser downloader extensions
+    # Enforce Anti-Piracy: Disable raw progressive MP4 stream for non-player / non-token downloads
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
-    if (hls_dir / "master.m3u8").exists() or HLSTranscoder.is_ffmpeg_available():
+    if ((hls_dir / "master.m3u8").exists() or HLSTranscoder.is_ffmpeg_available()) and not is_authorized_player(request) and not st:
         raise HTTPException(
             status_code=403,
             detail="Direct progressive MP4 streaming is disabled for this protected lesson. Playback is strictly enforced via encrypted HLS."

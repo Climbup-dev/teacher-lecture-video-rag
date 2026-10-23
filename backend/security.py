@@ -149,6 +149,10 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
         if indicator in origin or indicator in referer:
             return "BROWSER_EXTENSION_DOWNLOAD_INTERCEPT", f"Browser extension '{indicator}' direct media fetch blocked."
 
+    # Authorized in-app player with genuine player key is permitted cross-origin media playback
+    if is_authorized_player(request):
+        return None
+
     # 2. Check known scraper / downloader user agents
     for tool in BLOCKED_TOOL_SUBSTRINGS:
         if tool in ua:
