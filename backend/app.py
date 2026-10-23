@@ -875,8 +875,14 @@ async def get_lesson_hls_playlist(
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("#EXT-X-KEY:"):
-            # Keep key URI clean (/api/lessons/{id}/hls/key); in-app player passes X-Climbup-Player header
-            rewritten_lines.append(stripped)
+            # Attach auth_query to key URI as well so in-app HLS player can decrypt cleanly
+            if auth_query:
+                import re
+                sep = "&" if "?" in stripped else "?"
+                key_line = re.sub(r'URI="([^"]+)"', rf'URI="\1{sep}{auth_query.lstrip("?")}"', stripped)
+                rewritten_lines.append(key_line)
+            else:
+                rewritten_lines.append(stripped)
         elif stripped.endswith(".ts") and not stripped.startswith("#") and auth_query:
             sep = "&" if "?" in stripped else "?"
             rewritten_lines.append(f"{stripped}{sep}{auth_query.lstrip('?')}")
