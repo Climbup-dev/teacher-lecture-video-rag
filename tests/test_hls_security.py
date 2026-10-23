@@ -133,13 +133,23 @@ class TestHLSEncryptedStreamingSecurity(unittest.TestCase):
         )
         self.assertEqual(res_forged.status_code, 403)
 
-        # 3. Legitimate browser playback
+        # 3. Legitimate in-app browser playback (requires authorized player header)
         res_allowed = self.client.get(
             f"/api/lessons/{self.test_lesson_id}/hls/key?st={valid_st}",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+                "X-Climbup-Player": "authorized-hls-player-v3"
+            }
         )
         self.assertEqual(res_allowed.status_code, 200)
         self.assertEqual(len(res_allowed.content), 16)
+
+        # 4. Downloader without player handshake header is blocked
+        res_no_header = self.client.get(
+            f"/api/lessons/{self.test_lesson_id}/hls/key?st={valid_st}",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+        )
+        self.assertEqual(res_no_header.status_code, 403)
 
     def test_06_segment_scraper_protection(self):
         """Verify that segments block automated scrapers."""

@@ -869,13 +869,14 @@ async def get_lesson_hls_playlist(
     content = playlist_file.read_text(encoding="utf-8")
     auth_query = f"?token={token}" if token else (f"?st={st}" if st else "")
 
-    # Inject auth_query into Key URI and all segment (.ts) entries
+    # Inject auth_query into segment (.ts) entries only; do NOT expose token on key URI
     lines = content.splitlines()
     rewritten_lines = []
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("#EXT-X-KEY:") and auth_query:
-            rewritten_lines.append(stripped.replace(f"/api/lessons/{lesson_id}/hls/key", f"/api/lessons/{lesson_id}/hls/key{auth_query}"))
+        if stripped.startswith("#EXT-X-KEY:"):
+            # Keep key URI clean (/api/lessons/{id}/hls/key); in-app player passes X-Climbup-Player header
+            rewritten_lines.append(stripped)
         elif stripped.endswith(".ts") and not stripped.startswith("#") and auth_query:
             sep = "&" if "?" in stripped else "?"
             rewritten_lines.append(f"{stripped}{sep}{auth_query.lstrip('?')}")
@@ -930,14 +931,30 @@ async def get_lesson_hls_key(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
-    is_free_preview = bool(lesson.get("is_free_preview", False))
+    # Decryption key is strictly restricted to the authorized in-app player (X-Climbup-Player)
+    # Downloader extensions (FetchV, IDM, scrapers) do not possess this header and are unconditionally blocked with 403.
+    if not is_authorized_player(request):
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title=lesson.get("title", ""),
+            threat_type="UNAUTHORIZED_KEY_EXTRACTION_ATTEMPT",
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details="Attempted to fetch AES-128 key without authorized in-app player handshake."
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Key access prohibited. Decryption keys are strictly restricted to authorized in-app players."
+        )
+
+    # In addition to player header, verify signed token or enrollment
     if st:
         is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
         if not is_valid:
             raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
-    elif not is_authorized_player(request) and not token and not authorization:
-        raise HTTPException(status_code=401, detail="Authentication or authorized player token required for key.")
-    elif not is_free_preview and not is_authorized_player(request):
+    elif not is_free_preview:
+        if not token and not authorization:
+            raise HTTPException(status_code=401, detail="Authentication required for key.")
         verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
