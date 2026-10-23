@@ -1027,8 +1027,10 @@ async def get_lesson_hls_segment(
 
     # --- 2. ANTI-CHUNK-DUMPING SPEED GOVERNOR ---
     # Normal human playback consumes 1 segment every 6 seconds.
-    # Allow initial pre-buffering up to 10 segments per 6 seconds.
-    allowed, retry_after = check_rate_limit(client_ip, f"chunk_dump_{lesson_id}", max_requests=10, window_seconds=6)
+    # Allow initial pre-buffering up to 15 segments per 6 seconds.
+    # Key by user identity/token to support 200+ students even if sharing the same campus/hostel Wi-Fi NAT IP
+    rate_identity = authorization or token or st or client_ip
+    allowed, retry_after = check_rate_limit(rate_identity, f"chunk_dump_{lesson_id}", max_requests=15, window_seconds=6)
     if not allowed:
         db.log_security_threat(
             lesson_id=lesson_id,
