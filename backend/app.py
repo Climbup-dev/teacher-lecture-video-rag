@@ -875,13 +875,8 @@ async def get_lesson_hls_playlist(
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("#EXT-X-KEY:"):
-            # Attach auth_query and player handshake to key URI so in-app HLS player can decrypt cleanly
-            import re
-            pk_param = f"pk={AUTHORIZED_PLAYER_HEADER_VALUE}"
-            combined = f"{auth_query.lstrip('?')}&{pk_param}" if auth_query else pk_param
-            sep = "&" if "?" in stripped else "?"
-            key_line = re.sub(r'URI="([^"]+)"', rf'URI="\1{sep}{combined}"', stripped)
-            rewritten_lines.append(key_line)
+            # Enforce clean key URI without credentials so extensions cannot copy key credentials from m3u8
+            rewritten_lines.append(stripped)
         elif stripped.endswith(".ts") and not stripped.startswith("#") and auth_query:
             sep = "&" if "?" in stripped else "?"
             rewritten_lines.append(f"{stripped}{sep}{auth_query.lstrip('?')}")
@@ -905,14 +900,12 @@ async def get_lesson_hls_key(
     lesson_id: str,
     request: Request,
     token: Optional[str] = Query(None),
-    authorization: Optional[str] = Header(None),
-    st: Optional[str] = Query(None),
-    pk: Optional[str] = Query(None)
+    authorization: Optional[str] = Header(None)
 ):
     """
     Guarded AES-128 decryption key endpoint.
-    Only releases the 16-byte key to authorized, enrolled students playing within the app.
-    Downloaders and scrapers cannot decrypt .ts segments without this key.
+    Only releases the 16-byte key to authorized, verified in-app student players.
+    Download extensions (FetchV, Stream Recorder, IDM) do not possess the in-app player signature and are blocked with 403.
     """
     client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
@@ -928,42 +921,36 @@ async def get_lesson_hls_key(
         )
         raise HTTPException(status_code=403, detail="Key access blocked for automated tools or downloader extensions.")
 
-    # Rate limit key requests: max 20 requests per 30 seconds per IP
-    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=20, window_seconds=30)
+    # 1. Require authorized in-app player header
+    # Downloader extensions running in background scripts cannot produce this header
+    player_header = request.headers.get("x-climbup-player", "").strip()
+    if player_header != AUTHORIZED_PLAYER_HEADER_VALUE:
+        db.log_security_threat(
+            lesson_id=lesson_id,
+            lesson_title="Target Lesson Key",
+            threat_type="UNAUTHORIZED_KEY_GRABBER_EXTENSION",
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent", ""),
+            details="Downloader extension attempted to download AES-128 key without player signature."
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Key access prohibited. Decryption keys are strictly restricted to authorized in-app players."
+        )
+
+    # 2. Verify Referer matches legitimate website
+    referer = (request.headers.get("referer") or "").lower()
+    if referer and not any(d in referer for d in ["myclimbup.xyz", "localhost", "127.0.0.1", "web.app", "run.app"]):
+        raise HTTPException(status_code=403, detail="Direct key extraction from unauthorized domain/tool blocked.")
+
+    # 3. Rate limit key requests: Normal playback only needs 1-2 keys per lesson!
+    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=10, window_seconds=60)
     if not key_allowed:
         raise HTTPException(status_code=429, detail=f"Key request rate limit reached. Please wait {retry_after}s.")
 
     lesson = db.get_lesson(lesson_id)
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
-
-    is_free_preview = bool(lesson.get("is_free_preview", False))
-
-    # Verification: Verified HMAC signed stream token OR in-app player handshake (header/query pk) OR Supabase enrollment
-    has_valid_st = False
-    if st:
-        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
-        if is_valid:
-            has_valid_st = True
-        else:
-            raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
-
-    if not has_valid_st and not is_authorized_player(request):
-        if not is_free_preview:
-            if not token and not authorization:
-                db.log_security_threat(
-                    lesson_id=lesson_id,
-                    lesson_title=lesson.get("title", ""),
-                    threat_type="UNAUTHORIZED_KEY_EXTRACTION_ATTEMPT",
-                    ip_address=client_ip,
-                    user_agent=request.headers.get("user-agent", ""),
-                    details="Attempted to fetch AES-128 key without authorized in-app player handshake or token."
-                )
-                raise HTTPException(
-                    status_code=403,
-                    detail="Key access prohibited. Decryption keys are strictly restricted to authorized in-app players."
-                )
-            verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
     if not key_file.exists():

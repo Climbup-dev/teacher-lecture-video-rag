@@ -21,10 +21,9 @@ BLOCKED_TOOL_SUBSTRINGS = [
 AUTHORIZED_PLAYER_HEADER_VALUE = "amirshaikh320340"
 
 def is_authorized_player(request: Request) -> bool:
-    """Checks if request originated from authorized in-app video player via header or query handshake."""
+    """Checks if request originated from authorized in-app video player via custom HTTP header."""
     player_header = request.headers.get("x-climbup-player", "").strip()
-    player_param = (request.query_params.get("pk") or request.query_params.get("player_key") or "").strip()
-    return player_header == AUTHORIZED_PLAYER_HEADER_VALUE or player_param == AUTHORIZED_PLAYER_HEADER_VALUE
+    return player_header == AUTHORIZED_PLAYER_HEADER_VALUE
 
 # --- SLIDING WINDOW IN-MEMORY RATE LIMITER ---
 _rate_limit_lock = threading.Lock()
