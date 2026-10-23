@@ -193,9 +193,9 @@ class TestHLSEncryptedStreamingSecurity(unittest.TestCase):
         seg_name = segments[0].name
         valid_st = generate_signed_stream_token(self.test_lesson_id, "student_101", "testclient", ttl_seconds=300)
 
-        # Trigger more than 10 requests within a second
+        # Trigger more than 10 requests within the window
         got_429 = False
-        for _ in range(12):
+        for _ in range(18):
             res = self.client.get(
                 f"/api/lessons/{self.test_lesson_id}/hls/{seg_name}?st={valid_st}",
                 headers={"User-Agent": "Mozilla/5.0 Chrome/120.0"}

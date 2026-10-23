@@ -1009,6 +1009,9 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="btn btn-sm btn-lecture-ai-assignment" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="AI Assignment Studio: Generate, Edit & Publish" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; font-weight: 700; border: none; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);">
               ⚡ AI Assignment
             </button>
+            <button class="btn btn-sm btn-lecture-mcqs" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="Practice MCQs for this lecture" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); font-weight: 600;">
+              🎯 Practice MCQs
+            </button>
             <button class="btn btn-sm btn-danger-outline btn-delete-lecture" data-id="${l.id}" title="Delete Lecture">
               🗑️
             </button>
@@ -1059,6 +1062,15 @@ document.addEventListener("DOMContentLoaded", () => {
         aiAssignBtn.addEventListener("click", () => {
           if (typeof window.openAssignmentModalForLecture === "function") {
             window.openAssignmentModalForLecture(l.id);
+          }
+        });
+      }
+
+      const mcqBtn = card.querySelector(".btn-lecture-mcqs");
+      if (mcqBtn) {
+        mcqBtn.addEventListener("click", () => {
+          if (typeof window.openMcqModalForLecture === "function") {
+            window.openMcqModalForLecture(l.id);
           }
         });
       }
@@ -3177,11 +3189,14 @@ function setupMcqManagerStudio() {
 
   if (!modal) return;
 
-  function populateLectures() {
+  function populateLectures(preselectedId) {
     if (!lectureSelect) return;
     lectureSelect.innerHTML = "";
     const activeCourseId = currentCourseId || (coursesCache[0]?.id);
-    const lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
+    let lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
+    if (lessons.length === 0 && allLessonsCache.length > 0) {
+      lessons = allLessonsCache;
+    }
     if (lessons.length === 0) {
       lectureSelect.innerHTML = "<option value=''>No lectures found in this course</option>";
       return;
@@ -3190,21 +3205,32 @@ function setupMcqManagerStudio() {
       const opt = document.createElement("option");
       opt.value = l.id;
       opt.textContent = `${l.title} (${l.duration || "Video"})`;
-      if (typeof currentLectureId !== "undefined" && currentLectureId === l.id) {
+      if (preselectedId ? (preselectedId === l.id) : (typeof currentLectureId !== "undefined" && currentLectureId === l.id)) {
         opt.selected = true;
       }
       lectureSelect.appendChild(opt);
     });
   }
 
-  function openModal() {
-    populateLectures();
+  function openModal(preselectedId) {
+    populateLectures(preselectedId);
     modal.style.display = "flex";
+    if (preselectedId && fetchBtn) {
+      setTimeout(() => fetchBtn.click(), 50);
+    }
   }
 
-  if (openMatBtn) openMatBtn.addEventListener("click", openModal);
-  if (openStudioBtn) openStudioBtn.addEventListener("click", openModal);
+  window.openMcqModalForLecture = openModal;
+
+  if (openMatBtn) openMatBtn.addEventListener("click", () => openModal());
+  if (openStudioBtn) openStudioBtn.addEventListener("click", () => openModal(currentLectureId));
   if (closeBtn) closeBtn.addEventListener("click", () => { modal.style.display = "none"; });
+
+  if (lectureSelect) {
+    lectureSelect.addEventListener("change", () => {
+      if (fetchBtn) fetchBtn.click();
+    });
+  }
 
   if (fetchBtn) {
     fetchBtn.addEventListener("click", async () => {

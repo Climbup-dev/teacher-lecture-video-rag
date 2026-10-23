@@ -1014,9 +1014,9 @@ async def get_lesson_hls_segment(
 
     # --- 1. ANTI-CHUNK-DUMPING SPEED GOVERNOR ---
     # Normal human playback consumes 1 segment every 6 seconds.
-    # Allow initial pre-buffering up to 10 segments per 4 seconds.
+    # Allow initial pre-buffering up to 10 segments per 6 seconds.
     # Bulk parallel downloaders (FetchV, IDM) exceeding this are immediately throttled.
-    allowed, retry_after = check_rate_limit(client_ip, f"chunk_dump_{lesson_id}", max_requests=10, window_seconds=4)
+    allowed, retry_after = check_rate_limit(client_ip, f"chunk_dump_{lesson_id}", max_requests=10, window_seconds=6)
     if not allowed:
         db.log_security_threat(
             lesson_id=lesson_id,
