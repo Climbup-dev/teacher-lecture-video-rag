@@ -1099,7 +1099,8 @@ def admin_package_hls(
 # =============================================================================
 
 class MCQVerifyRequest(BaseModel):
-    answers: Dict[str, str]
+    answers: Dict[str, Any]
+    student_id: Optional[str] = "student_user"
 
 class AssignmentSubmitRequest(BaseModel):
     student_id: str
@@ -1155,7 +1156,7 @@ async def verify_lesson_mcq_quiz(
     if not allowed:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
 
-    res = assignment_engine.verify_mcq_answers(lesson_id, body.answers)
+    res = assignment_engine.verify_mcq_answers(lesson_id, body.answers, student_id=body.student_id)
     if "error" in res and "score" not in res:
         raise HTTPException(status_code=400, detail=res["error"])
     return res
@@ -1227,12 +1228,19 @@ async def get_lesson_assignment(
     """
     assignment = db.get_assignment_by_lesson(lesson_id, status="published")
     if not assignment:
+        is_teacher = bool(
+            authorization or token or
+            request.headers.get("x-climbup-player") or
+            request.headers.get("x-admin-key") or
+            request.query_params.get("include_draft") == "true"
+        )
         draft = db.get_assignment_by_lesson(lesson_id)
-        if draft and (authorization or token):
+        if draft and is_teacher:
             return {"status": "draft", "assignment": draft, "message": "Assignment is currently in draft mode."}
         raise HTTPException(status_code=404, detail="No published assignment found for this lesson.")
 
     result = {
+        "status": assignment.get("status", "published"),
         "assignment": assignment,
         "submission": None
     }
@@ -1257,11 +1265,16 @@ async def submit_assignment(
     """
     client_ip = get_client_ip(request)
     allowed, remaining = check_rate_limit(client_ip, f"assign_submit:{assignment_id}", max_requests=6, window_seconds=60)
-    if not allowed:
-        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds before submitting again.")
-
     if not body.submission_content or len(body.submission_content.strip()) < 5:
         raise HTTPException(status_code=400, detail="Submission content must be at least 5 characters.")
+
+    # Enforce strict single-submission immutability (cannot re-submit once graded)
+    existing_sub = db.get_submission(assignment_id, body.student_id)
+    if existing_sub:
+        raise HTTPException(
+            status_code=409,
+            detail="Assignment already submitted. Final submission is locked and cannot be modified."
+        )
 
     res = assignment_engine.evaluate_submission(
         assignment_id=assignment_id,
@@ -1275,11 +1288,15 @@ async def submit_assignment(
     if "error" in res and "score" not in res:
         raise HTTPException(status_code=400, detail=res["error"])
 
+    final_score = res.get("ai_score") if res.get("ai_score") is not None else res.get("score")
+    final_feedback = res.get("ai_feedback") or res.get("feedback")
+
     return {
         "status": "graded",
         "submission_id": res.get("id"),
-        "score": res.get("ai_score"),
-        "feedback": res.get("ai_feedback")
+        "score": final_score,
+        "feedback": final_feedback,
+        "submission": res
     }
 
 

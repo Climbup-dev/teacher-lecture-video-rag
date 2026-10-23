@@ -194,6 +194,7 @@ def verify_admin_or_instructor_auth(
     Supports being called as (request, authorization, admin_key) or (authorization, admin_key).
     """
     # Handle case where Request object was passed as first positional arg
+    req = None
     if isinstance(authorization_header, Request):
         req = authorization_header
         auth_hdr = x_admin_key if len(args) == 0 else (args[0] if len(args) > 0 else None)
@@ -204,6 +205,8 @@ def verify_admin_or_instructor_auth(
             auth_hdr = req.headers.get("authorization")
         authorization_header = auth_hdr
         x_admin_key = admin_k
+    elif request and isinstance(request, Request):
+        req = request
 
     admin_secret = Config.ADMIN_API_KEY
     auth_token = None

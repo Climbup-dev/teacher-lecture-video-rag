@@ -996,8 +996,8 @@ document.addEventListener("DOMContentLoaded", () => {
       card.innerHTML = `
         <div class="lecture-card-v2-header">
           <div class="lecture-title-group">
-            <div class="lecture-play-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <div class="lecture-play-icon" title="Lecture Video">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
             </div>
@@ -1005,27 +1005,20 @@ document.addEventListener("DOMContentLoaded", () => {
               <h4>${escapeHtml(l.title)}</h4>
               <div class="lecture-meta-badges">
                 <span class="badge-duration">⏱️ ${durFormatted}</span>
-                <span class="badge-rag-active">⚡ Supabase 768-dim RAG</span>
-                <span class="badge-mini">🗣️ ${uttLen} Utterances</span>
-                <span class="badge-materials-count">📁 ${attachedMaterials.length} Materials Attached</span>
+                <span class="badge-ready">✓ Ready</span>
+                ${attachedMaterials.length > 0 ? `<span class="badge-materials-count">📁 ${attachedMaterials.length} Attached</span>` : ''}
               </div>
             </div>
           </div>
           <div class="lecture-card-v2-actions">
             <button class="btn btn-primary btn-play-in-studio" data-id="${l.id}">
-              ▶ Play in Studio & AI Chat
+              ▶ Watch Lecture
             </button>
-            <button class="btn btn-sm btn-secondary btn-upload-lecture-notes" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="Upload PDF Notes for this lecture">
-              + Upload Notes
-            </button>
-            <button class="btn btn-sm btn-secondary btn-upload-lecture-assignment" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="Upload Assignment for this lecture">
-              + Upload Assignment
-            </button>
-            <button class="btn btn-sm btn-lecture-ai-assignment" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="AI Assignment Studio: Generate, Edit & Publish" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; font-weight: 700; border: none; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);">
-              ⚡ AI Assignment
-            </button>
-            <button class="btn btn-sm btn-lecture-mcqs" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="Practice MCQs for this lecture" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); font-weight: 600;">
+            <button class="btn btn-sm btn-lecture-mcqs" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="Practice MCQs for this lecture" style="background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35); font-weight: 600;">
               🎯 Practice MCQs
+            </button>
+            <button class="btn btn-sm btn-lecture-ai-assignment" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="AI Assignment Studio" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); font-weight: 600;">
+              📝 Assignment
             </button>
             <button class="btn btn-sm btn-danger-outline btn-delete-lecture" data-id="${l.id}" title="Delete Lecture">
               🗑️
@@ -1033,15 +1026,14 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
         </div>
 
+        ${attachedMaterials.length > 0 ? `
         <!-- Attached Notes & Assignments Section -->
-        <div class="attached-materials-box">
+        <div class="attached-materials-box" style="margin-top: 10px;">
           <div class="attached-materials-label">
-            <span>📎 Attached to this Video:</span>
+            <span>📎 Attached Files:</span>
           </div>
           <div class="attached-materials-list" id="attached-list-${l.id}">
-            ${attachedMaterials.length === 0 ? `
-              <span class="attached-empty-hint">No notes or assignments attached yet. Click <strong>"+ Upload Notes"</strong> or <strong>"+ Upload Assignment"</strong> above to attach directly to this lecture.</span>
-            ` : attachedMaterials.map(m => {
+            ${attachedMaterials.map(m => {
               const type = (m.file_type || "pdf").toLowerCase();
               const isHw = type.includes("assignment");
               const icon = isHw ? "📝" : type.includes("slide") ? "📊" : type.includes("lab") || type.includes("zip") ? "💻" : "📘";
@@ -1057,6 +1049,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }).join("")}
           </div>
         </div>
+        ` : ''}
       `;
 
       // Event Listeners on this Lecture Card
@@ -1064,13 +1057,19 @@ document.addEventListener("DOMContentLoaded", () => {
         playLessonInStudio(l.id);
       });
 
-      card.querySelector(".btn-upload-lecture-notes").addEventListener("click", () => {
-        openUploadMaterialModal(courseId, l.id, l.title, "notes");
-      });
+      const btnUploadNotes = card.querySelector(".btn-upload-lecture-notes");
+      if (btnUploadNotes) {
+        btnUploadNotes.addEventListener("click", () => {
+          openUploadMaterialModal(courseId, l.id, l.title, "notes");
+        });
+      }
 
-      card.querySelector(".btn-upload-lecture-assignment").addEventListener("click", () => {
-        openUploadMaterialModal(courseId, l.id, l.title, "assignment");
-      });
+      const btnUploadAssign = card.querySelector(".btn-upload-lecture-assignment");
+      if (btnUploadAssign) {
+        btnUploadAssign.addEventListener("click", () => {
+          openUploadMaterialModal(courseId, l.id, l.title, "assignment");
+        });
+      }
 
       const aiAssignBtn = card.querySelector(".btn-lecture-ai-assignment");
       if (aiAssignBtn) {

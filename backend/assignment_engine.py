@@ -212,10 +212,16 @@ class AssignmentEngine:
             "questions": client_questions
         }
 
-    def verify_mcq_answers(self, lesson_id: str, user_answers: Dict[str, str]) -> Dict[str, Any]:
+    def verify_mcq_answers(
+        self,
+        lesson_id: str,
+        user_answers: Dict[str, Any],
+        student_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Verifies student's submitted MCQ answers against the server question bank.
         Returns score, percentage, detailed breakdown, and revision suggestions.
+        Supports both option letters ('A', 'B', 'C', 'D') and numeric indices (0, 1, 2, 3).
         """
         bank = self.db.get_mcq_bank(lesson_id)
         if not bank:
@@ -225,6 +231,7 @@ class AssignmentEngine:
         score = 0
         total = 0
         breakdown = []
+        idx_to_letter = {"0": "A", "1": "B", "2": "C", "3": "D"}
 
         for q_id_str, student_choice in user_answers.items():
             question_data = bank_map.get(str(q_id_str))
@@ -233,9 +240,15 @@ class AssignmentEngine:
 
             total += 1
             correct_choice = str(question_data.get("correct_answer", "")).strip().upper()
-            clean_student = str(student_choice).strip().upper()
-            if len(clean_student) > 1 and clean_student[0] in ("A", "B", "C", "D") and clean_student[1] in (")", ".", ":", " "):
-                clean_student = clean_student[0]
+            raw_choice_str = str(student_choice).strip().upper()
+
+            # Handle 0, 1, 2, 3 index selection from client radio buttons
+            if raw_choice_str in idx_to_letter:
+                clean_student = idx_to_letter[raw_choice_str]
+            elif len(raw_choice_str) > 1 and raw_choice_str[0] in ("A", "B", "C", "D") and raw_choice_str[1] in (")", ".", ":", " "):
+                clean_student = raw_choice_str[0]
+            else:
+                clean_student = raw_choice_str
 
             is_correct = (clean_student == correct_choice)
             if is_correct:
@@ -244,19 +257,36 @@ class AssignmentEngine:
             breakdown.append({
                 "id": question_data.get("id"),
                 "question": question_data.get("question"),
-                "your_answer": student_choice,
+                "your_answer": clean_student,
+                "selected": student_choice,
                 "correct_answer": correct_choice,
                 "is_correct": is_correct,
                 "explanation": question_data.get("explanation", ""),
-                "timestamp_hint": question_data.get("timestamp_hint", "")
+                "timestamp_hint": question_data.get("timestamp_hint", ""),
+                "timestamp_ref": question_data.get("timestamp_hint", "")
             })
 
         percentage = round((score / total * 100), 1) if total > 0 else 0
         passed = (percentage >= 60.0)
 
+        # Save student attempt to Supabase if student_id is provided
+        if student_id:
+            try:
+                self.db.save_quiz_attempt(
+                    lesson_id=lesson_id,
+                    student_id=student_id,
+                    selected_answers=user_answers,
+                    score=score,
+                    total=total
+                )
+            except Exception:
+                pass
+
         return {
             "lesson_id": lesson_id,
+            "correct": score,
             "score": score,
+            "total": total,
             "total_questions": total,
             "percentage": percentage,
             "passed": passed,

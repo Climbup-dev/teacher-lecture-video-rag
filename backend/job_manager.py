@@ -368,6 +368,20 @@ class IngestionJobManager:
                 chunks=enriched_chunks
             )
 
+            # Auto-synthesize initial MCQ assessment bank in background so student quizzes are instantly ready
+            try:
+                def _bg_generate_mcqs():
+                    try:
+                        from backend.assignment_engine import AssignmentEngine
+                        engine = AssignmentEngine(self.db)
+                        engine.generate_mcq_quiz(lesson_id, count=5)
+                        logger.info(f"Auto-generated practice MCQ bank for new lecture {lesson_id}")
+                    except Exception as mcq_err:
+                        logger.warning(f"Background MCQ synthesis notice: {mcq_err}")
+                threading.Thread(target=_bg_generate_mcqs, daemon=True).start()
+            except Exception as e:
+                logger.warning(f"Could not dispatch background MCQ generator: {e}")
+
             # -----------------------------------------------------------------
             # STAGE 7: COMPLETED (100%)
             # -----------------------------------------------------------------

@@ -1275,27 +1275,108 @@ class DBAdapter:
 
     # --- ASSIGNMENT & MCQ STORAGE METHODS ---
 
+    def _serialize_assignment_for_supabase(self, assignment_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Serializes internal assignment model to Supabase course_assignments schema."""
+        aid = assignment_data.get("id") or str(uuid.uuid4())
+        course_id = assignment_data.get("course_id")
+        if not course_id and assignment_data.get("lesson_id"):
+            lesson = self.get_lesson(assignment_data.get("lesson_id"))
+            if lesson:
+                course_id = lesson.get("course_id")
+        if not course_id:
+            course_id = "course-python-programming-comple-386c"
+
+        title = assignment_data.get("title") or "Milestone Practical Assignment"
+        starter_code = assignment_data.get("starter_code") or ""
+        max_score = int(assignment_data.get("max_score") or 100)
+        due_date = assignment_data.get("due_date") or ""
+        status = assignment_data.get("status") or "draft"
+        scenario = assignment_data.get("scenario_context") or ""
+        problems = assignment_data.get("problems") or []
+        rubric = assignment_data.get("rubric") or {}
+        summary = assignment_data.get("description") or f"Hands-on assignment for lecture {assignment_data.get('lesson_id')}"
+
+        instructions = [
+            f"Challenge {p.get('problem_number', idx+1)} ({p.get('tier', 'Core')}) [{p.get('marks', 0)} pts]: {p.get('problem_statement', '')}"
+            for idx, p in enumerate(problems)
+        ]
+
+        desc_payload = {
+            "summary": summary,
+            "lesson_id": assignment_data.get("lesson_id"),
+            "status": status,
+            "scenario_context": scenario,
+            "problems": problems,
+            "rubric": rubric
+        }
+
+        return {
+            "id": aid,
+            "course_id": course_id,
+            "title": title,
+            "description": json.dumps(desc_payload, ensure_ascii=False),
+            "instructions": instructions,
+            "starter_code": starter_code,
+            "max_score": max_score,
+            "due_date": due_date
+        }
+
+    def _deserialize_assignment_from_supabase(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Deserializes Supabase course_assignments row into internal assignment model."""
+        desc = row.get("description") or ""
+        parsed = {}
+        if isinstance(desc, str) and desc.strip().startswith("{") and desc.strip().endswith("}"):
+            try:
+                parsed = json.loads(desc)
+            except Exception:
+                parsed = {}
+
+        return {
+            "id": row.get("id"),
+            "course_id": row.get("course_id"),
+            "lesson_id": parsed.get("lesson_id") or row.get("module_id"),
+            "title": row.get("title"),
+            "description": parsed.get("summary") or desc,
+            "scenario_context": parsed.get("scenario_context") or "",
+            "starter_code": row.get("starter_code") or "",
+            "problems": parsed.get("problems") or [],
+            "rubric": parsed.get("rubric") or {
+                "logic_and_correctness": 50,
+                "syntax_and_quality": 25,
+                "edge_cases": 15,
+                "approach_clarity": 10
+            },
+            "max_score": row.get("max_score") or 100,
+            "due_date": row.get("due_date") or "",
+            "status": parsed.get("status") or "published",
+            "created_at": row.get("created_at")
+        }
+
     def save_assignment(self, assignment_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Saves or updates an assignment record."""
+        """Saves or updates an assignment record directly in Supabase course_assignments."""
         aid = assignment_data.get("id") or str(uuid.uuid4())
         assignment_data["id"] = aid
 
         if self.supabase_url and self.supabase_key:
             try:
+                supabase_payload = self._serialize_assignment_for_supabase(assignment_data)
                 headers = self._get_headers()
                 headers["Prefer"] = "resolution=merge-duplicates,return=representation"
                 res = self.session.post(
-                    f"{self.supabase_url}/rest/v1/assignments",
+                    f"{self.supabase_url}/rest/v1/course_assignments",
                     headers=headers,
-                    json=assignment_data,
+                    json=supabase_payload,
                     timeout=8
                 )
                 if res.ok and res.json():
-                    created = res.json()[0]
+                    created_row = res.json()[0]
+                    created = self._deserialize_assignment_from_supabase(created_row)
                     store = self._read_local_store()
                     store.setdefault("assignments", {})[aid] = created
                     self._write_local_store(store)
                     return created
+                else:
+                    print(f"[Supabase] save_assignment HTTP {res.status_code}: {res.text[:150]}")
             except Exception as e:
                 print(f"[Supabase] save_assignment notice: {e}")
 
@@ -1305,34 +1386,40 @@ class DBAdapter:
         return assignment_data
 
     def get_assignment_by_id(self, assignment_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves assignment by ID."""
+        """Retrieves assignment by ID from Supabase course_assignments."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/assignments?id=eq.{assignment_id}&select=*"
+                url = f"{self.supabase_url}/rest/v1/course_assignments?id=eq.{assignment_id}&select=*"
                 res = self.session.get(url, headers=headers, timeout=5)
                 if res.ok and len(res.json()) > 0:
-                    return res.json()[0]
-            except Exception:
-                pass
+                    return self._deserialize_assignment_from_supabase(res.json()[0])
+            except Exception as e:
+                print(f"[Supabase] get_assignment_by_id notice: {e}")
 
         store = self._read_local_store()
         return store.get("assignments", {}).get(assignment_id)
 
     def get_assignment_by_lesson(self, lesson_id: str, status: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Retrieves latest assignment for a lesson."""
+        """Retrieves latest assignment for a lesson from Supabase course_assignments."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/assignments?lesson_id=eq.{lesson_id}"
-                if status:
-                    url += f"&status=eq.{status}"
-                url += "&order=created_at.desc&limit=1"
-                res = self.session.get(url, headers=headers, timeout=5)
-                if res.ok and len(res.json()) > 0:
-                    return res.json()[0]
-            except Exception:
-                pass
+                lesson = self.get_lesson(lesson_id)
+                course_id = lesson.get("course_id") if lesson else None
+                url = f"{self.supabase_url}/rest/v1/course_assignments?"
+                if course_id:
+                    url += f"course_id=eq.{course_id}&"
+                url += "order=created_at.desc&limit=20"
+                res = self.session.get(url, headers=headers, timeout=6)
+                if res.ok and res.json():
+                    for row in res.json():
+                        deserialized = self._deserialize_assignment_from_supabase(row)
+                        if deserialized.get("lesson_id") == lesson_id:
+                            if status is None or deserialized.get("status") == status:
+                                return deserialized
+            except Exception as e:
+                print(f"[Supabase] get_assignment_by_lesson notice: {e}")
 
         store = self._read_local_store()
         assignments = list(store.get("assignments", {}).values())
@@ -1350,48 +1437,140 @@ class DBAdapter:
         if not updates:
             return True
 
+        existing = self.get_assignment_by_id(assignment_id) or {}
+        merged = {**existing, **updates}
+        merged["id"] = assignment_id
+
         if self.supabase_url and self.supabase_key:
             try:
+                serialized = self._serialize_assignment_for_supabase(merged)
+                patch_payload = {
+                    "title": serialized.get("title"),
+                    "description": serialized.get("description"),
+                    "starter_code": serialized.get("starter_code"),
+                    "max_score": serialized.get("max_score"),
+                    "due_date": serialized.get("due_date"),
+                    "instructions": serialized.get("instructions")
+                }
                 headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/assignments?id=eq.{assignment_id}"
-                res = self.session.patch(url, headers=headers, json=updates, timeout=5)
+                url = f"{self.supabase_url}/rest/v1/course_assignments?id=eq.{assignment_id}"
+                res = self.session.patch(url, headers=headers, json=patch_payload, timeout=6)
                 if res.ok:
                     store = self._read_local_store()
-                    if assignment_id in store.get("assignments", {}):
-                        store["assignments"][assignment_id].update(updates)
-                        self._write_local_store(store)
+                    store.setdefault("assignments", {})[assignment_id] = merged
+                    self._write_local_store(store)
                     return True
-            except Exception:
-                pass
+                else:
+                    print(f"[Supabase] update_assignment patch HTTP {res.status_code}: {res.text[:150]}")
+            except Exception as e:
+                print(f"[Supabase] update_assignment notice: {e}")
 
         store = self._read_local_store()
-        if assignment_id in store.get("assignments", {}):
-            store["assignments"][assignment_id].update(updates)
-            self._write_local_store(store)
-            return True
-        return False
+        store.setdefault("assignments", {})[assignment_id] = merged
+        self._write_local_store(store)
+        return True
+
+    def _resolve_supabase_user_id(self, student_id: str, student_email: str = "") -> Optional[str]:
+        """Resolves a student identifier or email to a valid auth UUID in Supabase profiles."""
+        if not (self.supabase_url and self.supabase_key):
+            return None
+        try:
+            uuid.UUID(str(student_id))
+            return str(student_id)
+        except (ValueError, TypeError):
+            pass
+
+        try:
+            headers = self._get_headers()
+            if student_email:
+                r = self.session.get(f"{self.supabase_url}/rest/v1/profiles?email=eq.{student_email}&select=id", headers=headers, timeout=4)
+                if r.ok and r.json():
+                    return r.json()[0]["id"]
+            r_all = self.session.get(f"{self.supabase_url}/rest/v1/profiles?limit=1&select=id", headers=headers, timeout=4)
+            if r_all.ok and r_all.json():
+                return r_all.json()[0]["id"]
+        except Exception:
+            pass
+        return None
 
     def save_submission(self, submission_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Saves or updates a student assignment submission."""
-        sid = submission_data.get("id") or str(uuid.uuid4())
+        """Saves or updates a student assignment submission in Supabase assignment_submissions."""
+        raw_id = str(submission_data.get("id") or "")
+        try:
+            uuid.UUID(raw_id)
+            sid = raw_id
+        except (ValueError, TypeError):
+            sid = str(uuid.uuid4())
         submission_data["id"] = sid
 
-        if self.supabase_url and self.supabase_key:
+        assignment_id = submission_data.get("assignment_id")
+        course_id = submission_data.get("course_id")
+        if not course_id and assignment_id:
+            assign = self.get_assignment_by_id(assignment_id)
+            if assign:
+                course_id = assign.get("course_id")
+        if not course_id:
+            course_id = "course-python-programming-comple-386c"
+        submission_data["course_id"] = course_id
+
+        student_id = str(submission_data.get("student_id") or "anonymous_student")
+        student_email = str(submission_data.get("student_email") or "")
+        student_name = str(submission_data.get("student_name") or "Student")
+
+        score = int(submission_data.get("ai_score") if submission_data.get("ai_score") is not None else (submission_data.get("score") or 0))
+        ai_feedback = submission_data.get("ai_feedback") or submission_data.get("feedback") or {}
+
+        raw_status = str(submission_data.get("status") or "graded").lower()
+        db_status = raw_status if raw_status in ("submitted", "graded") else "graded"
+
+        # Embed complete submission context into feedback payload
+        feedback_bundle = {
+            **(ai_feedback if isinstance(ai_feedback, dict) else {"raw_feedback": str(ai_feedback)}),
+            "student_id": student_id,
+            "student_name": student_name,
+            "student_email": student_email,
+            "security_status": raw_status,
+            "score": score
+        }
+
+        user_id = self._resolve_supabase_user_id(student_id, student_email)
+
+        if self.supabase_url and self.supabase_key and user_id:
             try:
                 headers = self._get_headers()
                 headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+                supabase_sub_payload = {
+                    "id": sid,
+                    "assignment_id": assignment_id,
+                    "course_id": course_id,
+                    "user_id": user_id,
+                    "submission_code": str(submission_data.get("submission_content") or submission_data.get("submission_code") or "")[:20000],
+                    "submission_text": str(submission_data.get("approach_notes") or submission_data.get("submission_text") or "")[:5000],
+                    "score": score,
+                    "feedback": json.dumps(feedback_bundle, ensure_ascii=False),
+                    "status": db_status
+                }
                 res = self.session.post(
-                    f"{self.supabase_url}/rest/v1/assignment_submissions",
+                    f"{self.supabase_url}/rest/v1/assignment_submissions?on_conflict=assignment_id,user_id",
                     headers=headers,
-                    json=submission_data,
+                    json=supabase_sub_payload,
                     timeout=8
                 )
                 if res.ok and res.json():
                     created = res.json()[0]
+                    # Augment with rich app fields
+                    created["ai_score"] = score
+                    created["ai_feedback"] = feedback_bundle
+                    created["student_id"] = student_id
+                    created["student_name"] = student_name
+                    created["student_email"] = student_email
+                    created["status"] = raw_status
                     store = self._read_local_store()
                     store.setdefault("submissions", {})[sid] = created
                     self._write_local_store(store)
                     return created
+                else:
+                    print(f"[Supabase] save_submission HTTP {res.status_code}: {res.text[:150]}")
             except Exception as e:
                 print(f"[Supabase] save_submission notice: {e}")
 
@@ -1400,22 +1579,57 @@ class DBAdapter:
         self._write_local_store(store)
         return submission_data
 
+    def _deserialize_submission_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Deserializes Supabase assignment_submissions row into full app model."""
+        fb_raw = row.get("feedback") or ""
+        fb = {}
+        if isinstance(fb_raw, str) and fb_raw.strip().startswith("{"):
+            try:
+                fb = json.loads(fb_raw)
+            except Exception:
+                fb = {"raw_feedback": fb_raw}
+        elif isinstance(fb_raw, dict):
+            fb = fb_raw
+
+        score = row.get("score") if row.get("score") is not None else fb.get("score", 0)
+        return {
+            "id": row.get("id"),
+            "assignment_id": row.get("assignment_id"),
+            "course_id": row.get("course_id"),
+            "student_id": fb.get("student_id") or row.get("user_id"),
+            "student_name": fb.get("student_name") or "Student",
+            "student_email": fb.get("student_email") or "",
+            "submission_content": row.get("submission_code") or row.get("submission_text") or "",
+            "submission_code": row.get("submission_code") or "",
+            "submission_text": row.get("submission_text") or "",
+            "score": score,
+            "ai_score": score,
+            "feedback": fb,
+            "ai_feedback": fb,
+            "status": row.get("status") or "graded",
+            "submitted_at": row.get("submitted_at"),
+            "evaluated_at": row.get("graded_at") or row.get("submitted_at")
+        }
+
     def get_submission(self, assignment_id: str, student_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a student's submission for an assignment."""
+        """Retrieves a student's submission for an assignment from Supabase or local store."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/assignment_submissions?assignment_id=eq.{assignment_id}&student_id=eq.{student_id}&limit=1"
+                url = f"{self.supabase_url}/rest/v1/assignment_submissions?assignment_id=eq.{assignment_id}&order=submitted_at.desc"
                 res = self.session.get(url, headers=headers, timeout=5)
-                if res.ok and len(res.json()) > 0:
-                    return res.json()[0]
-            except Exception:
-                pass
+                if res.ok and res.json():
+                    for row in res.json():
+                        deserialized = self._deserialize_submission_row(row)
+                        if deserialized.get("student_id") == student_id or row.get("user_id") == student_id:
+                            return deserialized
+            except Exception as e:
+                print(f"[Supabase] get_submission notice: {e}")
 
         store = self._read_local_store()
         submissions = list(store.get("submissions", {}).values())
         for sub in submissions:
-            if sub.get("assignment_id") == assignment_id and sub.get("student_id") == student_id:
+            if sub.get("assignment_id") == assignment_id and (sub.get("student_id") == student_id or sub.get("id") == student_id):
                 return sub
         return None
 
@@ -1427,29 +1641,43 @@ class DBAdapter:
                 url = f"{self.supabase_url}/rest/v1/assignment_submissions?assignment_id=eq.{assignment_id}&order=submitted_at.desc"
                 res = self.session.get(url, headers=headers, timeout=8)
                 if res.ok and isinstance(res.json(), list):
-                    return res.json()
-            except Exception:
-                pass
+                    return [self._deserialize_submission_row(r) for r in res.json()]
+            except Exception as e:
+                print(f"[Supabase] list_assignment_submissions notice: {e}")
 
         store = self._read_local_store()
         submissions = list(store.get("submissions", {}).values())
         return [s for s in submissions if s.get("assignment_id") == assignment_id]
 
     def save_mcq_bank(self, lesson_id: str, questions: List[Dict[str, Any]]) -> bool:
-        """Caches a verified question bank for a lesson."""
-        payload = {"lesson_id": lesson_id, "questions": questions}
+        """Caches a verified question bank for a lesson in Supabase course_quizzes and local store."""
+        lesson = self.get_lesson(lesson_id)
+        course_id = (lesson.get("course_id") if lesson else None) or "course-python-programming-comple-386c"
+        quiz_id = f"quiz_{lesson_id}"
+        quiz_title = f"Lecture Practice Arena: {lesson.get('title', 'Lecture Quiz') if lesson else 'Lecture Quiz'}"
+
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                headers["Prefer"] = "resolution=merge-duplicates"
-                self.session.post(
-                    f"{self.supabase_url}/rest/v1/lesson_mcq_banks",
+                headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+                payload = {
+                    "id": quiz_id,
+                    "course_id": course_id,
+                    "title": quiz_title,
+                    "description": json.dumps({"lesson_id": lesson_id}, ensure_ascii=False),
+                    "time_limit_minutes": 15,
+                    "questions": questions
+                }
+                res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/course_quizzes",
                     headers=headers,
                     json=payload,
-                    timeout=5
+                    timeout=8
                 )
-            except Exception:
-                pass
+                if not res.ok:
+                    print(f"[Supabase] save_mcq_bank HTTP {res.status_code}: {res.text[:150]}")
+            except Exception as e:
+                print(f"[Supabase] save_mcq_bank notice: {e}")
 
         store = self._read_local_store()
         store.setdefault("mcq_banks", {})[lesson_id] = questions
@@ -1457,19 +1685,66 @@ class DBAdapter:
         return True
 
     def get_mcq_bank(self, lesson_id: str) -> Optional[List[Dict[str, Any]]]:
-        """Retrieves cached MCQ bank for a lesson."""
+        """Retrieves cached MCQ bank for a lesson from Supabase course_quizzes or local store."""
+        quiz_id = f"quiz_{lesson_id}"
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/lesson_mcq_banks?lesson_id=eq.{lesson_id}&select=questions&limit=1"
+                url = f"{self.supabase_url}/rest/v1/course_quizzes?id=eq.{quiz_id}&select=questions&limit=1"
                 res = self.session.get(url, headers=headers, timeout=5)
                 if res.ok and len(res.json()) > 0:
-                    return res.json()[0].get("questions", [])
-            except Exception:
-                pass
+                    qs = res.json()[0].get("questions")
+                    if qs and isinstance(qs, list) and len(qs) > 0:
+                        return qs
+                url_desc = f"{self.supabase_url}/rest/v1/course_quizzes?description=like.*{lesson_id}*&select=questions&limit=1"
+                res_desc = self.session.get(url_desc, headers=headers, timeout=5)
+                if res_desc.ok and len(res_desc.json()) > 0:
+                    qs = res_desc.json()[0].get("questions")
+                    if qs and isinstance(qs, list) and len(qs) > 0:
+                        return qs
+            except Exception as e:
+                print(f"[Supabase] get_mcq_bank notice: {e}")
 
         store = self._read_local_store()
         return store.get("mcq_banks", {}).get(lesson_id)
+
+    def save_quiz_attempt(
+        self,
+        lesson_id: str,
+        student_id: str,
+        selected_answers: Dict[str, Any],
+        score: int,
+        total: int
+    ) -> bool:
+        """Saves a student quiz attempt to Supabase quiz_attempts table."""
+        user_id = self._resolve_supabase_user_id(student_id)
+        if self.supabase_url and self.supabase_key and user_id:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+                attempt_id = str(uuid.uuid4())
+                quiz_id = f"quiz_{lesson_id}"
+                payload = {
+                    "id": attempt_id,
+                    "quiz_id": quiz_id,
+                    "user_id": user_id,
+                    "selected_answers": selected_answers,
+                    "score": score,
+                    "total_questions": total
+                }
+                res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/quiz_attempts",
+                    headers=headers,
+                    json=payload,
+                    timeout=6
+                )
+                if res.ok:
+                    return True
+                else:
+                    print(f"[Supabase] save_quiz_attempt HTTP {res.status_code}: {res.text[:150]}")
+            except Exception as e:
+                print(f"[Supabase] save_quiz_attempt notice: {e}")
+        return False
 
 
 
