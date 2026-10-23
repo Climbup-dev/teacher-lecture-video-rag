@@ -308,14 +308,16 @@ class AssignmentEngine:
             "Your goal is to design an industry-standard, practical hands-on assignment for students based on the lecture milestones.\n"
             "Return a single valid JSON object with the following exact keys:\n"
             "- title: string (Compelling, professional assignment title)\n"
-            "- scenario_context: string (Real-world enterprise scenario e.g. Fintech, E-Commerce, Logistics)\n"
-            "- description: string (Clear objectives for the student)\n"
+            "- scenario_context: string (Rich real-world enterprise scenario e.g. Fintech transaction pipeline, HealthTech patient telemetry, E-Commerce order router)\n"
+            "- description: string (Clear milestone objectives and learning outcomes)\n"
+            "- starter_code: string (Clean, executable boilerplate Python template with class/function skeleton, typing, docstrings, and TODO comments)\n"
             "- problems: array of exactly 3 progressive problems:\n"
             "    - problem_number: integer (1, 2, or 3)\n"
-            "    - difficulty: 'Basic' | 'Intermediate' | 'Advanced'\n"
+            "    - tier: 'Basic' | 'Intermediate' | 'Advanced'\n"
             "    - marks: integer (Problem 1: 25, Problem 2: 35, Problem 3: 40)\n"
-            "    - question: Detailed problem requirement with sample inputs/outputs or tables\n"
-            "    - expected_deliverable: Specific expected code or SQL query or text format\n"
+            "    - problem_statement: string (Comprehensive, step-by-step problem specifications, expected inputs, outputs, and edge cases)\n"
+            "    - acceptance_criteria: array of 2-3 specific testing criteria strings (e.g. ['Validates non-empty input and raises ValueError', 'Achieves O(N) linear time complexity', 'Passes concurrency sanity checks'])\n"
+            "    - expected_deliverable: string (e.g. 'Complete python function implementation with unit tests')\n"
             "- rubric: JSON object defining grading criteria:\n"
             "    - logic_and_correctness: integer (50)\n"
             "    - syntax_and_quality: integer (25)\n"
@@ -327,23 +329,99 @@ class AssignmentEngine:
         user_prompt = (
             f"LECTURE TITLE: {lesson.get('title', 'Technical Lecture')}\n\n"
             f"LECTURE MILESTONE SAMPLES:\n{concept_summary}\n\n"
-            "Generate a high-impact, real-world assignment that tests practical mastery."
+            "Generate a high-impact, real-world assignment that tests practical mastery with complete challenge statements, starter code, and acceptance criteria in strict JSON format."
         )
 
         raw = self._call_llm(system_prompt, user_prompt, temperature=0.3)
-        parsed = self._clean_json_response(raw or "")
-        if not parsed or "title" not in parsed:
-            return None
+        parsed = self._clean_json_response(raw or "") or {}
 
         assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
+        title = parsed.get("title") or f"Hands-on Milestone: {lesson.get('title', 'Practical Lab')}"
+        scenario = parsed.get("scenario_context") or parsed.get("description") or f"Enterprise application development lab based on {lesson.get('title', 'course concepts')}."
+        desc = parsed.get("description") or f"Solve the practical engineering challenges based on concepts covered in {lesson.get('title')}."
+        
+        starter = parsed.get("starter_code") or (
+            f"# ========================================================================\n"
+            f"# {title}\n"
+            f"# Scenario: {scenario[:80]}...\n"
+            f"# ========================================================================\n\n"
+            f"from typing import List, Dict, Any, Optional\n\n"
+            f"class Solution:\n"
+            f"    def __init__(self):\n"
+            f"        self.is_ready = True\n\n"
+            f"    def challenge_1_core(self, data: Any) -> Any:\n"
+            f"        # TODO: Implement foundational logic\n"
+            f"        pass\n\n"
+            f"    def challenge_2_intermediate(self, data: Any) -> Any:\n"
+            f"        # TODO: Implement core transformation & validation\n"
+            f"        pass\n\n"
+            f"    def challenge_3_advanced(self, data: Any) -> Any:\n"
+            f"        # TODO: Implement edge cases & resilience\n"
+            f"        pass\n"
+        )
+
+        raw_problems = parsed.get("problems", [])
+        if not raw_problems or len(raw_problems) == 0:
+            raw_problems = [
+                {
+                    "problem_number": 1,
+                    "tier": "Basic",
+                    "marks": 25,
+                    "problem_statement": f"Build foundational data parsing and validation components based on core concepts in {lesson.get('title')}.",
+                    "acceptance_criteria": ["Validates all incoming input formats", "Raises descriptive ValueError on invalid payload"],
+                    "expected_deliverable": "Python function with input validation"
+                },
+                {
+                    "problem_number": 2,
+                    "tier": "Intermediate",
+                    "marks": 35,
+                    "problem_statement": "Develop the primary transformation algorithm handling core business rules and edge boundary conditions.",
+                    "acceptance_criteria": ["Optimal time complexity O(N)", "Produces correct output for all test cases"],
+                    "expected_deliverable": "Optimized algorithmic function"
+                },
+                {
+                    "problem_number": 3,
+                    "tier": "Advanced",
+                    "marks": 40,
+                    "problem_statement": "Implement production hardening: handle malformed records, high-volume inputs, and assert idempotency.",
+                    "acceptance_criteria": ["Zero unhandled exceptions", "Robust recovery for corrupted inputs"],
+                    "expected_deliverable": "End-to-end resilient implementation"
+                }
+            ]
+
+        normalized_problems = []
+        for idx, p in enumerate(raw_problems):
+            tier = p.get("tier") or p.get("difficulty") or ("Basic" if idx == 0 else "Intermediate" if idx == 1 else "Advanced")
+            marks = p.get("marks") or (25 if idx == 0 else 35 if idx == 1 else 40)
+            stmt = p.get("problem_statement") or p.get("question") or p.get("description") or f"Implement Challenge {idx+1} requirements based on the lecture."
+            criteria = p.get("acceptance_criteria") or []
+            if isinstance(criteria, str):
+                criteria = [criteria]
+            if not criteria and p.get("expected_deliverable"):
+                criteria = [p.get("expected_deliverable")]
+            if not criteria:
+                criteria = ["Passes baseline test inputs", "Adheres to clean code standards"]
+
+            normalized_problems.append({
+                "problem_number": idx + 1,
+                "tier": tier,
+                "difficulty": tier,
+                "marks": marks,
+                "problem_statement": stmt,
+                "question": stmt,
+                "acceptance_criteria": criteria,
+                "expected_deliverable": p.get("expected_deliverable") or "Python code implementation"
+            })
+
         assignment_record = {
             "id": assignment_id,
             "lesson_id": lesson_id,
             "course_id": lesson.get("course_id"),
-            "title": parsed.get("title", f"Hands-on Assignment: {lesson.get('title')}"),
-            "description": parsed.get("description", "Solve the practical technical problems based on lecture concepts."),
-            "scenario_context": parsed.get("scenario_context", "Enterprise Application Scenario"),
-            "problems": parsed.get("problems", []),
+            "title": title,
+            "description": desc,
+            "scenario_context": scenario,
+            "starter_code": starter,
+            "problems": normalized_problems,
             "rubric": parsed.get("rubric", {
                 "logic_and_correctness": 50,
                 "syntax_and_quality": 25,

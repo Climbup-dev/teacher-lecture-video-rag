@@ -1,4 +1,28 @@
 // ClimbUp Mentor Studio - Hierarchical LMS Controller (Course -> Videos -> Notes & Assignments)
+
+// ==========================================
+// TOP-LEVEL SHARED STATE (Accessible across all views & studios)
+// ==========================================
+let currentCourseId = "course-applied-ai-rag";
+let coursesCache = [];
+let allLessonsCache = [];
+let courseResourcesCache = [];
+let currentLessonId = null;
+let currentUtterances = [];
+let currentChunks = [];
+let isVideoPlaying = false;
+
+// Attach to window for robust inter-module access
+window.currentCourseId = currentCourseId;
+window.coursesCache = coursesCache;
+window.allLessonsCache = allLessonsCache;
+window.courseResourcesCache = courseResourcesCache;
+window.currentLessonId = currentLessonId;
+
+// Upload modal state
+let modalVideoMode = "file";
+let modalSelectedVideoFile = null;
+
 document.addEventListener("DOMContentLoaded", () => {
   // Auto-detect Backend API Host (supports port 8000, 8080, Live Server 5500, and Cloud Run)
   const API_BASE = (window.location.port === "8000" || window.location.port === "8080")
@@ -14,22 +38,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     return originalFetch(url, options);
   };
-
-  // ==========================================
-  // GLOBAL STATE
-  // ==========================================
-  let currentCourseId = "course-applied-ai-rag";
-  let coursesCache = [];
-  let allLessonsCache = [];
-  let courseResourcesCache = [];
-  let currentLessonId = null;
-  let currentUtterances = [];
-  let currentChunks = [];
-  let isVideoPlaying = false;
-
-  // Upload modal state
-  let modalVideoMode = "file";
-  let modalSelectedVideoFile = null;
 
   // ==========================================
   // DOM ELEMENT REFERENCES
@@ -926,6 +934,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (kpiTotalLectures) kpiTotalLectures.textContent = allLessonsCache.length;
     syncStudioLecturePicker();
   }
+  window.loadAllLessons = loadAllLessons;
 
   async function loadCourseLectures(courseId) {
     if (!cdLecturesGrid) return;
@@ -2824,10 +2833,14 @@ function setupAiAssignmentStudio() {
     if (!lectureSelect) return;
     lectureSelect.innerHTML = "";
 
-    const activeCourseId = currentCourseId || (coursesCache[0]?.id);
-    let lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
-    if (lessons.length === 0 && allLessonsCache.length > 0) {
-      lessons = allLessonsCache;
+    const activeCourseId = (window.currentCourseId || (typeof currentCourseId !== "undefined" ? currentCourseId : null) || (window.coursesCache && window.coursesCache[0]?.id) || "course-applied-ai-rag");
+    const lessonsList = (window.allLessonsCache && window.allLessonsCache.length > 0)
+      ? window.allLessonsCache
+      : (typeof allLessonsCache !== "undefined" ? allLessonsCache : []);
+
+    let lessons = lessonsList.filter(l => l.course_id === activeCourseId);
+    if (lessons.length === 0 && lessonsList.length > 0) {
+      lessons = lessonsList;
     }
 
     if (lessons.length === 0) {
@@ -2839,7 +2852,8 @@ function setupAiAssignmentStudio() {
       const opt = document.createElement("option");
       opt.value = l.id;
       opt.textContent = `${l.title} (${l.duration || "Video"})`;
-      if (preselectedId ? (preselectedId === l.id) : (currentLectureId === l.id)) {
+      const curLid = (typeof currentLessonId !== "undefined" ? currentLessonId : window.currentLessonId);
+      if (preselectedId ? (preselectedId === l.id) : (curLid === l.id)) {
         opt.selected = true;
       }
       lectureSelect.appendChild(opt);
@@ -2855,7 +2869,7 @@ function setupAiAssignmentStudio() {
     const challengesList = document.getElementById("ai-edit-challenges-list");
 
     if (titleInput) titleInput.value = assignment.title || "Enterprise Milestone Assignment";
-    if (scenarioInput) scenarioInput.value = assignment.scenario_context || "";
+    if (scenarioInput) scenarioInput.value = assignment.scenario_context || assignment.description || "";
     if (starterInput) starterInput.value = assignment.starter_code || "";
     if (maxScoreInput) maxScoreInput.value = assignment.max_score || assignment.maxScore || assignment.rubric?.max_score || 100;
 
@@ -2863,28 +2877,48 @@ function setupAiAssignmentStudio() {
     if (challengesList) {
       challengesList.innerHTML = "";
       const problems = assignment.problems || [];
+      if (problems.length === 0) {
+        challengesList.innerHTML = `<div style="color: #94a3b8; padding: 16px; text-align: center; font-size: 0.88rem;">No challenges generated yet. Click "⚡ Synthesize Assignment with AI" above.</div>`;
+      }
       problems.forEach((prob, idx) => {
+        const tier = prob.tier || prob.difficulty || (idx === 0 ? "Basic" : idx === 1 ? "Intermediate" : "Advanced");
+        const tierLower = tier.toLowerCase();
+        const tierColor = tierLower === "basic" ? "#38bdf8" : tierLower === "intermediate" ? "#fbbf24" : "#f472b6";
+        const marks = prob.marks || (idx === 0 ? 25 : idx === 1 ? 35 : 40);
+        const statement = prob.problem_statement || prob.question || prob.description || "";
+        const criteria = Array.isArray(prob.acceptance_criteria) ? prob.acceptance_criteria : (prob.acceptance_criteria ? [prob.acceptance_criteria] : []);
+        const deliverable = prob.expected_deliverable || "";
+
         const card = document.createElement("div");
         card.className = "ai-challenge-card";
         card.innerHTML = `
           <div class="ai-challenge-header">
-            <span class="tier-badge-pill ${prob.tier?.toLowerCase() || 'basic'}">
-              Challenge ${idx + 1}: ${prob.tier || 'Core'}
+            <span class="tier-badge-pill ${tierLower}" style="background: ${tierColor}22; color: ${tierColor}; border: 1px solid ${tierColor}55; padding: 3px 12px; border-radius: 999px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;">
+              Challenge ${idx + 1}: ${tier}
             </span>
             <div style="display: flex; align-items: center; gap: 6px;">
               <span style="font-size: 0.78rem; color: #94a3b8;">Marks:</span>
-              <input type="number" class="edit-prob-marks" value="${prob.marks || 30}" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 0.8rem;">
+              <input type="number" class="edit-prob-marks" value="${marks}" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 0.8rem;">
             </div>
           </div>
-          <textarea class="edit-prob-desc form-input" rows="2" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem; margin-bottom: 8px;">${prob.problem_statement || ''}</textarea>
-          <div style="font-size: 0.75rem; color: #38d399; font-weight: 700; margin-bottom: 4px;">ACCEPTANCE CRITERIA:</div>
-          <div class="edit-criteria-tags" style="display: grid; gap: 4px;">
-            ${(prob.acceptance_criteria || []).map(c => `
-              <div style="font-size: 0.78rem; color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.03); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.06);">
-                ✓ ${c}
+          <div style="font-size: 0.72rem; color: #64748b; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">PROBLEM STATEMENT:</div>
+          <textarea class="edit-prob-desc form-input" rows="${Math.max(3, Math.ceil(statement.length / 90))}" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 0.84rem; margin-bottom: 10px; line-height: 1.5; resize: vertical;">${statement}</textarea>
+          ${deliverable ? `
+          <div style="font-size: 0.72rem; color: #818cf8; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.04em;">EXPECTED DELIVERABLE:</div>
+          <div style="font-size: 0.82rem; color: rgba(255, 255, 255, 0.8); background: rgba(99, 102, 241, 0.08); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(99, 102, 241, 0.15); margin-bottom: 10px;">
+            📋 ${deliverable}
+          </div>
+          ` : ''}
+          ${criteria.length > 0 ? `
+          <div style="font-size: 0.72rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">ACCEPTANCE CRITERIA:</div>
+          <div class="edit-criteria-tags" style="display: grid; gap: 5px;">
+            ${criteria.map(c => `
+              <div style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.9); background: rgba(56, 211, 153, 0.06); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(56, 211, 153, 0.15); display: flex; align-items: flex-start; gap: 6px;">
+                <span style="color: #38d399; font-weight: 700;">✓</span> ${c}
               </div>
             `).join('')}
           </div>
+          ` : ''}
         `;
         challengesList.appendChild(card);
       });
@@ -2928,6 +2962,9 @@ function setupAiAssignmentStudio() {
   }
 
   async function openAssignmentModal(preselectedId) {
+    if ((!window.allLessonsCache || window.allLessonsCache.length === 0) && typeof window.loadAllLessons === "function") {
+      await window.loadAllLessons();
+    }
     populateLectureDropdown(preselectedId);
     modal.style.display = "flex";
     const lessonId = preselectedId || lectureSelect?.value;
@@ -2939,7 +2976,7 @@ function setupAiAssignmentStudio() {
   window.openAssignmentModalForLecture = openAssignmentModal;
 
   if (openBtn) openBtn.addEventListener("click", () => openAssignmentModal());
-  if (studioOpenBtn) studioOpenBtn.addEventListener("click", () => openAssignmentModal(currentLectureId));
+  if (studioOpenBtn) studioOpenBtn.addEventListener("click", () => openAssignmentModal(window.currentLessonId));
 
   if (lectureSelect) {
     lectureSelect.addEventListener("change", () => {
@@ -3192,10 +3229,14 @@ function setupMcqManagerStudio() {
   function populateLectures(preselectedId) {
     if (!lectureSelect) return;
     lectureSelect.innerHTML = "";
-    const activeCourseId = currentCourseId || (coursesCache[0]?.id);
-    let lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
-    if (lessons.length === 0 && allLessonsCache.length > 0) {
-      lessons = allLessonsCache;
+    const activeCourseId = (window.currentCourseId || (typeof currentCourseId !== "undefined" ? currentCourseId : null) || (window.coursesCache && window.coursesCache[0]?.id) || "course-applied-ai-rag");
+    const lessonsList = (window.allLessonsCache && window.allLessonsCache.length > 0)
+      ? window.allLessonsCache
+      : (typeof allLessonsCache !== "undefined" ? allLessonsCache : []);
+
+    let lessons = lessonsList.filter(l => l.course_id === activeCourseId);
+    if (lessons.length === 0 && lessonsList.length > 0) {
+      lessons = lessonsList;
     }
     if (lessons.length === 0) {
       lectureSelect.innerHTML = "<option value=''>No lectures found in this course</option>";
@@ -3205,14 +3246,18 @@ function setupMcqManagerStudio() {
       const opt = document.createElement("option");
       opt.value = l.id;
       opt.textContent = `${l.title} (${l.duration || "Video"})`;
-      if (preselectedId ? (preselectedId === l.id) : (typeof currentLectureId !== "undefined" && currentLectureId === l.id)) {
+      const curLid = (typeof currentLessonId !== "undefined" ? currentLessonId : window.currentLessonId);
+      if (preselectedId ? (preselectedId === l.id) : (curLid === l.id)) {
         opt.selected = true;
       }
       lectureSelect.appendChild(opt);
     });
   }
 
-  function openModal(preselectedId) {
+  async function openModal(preselectedId) {
+    if ((!window.allLessonsCache || window.allLessonsCache.length === 0) && typeof window.loadAllLessons === "function") {
+      await window.loadAllLessons();
+    }
     populateLectures(preselectedId);
     modal.style.display = "flex";
     if (preselectedId && fetchBtn) {
@@ -3223,7 +3268,7 @@ function setupMcqManagerStudio() {
   window.openMcqModalForLecture = openModal;
 
   if (openMatBtn) openMatBtn.addEventListener("click", () => openModal());
-  if (openStudioBtn) openStudioBtn.addEventListener("click", () => openModal(currentLectureId));
+  if (openStudioBtn) openStudioBtn.addEventListener("click", () => openModal(window.currentLessonId));
   if (closeBtn) closeBtn.addEventListener("click", () => { modal.style.display = "none"; });
 
   if (lectureSelect) {
