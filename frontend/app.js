@@ -599,12 +599,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (res.ok) {
         const data = await res.json();
         coursesCache = Array.isArray(data) ? data : [];
+        window.coursesCache = coursesCache;
       } else {
         coursesCache = [];
+        window.coursesCache = [];
       }
     } catch (err) {
       console.warn("Could not load courses from backend:", err);
       coursesCache = [];
+      window.coursesCache = [];
     }
 
     if (badgeCoursesCount) badgeCoursesCount.textContent = coursesCache.length;
@@ -852,6 +855,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ==========================================
   async function openCourseWorkspace(courseId) {
     currentCourseId = courseId;
+    window.currentCourseId = courseId;
     const course = coursesCache.find(c => c.id === courseId);
     if (!course) {
       await loadCourses();
@@ -922,6 +926,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch("/api/lessons");
       if (res.ok) {
         allLessonsCache = await res.json();
+        window.allLessonsCache = allLessonsCache;
       }
     } catch (e) {
       console.warn("Could not load all lessons:", e);
@@ -929,6 +934,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!Array.isArray(allLessonsCache)) {
       allLessonsCache = [];
+      window.allLessonsCache = [];
     }
 
     if (kpiTotalLectures) kpiTotalLectures.textContent = allLessonsCache.length;
@@ -1069,6 +1075,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const aiAssignBtn = card.querySelector(".btn-lecture-ai-assignment");
       if (aiAssignBtn) {
         aiAssignBtn.addEventListener("click", () => {
+          window.currentCourseId = courseId;
+          currentCourseId = courseId;
+          window.currentLessonId = l.id;
+          currentLessonId = l.id;
           if (typeof window.openAssignmentModalForLecture === "function") {
             window.openAssignmentModalForLecture(l.id);
           }
@@ -1078,6 +1088,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const mcqBtn = card.querySelector(".btn-lecture-mcqs");
       if (mcqBtn) {
         mcqBtn.addEventListener("click", () => {
+          window.currentCourseId = courseId;
+          currentCourseId = courseId;
+          window.currentLessonId = l.id;
+          currentLessonId = l.id;
           if (typeof window.openMcqModalForLecture === "function") {
             window.openMcqModalForLecture(l.id);
           }
@@ -1932,6 +1946,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ==========================================
   function playLessonInStudio(lessonId) {
     currentLessonId = lessonId;
+    window.currentLessonId = lessonId;
     switchView("lecture-studio");
     loadLesson(lessonId);
   }
@@ -2097,6 +2112,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadLesson(lessonId) {
     if (!lessonId) return;
     currentLessonId = lessonId;
+    window.currentLessonId = lessonId;
 
     try {
       const res = await fetch(`/api/lessons/${lessonId}`);
@@ -2833,31 +2849,71 @@ function setupAiAssignmentStudio() {
     if (!lectureSelect) return;
     lectureSelect.innerHTML = "";
 
-    const activeCourseId = (window.currentCourseId || (typeof currentCourseId !== "undefined" ? currentCourseId : null) || (window.coursesCache && window.coursesCache[0]?.id) || "course-applied-ai-rag");
     const lessonsList = (window.allLessonsCache && window.allLessonsCache.length > 0)
       ? window.allLessonsCache
-      : (typeof allLessonsCache !== "undefined" ? allLessonsCache : []);
+      : (typeof allLessonsCache !== "undefined" && allLessonsCache.length > 0 ? allLessonsCache : []);
 
-    let lessons = lessonsList.filter(l => l.course_id === activeCourseId);
-    if (lessons.length === 0 && lessonsList.length > 0) {
-      lessons = lessonsList;
-    }
+    const coursesList = (window.coursesCache && window.coursesCache.length > 0)
+      ? window.coursesCache
+      : (typeof coursesCache !== "undefined" && coursesCache.length > 0 ? coursesCache : []);
 
-    if (lessons.length === 0) {
-      lectureSelect.innerHTML = "<option value=''>No lectures found in this course</option>";
+    if (lessonsList.length === 0) {
+      lectureSelect.innerHTML = "<option value=''>No lectures found in any course</option>";
       return;
     }
 
-    lessons.forEach(l => {
-      const opt = document.createElement("option");
-      opt.value = l.id;
-      opt.textContent = `${l.title} (${l.duration || "Video"})`;
-      const curLid = (typeof currentLessonId !== "undefined" ? currentLessonId : window.currentLessonId);
-      if (preselectedId ? (preselectedId === l.id) : (curLid === l.id)) {
-        opt.selected = true;
+    // Determine target selection ID
+    let targetLessonId = preselectedId || (typeof currentLessonId !== "undefined" && currentLessonId ? currentLessonId : window.currentLessonId);
+
+    // If preselectedId is provided, sync global state so course and lesson are aligned
+    if (targetLessonId) {
+      const match = lessonsList.find(l => l.id === targetLessonId);
+      if (match) {
+        if (match.course_id) {
+          window.currentCourseId = match.course_id;
+          if (typeof currentCourseId !== "undefined") currentCourseId = match.course_id;
+        }
+        window.currentLessonId = match.id;
+        if (typeof currentLessonId !== "undefined") currentLessonId = match.id;
       }
-      lectureSelect.appendChild(opt);
+    }
+
+    const coursesMap = new Map();
+    coursesList.forEach(c => coursesMap.set(c.id, c.title));
+
+    // Group all lectures by their Course
+    const grouped = {};
+    lessonsList.forEach(l => {
+      const cId = l.course_id || "general";
+      const cTitle = coursesMap.get(cId) || (cId.replace(/^course-/, "").replace(/-/g, " ").toUpperCase());
+      if (!grouped[cTitle]) grouped[cTitle] = [];
+      grouped[cTitle].push(l);
     });
+
+    let foundSelection = false;
+    Object.keys(grouped).forEach(courseTitle => {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = `📚 ${courseTitle}`;
+
+      grouped[courseTitle].forEach(l => {
+        const opt = document.createElement("option");
+        opt.value = l.id;
+        opt.textContent = `${l.title} (${l.duration || "Video"})`;
+        if (targetLessonId && targetLessonId === l.id) {
+          opt.selected = true;
+          foundSelection = true;
+        }
+        optgroup.appendChild(opt);
+      });
+
+      lectureSelect.appendChild(optgroup);
+    });
+
+    if (foundSelection && targetLessonId) {
+      lectureSelect.value = targetLessonId;
+    } else if (lectureSelect.options.length > 0) {
+      lectureSelect.selectedIndex = 0;
+    }
   }
 
   function renderAssignmentInForm(assignment) {
@@ -2966,8 +3022,11 @@ function setupAiAssignmentStudio() {
       await window.loadAllLessons();
     }
     populateLectureDropdown(preselectedId);
+    if (preselectedId && lectureSelect) {
+      lectureSelect.value = preselectedId;
+    }
     modal.style.display = "flex";
-    const lessonId = preselectedId || lectureSelect?.value;
+    const lessonId = lectureSelect?.value || preselectedId;
     if (lessonId) {
       await checkAndLoadExistingAssignment(lessonId);
     }
@@ -2975,7 +3034,15 @@ function setupAiAssignmentStudio() {
 
   window.openAssignmentModalForLecture = openAssignmentModal;
 
-  if (openBtn) openBtn.addEventListener("click", () => openAssignmentModal());
+  if (openBtn) {
+    openBtn.addEventListener("click", () => {
+      const activeLessons = (window.allLessonsCache || []).filter(l => l.course_id === (window.currentCourseId || currentCourseId));
+      const preId = (window.currentLessonId && activeLessons.some(l => l.id === window.currentLessonId))
+        ? window.currentLessonId
+        : (activeLessons[0]?.id || window.currentLessonId);
+      openAssignmentModal(preId);
+    });
+  }
   if (studioOpenBtn) studioOpenBtn.addEventListener("click", () => openAssignmentModal(window.currentLessonId));
 
   if (lectureSelect) {
@@ -3229,29 +3296,69 @@ function setupMcqManagerStudio() {
   function populateLectures(preselectedId) {
     if (!lectureSelect) return;
     lectureSelect.innerHTML = "";
-    const activeCourseId = (window.currentCourseId || (typeof currentCourseId !== "undefined" ? currentCourseId : null) || (window.coursesCache && window.coursesCache[0]?.id) || "course-applied-ai-rag");
+
     const lessonsList = (window.allLessonsCache && window.allLessonsCache.length > 0)
       ? window.allLessonsCache
-      : (typeof allLessonsCache !== "undefined" ? allLessonsCache : []);
+      : (typeof allLessonsCache !== "undefined" && allLessonsCache.length > 0 ? allLessonsCache : []);
 
-    let lessons = lessonsList.filter(l => l.course_id === activeCourseId);
-    if (lessons.length === 0 && lessonsList.length > 0) {
-      lessons = lessonsList;
-    }
-    if (lessons.length === 0) {
-      lectureSelect.innerHTML = "<option value=''>No lectures found in this course</option>";
+    const coursesList = (window.coursesCache && window.coursesCache.length > 0)
+      ? window.coursesCache
+      : (typeof coursesCache !== "undefined" && coursesCache.length > 0 ? coursesCache : []);
+
+    if (lessonsList.length === 0) {
+      lectureSelect.innerHTML = "<option value=''>No lectures found in any course</option>";
       return;
     }
-    lessons.forEach(l => {
-      const opt = document.createElement("option");
-      opt.value = l.id;
-      opt.textContent = `${l.title} (${l.duration || "Video"})`;
-      const curLid = (typeof currentLessonId !== "undefined" ? currentLessonId : window.currentLessonId);
-      if (preselectedId ? (preselectedId === l.id) : (curLid === l.id)) {
-        opt.selected = true;
+
+    let targetLessonId = preselectedId || (typeof currentLessonId !== "undefined" && currentLessonId ? currentLessonId : window.currentLessonId);
+
+    if (targetLessonId) {
+      const match = lessonsList.find(l => l.id === targetLessonId);
+      if (match) {
+        if (match.course_id) {
+          window.currentCourseId = match.course_id;
+          if (typeof currentCourseId !== "undefined") currentCourseId = match.course_id;
+        }
+        window.currentLessonId = match.id;
+        if (typeof currentLessonId !== "undefined") currentLessonId = match.id;
       }
-      lectureSelect.appendChild(opt);
+    }
+
+    const coursesMap = new Map();
+    coursesList.forEach(c => coursesMap.set(c.id, c.title));
+
+    const grouped = {};
+    lessonsList.forEach(l => {
+      const cId = l.course_id || "general";
+      const cTitle = coursesMap.get(cId) || (cId.replace(/^course-/, "").replace(/-/g, " ").toUpperCase());
+      if (!grouped[cTitle]) grouped[cTitle] = [];
+      grouped[cTitle].push(l);
     });
+
+    let foundSelection = false;
+    Object.keys(grouped).forEach(courseTitle => {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = `📚 ${courseTitle}`;
+
+      grouped[courseTitle].forEach(l => {
+        const opt = document.createElement("option");
+        opt.value = l.id;
+        opt.textContent = `${l.title} (${l.duration || "Video"})`;
+        if (targetLessonId && targetLessonId === l.id) {
+          opt.selected = true;
+          foundSelection = true;
+        }
+        optgroup.appendChild(opt);
+      });
+
+      lectureSelect.appendChild(optgroup);
+    });
+
+    if (foundSelection && targetLessonId) {
+      lectureSelect.value = targetLessonId;
+    } else if (lectureSelect.options.length > 0) {
+      lectureSelect.selectedIndex = 0;
+    }
   }
 
   async function openModal(preselectedId) {
@@ -3259,15 +3366,26 @@ function setupMcqManagerStudio() {
       await window.loadAllLessons();
     }
     populateLectures(preselectedId);
+    if (preselectedId && lectureSelect) {
+      lectureSelect.value = preselectedId;
+    }
     modal.style.display = "flex";
-    if (preselectedId && fetchBtn) {
+    if (fetchBtn) {
       setTimeout(() => fetchBtn.click(), 50);
     }
   }
 
   window.openMcqModalForLecture = openModal;
 
-  if (openMatBtn) openMatBtn.addEventListener("click", () => openModal());
+  if (openMatBtn) {
+    openMatBtn.addEventListener("click", () => {
+      const activeLessons = (window.allLessonsCache || []).filter(l => l.course_id === (window.currentCourseId || currentCourseId));
+      const preId = (window.currentLessonId && activeLessons.some(l => l.id === window.currentLessonId))
+        ? window.currentLessonId
+        : (activeLessons[0]?.id || window.currentLessonId);
+      openModal(preId);
+    });
+  }
   if (openStudioBtn) openStudioBtn.addEventListener("click", () => openModal(window.currentLessonId));
   if (closeBtn) closeBtn.addEventListener("click", () => { modal.style.display = "none"; });
 
