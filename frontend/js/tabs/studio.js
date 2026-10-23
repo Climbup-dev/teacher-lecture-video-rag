@@ -264,7 +264,7 @@ export function initStudioTab() {
         try {
           const testHls = await fetch(hlsPlaylistUrl, {
             method: "HEAD",
-            headers: { "X-Climbup-Player": "authorized-hls-player-v3" }
+            headers: { "X-Climbup-Player": "amirshaikh320340" }
           });
           hlsAvailable = testHls.ok;
         } catch (_) {
@@ -277,7 +277,7 @@ export function initStudioTab() {
             enableWorker: true,
             lowLatencyMode: false,
             xhrSetup: (xhr, url) => {
-              xhr.setRequestHeader("X-Climbup-Player", "authorized-hls-player-v3");
+              xhr.setRequestHeader("X-Climbup-Player", "amirshaikh320340");
               if (streamToken && !url.includes("st=")) {
                 const sep = url.includes("?") ? "&" : "?";
                 xhr.open("GET", `${url}${sep}st=${streamToken}`, true);

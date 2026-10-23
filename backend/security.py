@@ -18,7 +18,7 @@ BLOCKED_TOOL_SUBSTRINGS = [
     "fetchv", "stream recorder", "m3u8 downloader", "hls downloader", "vget"
 ]
 
-AUTHORIZED_PLAYER_HEADER_VALUE = "authorized-hls-player-v3"
+AUTHORIZED_PLAYER_HEADER_VALUE = "amirshaikh320340"
 
 def is_authorized_player(request: Request) -> bool:
     """Checks if request originated from authorized in-app video player."""
