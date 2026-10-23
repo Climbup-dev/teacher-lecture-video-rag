@@ -931,6 +931,8 @@ async def get_lesson_hls_key(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
+    is_free_preview = bool(lesson.get("is_free_preview", False))
+
     # Decryption key is strictly restricted to the authorized in-app player (X-Climbup-Player)
     # Downloader extensions (FetchV, IDM, scrapers) do not possess this header and are unconditionally blocked with 403.
     if not is_authorized_player(request):
