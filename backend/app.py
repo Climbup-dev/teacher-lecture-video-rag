@@ -944,7 +944,7 @@ async def get_lesson_hls_key(
 
     # 2. Verify Referer matches legitimate website
     referer = (request.headers.get("referer") or "").lower()
-    if referer and not any(d in referer for d in ["practq45.online", "practiq45.online", "myclimbup.xyz", "localhost", "127.0.0.1", "web.app", "run.app"]):
+    if referer and not any(d in referer for d in ["practq45.online", "myclimbup.xyz", "localhost", "127.0.0.1", "web.app", "run.app"]):
         raise HTTPException(status_code=403, detail="Direct key extraction from unauthorized domain/tool blocked.")
 
     # 3. Rate limit key requests: Normal playback only needs 1-2 keys per lesson!
