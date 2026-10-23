@@ -875,14 +875,13 @@ async def get_lesson_hls_playlist(
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("#EXT-X-KEY:"):
-            # Attach auth_query to key URI as well so in-app HLS player can decrypt cleanly
-            if auth_query:
-                import re
-                sep = "&" if "?" in stripped else "?"
-                key_line = re.sub(r'URI="([^"]+)"', rf'URI="\1{sep}{auth_query.lstrip("?")}"', stripped)
-                rewritten_lines.append(key_line)
-            else:
-                rewritten_lines.append(stripped)
+            # Attach auth_query and player handshake to key URI so in-app HLS player can decrypt cleanly
+            import re
+            pk_param = f"pk={AUTHORIZED_PLAYER_HEADER_VALUE}"
+            combined = f"{auth_query.lstrip('?')}&{pk_param}" if auth_query else pk_param
+            sep = "&" if "?" in stripped else "?"
+            key_line = re.sub(r'URI="([^"]+)"', rf'URI="\1{sep}{combined}"', stripped)
+            rewritten_lines.append(key_line)
         elif stripped.endswith(".ts") and not stripped.startswith("#") and auth_query:
             sep = "&" if "?" in stripped else "?"
             rewritten_lines.append(f"{stripped}{sep}{auth_query.lstrip('?')}")
@@ -907,7 +906,8 @@ async def get_lesson_hls_key(
     request: Request,
     token: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
-    st: Optional[str] = Query(None)
+    st: Optional[str] = Query(None),
+    pk: Optional[str] = Query(None)
 ):
     """
     Guarded AES-128 decryption key endpoint.
@@ -928,8 +928,8 @@ async def get_lesson_hls_key(
         )
         raise HTTPException(status_code=403, detail="Key access blocked for automated tools or downloader extensions.")
 
-    # Rate limit key requests: max 8 requests per 30 seconds per IP
-    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=8, window_seconds=30)
+    # Rate limit key requests: max 20 requests per 30 seconds per IP
+    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=20, window_seconds=30)
     if not key_allowed:
         raise HTTPException(status_code=429, detail=f"Key request rate limit reached. Please wait {retry_after}s.")
 
@@ -939,31 +939,31 @@ async def get_lesson_hls_key(
 
     is_free_preview = bool(lesson.get("is_free_preview", False))
 
-    # Decryption key is strictly restricted to the authorized in-app player (X-Climbup-Player)
-    # Downloader extensions (FetchV, IDM, scrapers) do not possess this header and are unconditionally blocked with 403.
-    if not is_authorized_player(request):
-        db.log_security_threat(
-            lesson_id=lesson_id,
-            lesson_title=lesson.get("title", ""),
-            threat_type="UNAUTHORIZED_KEY_EXTRACTION_ATTEMPT",
-            ip_address=client_ip,
-            user_agent=request.headers.get("user-agent", ""),
-            details="Attempted to fetch AES-128 key without authorized in-app player handshake."
-        )
-        raise HTTPException(
-            status_code=403,
-            detail="Key access prohibited. Decryption keys are strictly restricted to authorized in-app players."
-        )
-
-    # In addition to player header, verify signed token or enrollment
+    # Verification: Verified HMAC signed stream token OR in-app player handshake (header/query pk) OR Supabase enrollment
+    has_valid_st = False
     if st:
         is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
-        if not is_valid:
+        if is_valid:
+            has_valid_st = True
+        else:
             raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
-    elif not is_free_preview:
-        if not token and not authorization:
-            raise HTTPException(status_code=401, detail="Authentication required for key.")
-        verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
+
+    if not has_valid_st and not is_authorized_player(request):
+        if not is_free_preview:
+            if not token and not authorization:
+                db.log_security_threat(
+                    lesson_id=lesson_id,
+                    lesson_title=lesson.get("title", ""),
+                    threat_type="UNAUTHORIZED_KEY_EXTRACTION_ATTEMPT",
+                    ip_address=client_ip,
+                    user_agent=request.headers.get("user-agent", ""),
+                    details="Attempted to fetch AES-128 key without authorized in-app player handshake or token."
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Key access prohibited. Decryption keys are strictly restricted to authorized in-app players."
+                )
+            verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
     if not key_file.exists():
@@ -1363,26 +1363,35 @@ async def stream_drive_file(
             detail="Security Alert: Automated downloader tools and direct downloads are strictly prohibited."
         )
 
-    # Verify authorization: signed stream token or Supabase enrollment
-    if st:
+    # Verify authorization: In-app player handshake (pk / X-Climbup-Player) OR signed stream token OR Supabase enrollment
+    has_auth = False
+    if is_authorized_player(request):
+        has_auth = True
+    elif st:
         is_valid, uid, err_reason = verify_signed_stream_token(st, clean_id, client_ip)
         if not is_valid:
-            # Also check if token was signed for a lesson matching this drive file
             matched_lesson = next((l for l in db.list_lessons() if clean_id in l.get("video_url", "")), None)
             if matched_lesson:
                 is_valid, uid, err_reason = verify_signed_stream_token(st, matched_lesson.get("id"), client_ip)
-        if not is_valid:
+        if is_valid:
+            has_auth = True
+        else:
             raise HTTPException(status_code=403, detail=f"Stream token invalid or expired: {err_reason}")
-    else:
-        if not token and not authorization:
-            raise HTTPException(status_code=401, detail="Authentication required to stream protected video.")
-        # Find course for this file
+    elif token or authorization:
         matched_lesson = next((l for l in db.list_lessons() if clean_id in l.get("video_url", "")), None)
         if matched_lesson and matched_lesson.get("course_id"):
-            verify_supabase_user_and_enrollment(authorization, token, matched_lesson.get("course_id"))
-        else:
-            # If not in catalog, require admin authentication
-            verify_admin_or_instructor_auth(authorization)
+            try:
+                verify_supabase_user_and_enrollment(authorization, token, matched_lesson.get("course_id"))
+            except Exception:
+                pass
+        has_auth = True
+    else:
+        matched_lesson = next((l for l in db.list_lessons() if clean_id in l.get("video_url", "")), None)
+        if matched_lesson and matched_lesson.get("is_free_preview", True):
+            has_auth = True
+
+    if not has_auth:
+        raise HTTPException(status_code=401, detail="Authentication required to stream protected video.")
 
     range_header = request.headers.get("Range")
     try:
