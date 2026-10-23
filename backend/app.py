@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import uuid
 import shutil
 import requests
@@ -835,15 +836,19 @@ async def get_lesson_hls_playlist(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
-    is_free_preview = bool(lesson.get("is_free_preview", False))
-    if st:
-        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
-        if not is_valid:
-            raise HTTPException(status_code=403, detail=f"Signed playlist token invalid or expired: {err_reason}")
-    elif not token and not authorization and not is_authorized_player(request):
-        raise HTTPException(status_code=401, detail="Stream token or authentication required for lecture playlist.")
-    elif not is_free_preview and not is_authorized_player(request):
-        verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
+    # Require in-app player authentication or valid signed token
+    if not is_authorized_player(request):
+        if st:
+            is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+            if not is_valid:
+                raise HTTPException(status_code=403, detail=f"Signed playlist token invalid or expired: {err_reason}")
+        elif not token and not authorization:
+            raise HTTPException(
+                status_code=403,
+                detail="Direct playlist scraping prohibited. Lecture playlists are strictly locked to authorized in-app players."
+            )
+        elif not is_free_preview:
+            verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id"))
 
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
     playlist_file = hls_dir / "master.m3u8"
@@ -867,19 +872,18 @@ async def get_lesson_hls_playlist(
         )
 
     content = playlist_file.read_text(encoding="utf-8")
-    auth_query = f"?token={token}" if token else (f"?st={st}" if st else "")
 
-    # Inject auth_query into segment (.ts) entries only; do NOT expose token on key URI
+    # Sanitize lines:
+    # 1. Strip ALL credentials / query params from the key URI line
+    # 2. Keep segment lines clean so external scrapers cannot reuse tokens
     lines = content.splitlines()
     rewritten_lines = []
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("#EXT-X-KEY:"):
-            # Enforce clean key URI without credentials so extensions cannot copy key credentials from m3u8
-            rewritten_lines.append(stripped)
-        elif stripped.endswith(".ts") and not stripped.startswith("#") and auth_query:
-            sep = "&" if "?" in stripped else "?"
-            rewritten_lines.append(f"{stripped}{sep}{auth_query.lstrip('?')}")
+            # Enforce clean key URI without ANY credentials (?pk=..., ?st=..., etc.)
+            clean_key_line = re.sub(r'URI="([^"?]+)(?:\?[^"]*)?"', r'URI="\1"', stripped)
+            rewritten_lines.append(clean_key_line)
         else:
             rewritten_lines.append(stripped)
     content = "\n".join(rewritten_lines)
@@ -1004,13 +1008,26 @@ async def get_lesson_hls_segment(
     if not str(seg_file).startswith(str((Config.CHUNKS_DIR / "hls").resolve())):
         raise HTTPException(status_code=400, detail="Access denied.")
 
-    if not seg_file.exists():
-        raise HTTPException(status_code=404, detail="Segment not found.")
+    # --- 1. AUTHENTICATION & PLAYER VERIFICATION ---
+    if not is_authorized_player(request):
+        if st:
+            is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+            if not is_valid:
+                raise HTTPException(status_code=403, detail=f"Signed segment token invalid or expired: {err_reason}")
+        elif not token and not authorization:
+            raise HTTPException(
+                status_code=403,
+                detail="Direct segment scraping prohibited. Only verified in-app player is permitted."
+            )
+        else:
+            lesson = db.get_lesson(lesson_id)
+            is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+            if not is_free_preview:
+                verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id") if lesson else None)
 
-    # --- 1. ANTI-CHUNK-DUMPING SPEED GOVERNOR ---
+    # --- 2. ANTI-CHUNK-DUMPING SPEED GOVERNOR ---
     # Normal human playback consumes 1 segment every 6 seconds.
     # Allow initial pre-buffering up to 10 segments per 6 seconds.
-    # Bulk parallel downloaders (FetchV, IDM) exceeding this are immediately throttled.
     allowed, retry_after = check_rate_limit(client_ip, f"chunk_dump_{lesson_id}", max_requests=10, window_seconds=6)
     if not allowed:
         db.log_security_threat(
@@ -1019,7 +1036,7 @@ async def get_lesson_hls_segment(
             threat_type="BULK_CHUNK_DUMPING_DETECTED",
             ip_address=client_ip,
             user_agent=request.headers.get("user-agent", ""),
-            details=f"Automated segment dumping detected (exceeded 10 segments in 4s). Throttled for {retry_after}s."
+            details=f"Automated segment dumping detected (exceeded 10 segments in 6s). Throttled for {retry_after}s."
         )
         raise HTTPException(
             status_code=429,
@@ -1027,21 +1044,8 @@ async def get_lesson_hls_segment(
             headers={"Retry-After": str(retry_after)}
         )
 
-    # --- 2. AUTHENTICATION & TOKEN VERIFICATION ---
-    lesson = db.get_lesson(lesson_id)
-    is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
-
-    if st:
-        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
-        if not is_valid:
-            raise HTTPException(status_code=403, detail=f"Signed segment token invalid or expired: {err_reason}")
-    elif not is_authorized_player(request) and not token and not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication or authorized player token required for media segment."
-        )
-    elif not is_free_preview and not is_authorized_player(request):
-        verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id") if lesson else None)
+    if not seg_file.exists():
+        raise HTTPException(status_code=404, detail="Segment not found.")
 
     return FileResponse(
         path=str(seg_file),
