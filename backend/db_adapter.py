@@ -1343,15 +1343,22 @@ class DBAdapter:
 
     def update_assignment_status(self, assignment_id: str, status: str) -> bool:
         """Updates assignment status (draft, published, archived)."""
+        return self.update_assignment(assignment_id, {"status": status})
+
+    def update_assignment(self, assignment_id: str, updates: Dict[str, Any]) -> bool:
+        """Updates assignment structured fields (title, scenario, problems, status, etc.)."""
+        if not updates:
+            return True
+
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
                 url = f"{self.supabase_url}/rest/v1/assignments?id=eq.{assignment_id}"
-                res = self.session.patch(url, headers=headers, json={"status": status}, timeout=5)
+                res = self.session.patch(url, headers=headers, json=updates, timeout=5)
                 if res.ok:
                     store = self._read_local_store()
                     if assignment_id in store.get("assignments", {}):
-                        store["assignments"][assignment_id]["status"] = status
+                        store["assignments"][assignment_id].update(updates)
                         self._write_local_store(store)
                     return True
             except Exception:
@@ -1359,7 +1366,7 @@ class DBAdapter:
 
         store = self._read_local_store()
         if assignment_id in store.get("assignments", {}):
-            store["assignments"][assignment_id]["status"] = status
+            store["assignments"][assignment_id].update(updates)
             self._write_local_store(store)
             return True
         return False

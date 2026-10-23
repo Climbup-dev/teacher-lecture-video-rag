@@ -1110,6 +1110,12 @@ class AssignmentSubmitRequest(BaseModel):
 
 class AssignmentPublishRequest(BaseModel):
     status: Optional[str] = "published"
+    title: Optional[str] = None
+    scenario_context: Optional[str] = None
+    starter_code: Optional[str] = None
+    max_score: Optional[int] = None
+    due_date: Optional[str] = None
+    problems: Optional[List[Dict[str, Any]]] = None
 
 
 @app.api_route("/api/lessons/{lesson_id}/mcqs/quiz", methods=["GET", "POST"])
@@ -1189,11 +1195,22 @@ async def admin_publish_assignment(
     Admin/Teacher endpoint: Publishes draft assignment to enrolled students.
     """
     verify_admin_or_instructor_auth(request, authorization, admin_key)
-    new_status = body.status if body else "published"
-    success = db.update_assignment_status(assignment_id, new_status)
+    updates: Dict[str, Any] = {}
+    if body:
+        if body.status: updates["status"] = body.status
+        if body.title is not None: updates["title"] = body.title
+        if body.scenario_context is not None: updates["scenario_context"] = body.scenario_context
+        if body.starter_code is not None: updates["starter_code"] = body.starter_code
+        if body.max_score is not None: updates["max_score"] = body.max_score
+        if body.due_date is not None: updates["due_date"] = body.due_date
+        if body.problems is not None: updates["problems"] = body.problems
+    else:
+        updates["status"] = "published"
+
+    success = db.update_assignment(assignment_id, updates)
     if not success:
         raise HTTPException(status_code=404, detail="Assignment not found or update failed.")
-    return {"status": "success", "assignment_id": assignment_id, "status": new_status}
+    return {"status": "success", "assignment_id": assignment_id, "updated": updates}
 
 
 @app.get("/api/lessons/{lesson_id}/assignment")

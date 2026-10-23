@@ -1006,6 +1006,9 @@ document.addEventListener("DOMContentLoaded", () => {
             <button class="btn btn-sm btn-secondary btn-upload-lecture-assignment" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="Upload Assignment for this lecture">
               + Upload Assignment
             </button>
+            <button class="btn btn-sm btn-lecture-ai-assignment" data-id="${l.id}" data-title="${escapeHtml(l.title)}" title="AI Assignment Studio: Generate, Edit & Publish" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; font-weight: 700; border: none; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);">
+              ⚡ AI Assignment
+            </button>
             <button class="btn btn-sm btn-danger-outline btn-delete-lecture" data-id="${l.id}" title="Delete Lecture">
               🗑️
             </button>
@@ -1050,6 +1053,15 @@ document.addEventListener("DOMContentLoaded", () => {
       card.querySelector(".btn-upload-lecture-assignment").addEventListener("click", () => {
         openUploadMaterialModal(courseId, l.id, l.title, "assignment");
       });
+
+      const aiAssignBtn = card.querySelector(".btn-lecture-ai-assignment");
+      if (aiAssignBtn) {
+        aiAssignBtn.addEventListener("click", () => {
+          if (typeof window.openAssignmentModalForLecture === "function") {
+            window.openAssignmentModalForLecture(l.id);
+          }
+        });
+      }
 
       card.querySelector(".btn-delete-lecture").addEventListener("click", async () => {
         if (confirm(`Delete lecture "${l.title}"? This will remove transcripts and vector index.`)) {
@@ -2792,15 +2804,19 @@ function setupAiAssignmentStudio() {
   const triggerBtn = document.getElementById("btn-trigger-ai-synthesis");
   const statusBanner = document.getElementById("ai-assign-status-banner");
   const editForm = document.getElementById("ai-assign-edit-form");
+  const saveDraftBtn = document.getElementById("btn-save-draft-assignment");
 
   if (!modal) return;
 
-  function populateLectureDropdown() {
+  function populateLectureDropdown(preselectedId) {
     if (!lectureSelect) return;
     lectureSelect.innerHTML = "";
 
     const activeCourseId = currentCourseId || (coursesCache[0]?.id);
-    const lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
+    let lessons = allLessonsCache.filter(l => l.course_id === activeCourseId);
+    if (lessons.length === 0 && allLessonsCache.length > 0) {
+      lessons = allLessonsCache;
+    }
 
     if (lessons.length === 0) {
       lectureSelect.innerHTML = "<option value=''>No lectures found in this course</option>";
@@ -2811,22 +2827,113 @@ function setupAiAssignmentStudio() {
       const opt = document.createElement("option");
       opt.value = l.id;
       opt.textContent = `${l.title} (${l.duration || "Video"})`;
-      if (typeof currentLectureId !== "undefined" && currentLectureId === l.id) {
+      if (preselectedId ? (preselectedId === l.id) : (currentLectureId === l.id)) {
         opt.selected = true;
       }
       lectureSelect.appendChild(opt);
     });
   }
 
-  function openAssignmentModal() {
-    populateLectureDropdown();
-    if (statusBanner) statusBanner.style.display = "none";
-    if (editForm) editForm.style.display = "none";
-    modal.style.display = "flex";
+  function renderAssignmentInForm(assignment) {
+    currentGeneratedAssignment = assignment;
+    const titleInput = document.getElementById("ai-edit-title");
+    const scenarioInput = document.getElementById("ai-edit-scenario");
+    const starterInput = document.getElementById("ai-edit-starter");
+    const maxScoreInput = document.getElementById("ai-edit-maxscore");
+    const challengesList = document.getElementById("ai-edit-challenges-list");
+
+    if (titleInput) titleInput.value = assignment.title || "Enterprise Milestone Assignment";
+    if (scenarioInput) scenarioInput.value = assignment.scenario_context || "";
+    if (starterInput) starterInput.value = assignment.starter_code || "";
+    if (maxScoreInput) maxScoreInput.value = assignment.max_score || assignment.maxScore || assignment.rubric?.max_score || 100;
+
+    // Render Editable Challenges
+    if (challengesList) {
+      challengesList.innerHTML = "";
+      const problems = assignment.problems || [];
+      problems.forEach((prob, idx) => {
+        const card = document.createElement("div");
+        card.className = "ai-challenge-card";
+        card.innerHTML = `
+          <div class="ai-challenge-header">
+            <span class="tier-badge-pill ${prob.tier?.toLowerCase() || 'basic'}">
+              Challenge ${idx + 1}: ${prob.tier || 'Core'}
+            </span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 0.78rem; color: #94a3b8;">Marks:</span>
+              <input type="number" class="edit-prob-marks" value="${prob.marks || 30}" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 0.8rem;">
+            </div>
+          </div>
+          <textarea class="edit-prob-desc form-input" rows="2" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem; margin-bottom: 8px;">${prob.problem_statement || ''}</textarea>
+          <div style="font-size: 0.75rem; color: #38d399; font-weight: 700; margin-bottom: 4px;">ACCEPTANCE CRITERIA:</div>
+          <div class="edit-criteria-tags" style="display: grid; gap: 4px;">
+            ${(prob.acceptance_criteria || []).map(c => `
+              <div style="font-size: 0.78rem; color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.03); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.06);">
+                ✓ ${c}
+              </div>
+            `).join('')}
+          </div>
+        `;
+        challengesList.appendChild(card);
+      });
+    }
+
+    if (editForm) editForm.style.display = "block";
   }
 
-  if (openBtn) openBtn.addEventListener("click", openAssignmentModal);
-  if (studioOpenBtn) studioOpenBtn.addEventListener("click", openAssignmentModal);
+  async function checkAndLoadExistingAssignment(lessonId) {
+    if (!lessonId) return;
+    try {
+      const res = await fetch(`/api/lessons/${lessonId}/assignment`, {
+        headers: { "X-Climbup-Player": "amirshaikh320340" }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.assignment) {
+          renderAssignmentInForm(data.assignment);
+          if (statusBanner) {
+            statusBanner.style.display = "block";
+            const isPub = data.assignment.status === "published";
+            statusBanner.style.background = isPub ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)";
+            statusBanner.style.color = isPub ? "#38d399" : "#fbbf24";
+            statusBanner.textContent = isPub
+              ? "🟢 Published: This assignment is actively live for enrolled students. You can edit and republish below."
+              : "🟡 Draft (Unpublished): Review and edit challenges below. Click '🚀 Confirm & Publish to Students' when ready.";
+          }
+          return;
+        }
+      }
+    } catch (_) {}
+
+    // No existing assignment found
+    if (editForm) editForm.style.display = "none";
+    if (statusBanner) {
+      statusBanner.style.display = "block";
+      statusBanner.style.background = "rgba(56, 211, 153, 0.08)";
+      statusBanner.style.color = "#94a3b8";
+      statusBanner.textContent = "⚡ No assignment generated for this lecture yet. Click '⚡ Synthesize Assignment with AI' above.";
+    }
+  }
+
+  async function openAssignmentModal(preselectedId) {
+    populateLectureDropdown(preselectedId);
+    modal.style.display = "flex";
+    const lessonId = preselectedId || lectureSelect?.value;
+    if (lessonId) {
+      await checkAndLoadExistingAssignment(lessonId);
+    }
+  }
+
+  window.openAssignmentModalForLecture = openAssignmentModal;
+
+  if (openBtn) openBtn.addEventListener("click", () => openAssignmentModal());
+  if (studioOpenBtn) studioOpenBtn.addEventListener("click", () => openAssignmentModal(currentLectureId));
+
+  if (lectureSelect) {
+    lectureSelect.addEventListener("change", () => {
+      checkAndLoadExistingAssignment(lectureSelect.value);
+    });
+  }
 
   if (closeBtn) {
     closeBtn.addEventListener("click", () => {
@@ -2855,64 +2962,26 @@ function setupAiAssignmentStudio() {
       try {
         const response = await fetch(`/api/admin/lessons/${lessonId}/assignments/generate`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Climbup-Player": "amirshaikh320340"
+          },
           body: JSON.stringify({ difficulty: "intermediate" })
         });
 
-        if (!response.ok) throw new Error("AI assignment generation failed on server.");
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || "AI assignment generation failed on server.");
+        }
 
         const data = await response.json();
-        currentGeneratedAssignment = data.assignment;
-
-        // Populate Editable Fields
-        const titleInput = document.getElementById("ai-edit-title");
-        const scenarioInput = document.getElementById("ai-edit-scenario");
-        const starterInput = document.getElementById("ai-edit-starter");
-        const maxScoreInput = document.getElementById("ai-edit-maxscore");
-        const challengesList = document.getElementById("ai-edit-challenges-list");
-
-        if (titleInput) titleInput.value = currentGeneratedAssignment.title || "Enterprise Milestone Assignment";
-        if (scenarioInput) scenarioInput.value = currentGeneratedAssignment.scenario_context || "";
-        if (starterInput) starterInput.value = currentGeneratedAssignment.starter_code || "";
-        if (maxScoreInput) maxScoreInput.value = currentGeneratedAssignment.maxScore || currentGeneratedAssignment.rubric?.max_score || 100;
-
-        // Render Editable Challenges
-        if (challengesList) {
-          challengesList.innerHTML = "";
-          const problems = currentGeneratedAssignment.problems || [];
-          problems.forEach((prob, idx) => {
-            const card = document.createElement("div");
-            card.className = "ai-challenge-card";
-            card.innerHTML = `
-              <div class="ai-challenge-header">
-                <span class="tier-badge-pill ${prob.tier?.toLowerCase() || 'basic'}">
-                  Challenge ${idx + 1}: ${prob.tier || 'Core'}
-                </span>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                  <span style="font-size: 0.78rem; color: #94a3b8;">Marks:</span>
-                  <input type="number" class="edit-prob-marks" value="${prob.marks || 30}" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 0.8rem;">
-                </div>
-              </div>
-              <textarea class="edit-prob-desc form-input" rows="2" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem; margin-bottom: 8px;">${prob.problem_statement || ''}</textarea>
-              <div style="font-size: 0.75rem; color: #38d399; font-weight: 700; margin-bottom: 4px;">ACCEPTANCE CRITERIA:</div>
-              <div class="edit-criteria-tags" style="display: grid; gap: 4px;">
-                ${(prob.acceptance_criteria || []).map(c => `
-                  <div style="font-size: 0.78rem; color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.03); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.06);">
-                    ✓ ${c}
-                  </div>
-                `).join('')}
-              </div>
-            `;
-            challengesList.appendChild(card);
-          });
-        }
+        renderAssignmentInForm(data.assignment);
 
         if (statusBanner) {
-          statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
-          statusBanner.textContent = "✓ Assignment synthesized successfully! Review and edit components below before publishing.";
+          statusBanner.style.background = "rgba(245, 158, 11, 0.15)";
+          statusBanner.style.color = "#fbbf24";
+          statusBanner.textContent = "🟡 Draft Created: Assignment synthesized successfully! Review and edit components below before publishing.";
         }
-
-        if (editForm) editForm.style.display = "block";
       } catch (err) {
         console.error("Assignment synthesis error:", err);
         if (statusBanner) {
@@ -2927,7 +2996,54 @@ function setupAiAssignmentStudio() {
     });
   }
 
-  // Publish Verified Assignment
+  // Helper to collect current form values
+  function collectFormValues() {
+    return {
+      title: document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment?.title || "Enterprise Milestone Assignment",
+      scenario_context: document.getElementById("ai-edit-scenario")?.value || currentGeneratedAssignment?.scenario_context || "",
+      starter_code: document.getElementById("ai-edit-starter")?.value || currentGeneratedAssignment?.starter_code || "",
+      max_score: parseInt(document.getElementById("ai-edit-maxscore")?.value) || 100,
+      due_date: document.getElementById("ai-edit-due")?.value || "Next Sunday"
+    };
+  }
+
+  // Save as Draft
+  if (saveDraftBtn) {
+    saveDraftBtn.addEventListener("click", async () => {
+      if (!currentGeneratedAssignment) return;
+      saveDraftBtn.disabled = true;
+      saveDraftBtn.textContent = "Saving...";
+
+      try {
+        const payload = { ...collectFormValues(), status: "draft" };
+        const response = await fetch(`/api/admin/assignments/${currentGeneratedAssignment.id}/publish`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Climbup-Player": "amirshaikh320340"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error("Failed to save draft.");
+
+        currentGeneratedAssignment.status = "draft";
+        if (statusBanner) {
+          statusBanner.style.background = "rgba(245, 158, 11, 0.15)";
+          statusBanner.style.color = "#fbbf24";
+          statusBanner.textContent = "🟡 Draft Saved: Changes saved. Students cannot view this until you click 'Confirm & Publish'.";
+        }
+        alert("Draft saved successfully! Not visible to students yet.");
+      } catch (err) {
+        alert("Error saving draft: " + err.message);
+      } finally {
+        saveDraftBtn.disabled = false;
+        saveDraftBtn.textContent = "💾 Save as Draft";
+      }
+    });
+  }
+
+  // Confirm & Publish to Students
   if (editForm) {
     editForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -2940,27 +3056,24 @@ function setupAiAssignmentStudio() {
       }
 
       try {
-        // Collect updated values
-        const title = document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment.title;
-        const scenario = document.getElementById("ai-edit-scenario")?.value || currentGeneratedAssignment.scenario_context;
-        const starter = document.getElementById("ai-edit-starter")?.value || currentGeneratedAssignment.starter_code;
-        const maxScore = parseInt(document.getElementById("ai-edit-maxscore")?.value) || 100;
-        const due = document.getElementById("ai-edit-due")?.value || "Next Sunday";
-
+        const payload = { ...collectFormValues(), status: "published" };
         const response = await fetch(`/api/admin/assignments/${currentGeneratedAssignment.id}/publish`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            is_published: true,
-            title,
-            scenario_context: scenario,
-            starter_code: starter,
-            max_score: maxScore,
-            due_date: due
-          })
+          headers: {
+            "Content-Type": "application/json",
+            "X-Climbup-Player": "amirshaikh320340"
+          },
+          body: JSON.stringify(payload)
         });
 
         if (!response.ok) throw new Error("Failed to publish assignment.");
+
+        currentGeneratedAssignment.status = "published";
+        if (statusBanner) {
+          statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
+          statusBanner.style.color = "#38d399";
+          statusBanner.textContent = "🟢 Live: Assignment successfully published and visible to all enrolled students!";
+        }
 
         alert("Assignment successfully verified and published to all enrolled students!");
         modal.style.display = "none";
@@ -2975,7 +3088,7 @@ function setupAiAssignmentStudio() {
       } finally {
         if (confirmBtn) {
           confirmBtn.disabled = false;
-          confirmBtn.textContent = "✓ Verify & Publish Assignment to Enrolled Students";
+          confirmBtn.textContent = "🚀 Confirm & Publish to Students";
         }
       }
     });
