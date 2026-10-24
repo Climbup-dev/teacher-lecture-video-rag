@@ -232,5 +232,141 @@ class TestTheoryVsCodingAssignments(unittest.TestCase):
         self.assertEqual(deserialized["problems"][0].get("goal_type"), "THEORY")
         self.assertEqual(deserialized["problems"][1].get("goal_type"), "THEORY")
 
+    def test_verify_goal_rejects_unmodified_starter_code(self):
+        starter = "def reverse_string(s: str) -> str:\n    # TODO: Implement string reversal\n    pass"
+        coding_assignment = {
+            "id": "asgn-coding-stub-1",
+            "title": "Python String Reversal Assignment",
+            "assignment_type": "CODING",
+            "problems": [
+                {
+                    "problem_number": 1,
+                    "tier": "Basic",
+                    "goal_type": "CODING",
+                    "marks": 25,
+                    "problem_statement": "Write a function that reverses a given string.",
+                    "starter_code": starter,
+                    "test_cases": [
+                        {"input_description": "'hello'", "expected_output": "'olleh'", "is_hidden": False}
+                    ]
+                }
+            ]
+        }
+
+        with patch.object(self.db, "get_assignment_by_id", return_value=coding_assignment):
+            # 1. Student submits exactly the starter code without any modification
+            res = self.engine.verify_goal("asgn-coding-stub-1", 1, starter)
+            self.assertFalse(res["passed"], "Unmodified starter code must NOT pass!")
+            self.assertEqual(res["marks_earned"], 0, "Unmodified starter code must get 0 marks!")
+            self.assertEqual(res["status"], "needs_revision")
+            self.assertIn("starter template", res["feedback"].lower())
+
+    def test_verify_goal_rejects_empty_and_stub_code(self):
+        coding_assignment = {
+            "id": "asgn-coding-stub-2",
+            "title": "Python Algorithm Assignment",
+            "assignment_type": "CODING",
+            "problems": [
+                {
+                    "problem_number": 1,
+                    "tier": "Basic",
+                    "goal_type": "CODING",
+                    "marks": 25,
+                    "problem_statement": "Implement binary search.",
+                    "starter_code": "",
+                    "test_cases": [
+                        {"input_description": "[1, 2, 3], 2", "expected_output": "1", "is_hidden": False}
+                    ]
+                }
+            ]
+        }
+
+        with patch.object(self.db, "get_assignment_by_id", return_value=coding_assignment):
+            # Test a: only comments
+            res_comments = self.engine.verify_goal("asgn-coding-stub-2", 1, "# TODO: will write later\n# note: binary search\n")
+            self.assertFalse(res_comments["passed"])
+            self.assertEqual(res_comments["marks_earned"], 0)
+
+            # Test b: only 'pass'
+            res_pass = self.engine.verify_goal("asgn-coding-stub-2", 1, "pass")
+            self.assertFalse(res_pass["passed"])
+            self.assertEqual(res_pass["marks_earned"], 0)
+
+            # Test c: function with only pass / NotImplementedError
+            func_stub = "def binary_search(arr, target):\n    \"\"\"Docstring\"\"\"\n    raise NotImplementedError()\n"
+            res_ast_stub = self.engine.verify_goal("asgn-coding-stub-2", 1, func_stub)
+            self.assertFalse(res_ast_stub["passed"])
+            self.assertEqual(res_ast_stub["marks_earned"], 0)
+            self.assertIn("stubs", res_ast_stub["feedback"].lower())
+
+    def test_verify_goal_rejects_syntax_errors(self):
+        coding_assignment = {
+            "id": "asgn-coding-stub-3",
+            "title": "Python Assignment",
+            "assignment_type": "CODING",
+            "problems": [
+                {
+                    "problem_number": 1,
+                    "tier": "Basic",
+                    "goal_type": "CODING",
+                    "marks": 25,
+                    "problem_statement": "Implement a function.",
+                    "starter_code": "",
+                    "test_cases": []
+                }
+            ]
+        }
+
+        with patch.object(self.db, "get_assignment_by_id", return_value=coding_assignment):
+            res_syntax = self.engine.verify_goal("asgn-coding-stub-3", 1, "def broken(\n    return 1")
+            self.assertFalse(res_syntax["passed"])
+            self.assertEqual(res_syntax["marks_earned"], 0)
+            self.assertIn("syntax error", res_syntax["feedback"].lower())
+
+    def test_verify_goal_passes_valid_implementation(self):
+        coding_assignment = {
+            "id": "asgn-coding-valid-1",
+            "title": "Python String Reversal Assignment",
+            "assignment_type": "CODING",
+            "problems": [
+                {
+                    "problem_number": 1,
+                    "tier": "Basic",
+                    "goal_type": "CODING",
+                    "marks": 25,
+                    "problem_statement": "Write a function that reverses a given string.",
+                    "starter_code": "def reverse_string(s: str) -> str:\n    pass",
+                    "test_cases": [
+                        {"input_description": "'hello'", "expected_output": "'olleh'", "is_hidden": False}
+                    ]
+                }
+            ]
+        }
+
+        mock_llm_response = json.dumps({
+            "passed": True,
+            "marks_awarded": 25,
+            "test_evaluations": [
+                {
+                    "test_index": 0,
+                    "passed": True,
+                    "observed_output_or_behavior": "'olleh'",
+                    "notes": "Passed reverse string check"
+                }
+            ],
+            "feedback": "Excellent solution! All test cases passed."
+        })
+
+        with patch.object(self.db, "get_assignment_by_id", return_value=coding_assignment), \
+             patch.object(self.engine, "_call_llm", return_value=mock_llm_response):
+            valid_code = "def reverse_string(s: str) -> str:\n    return s[::-1]\n"
+            res = self.engine.verify_goal("asgn-coding-valid-1", 1, valid_code)
+            self.assertTrue(res["passed"])
+            self.assertEqual(res["marks_earned"], 25)
+            self.assertEqual(res["status"], "passed")
+            self.assertTrue(res["unlocked_next_goal"])
+
+
 if __name__ == "__main__":
     unittest.main()
+

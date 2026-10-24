@@ -1111,7 +1111,7 @@ class AssignmentSubmitRequest(BaseModel):
     approach_notes: Optional[str] = ""
 
 class GoalVerifyRequest(BaseModel):
-    goal_number: int
+    goal_number: Optional[int] = 1
     student_code: str
     student_id: Optional[str] = "student_user"
 
@@ -1352,7 +1352,33 @@ async def verify_assignment_goal(
 
     res = assignment_engine.verify_goal(
         assignment_id=assignment_id,
-        goal_number=body.goal_number,
+        goal_number=body.goal_number or 1,
+        student_code=body.student_code,
+        student_id=body.student_id
+    )
+    if "error" in res and "status" not in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/assignments/{assignment_id}/goals/{goal_number}/verify")
+async def verify_assignment_goal_by_path(
+    assignment_id: str,
+    goal_number: int,
+    body: GoalVerifyRequest,
+    request: Request
+):
+    """
+    Direct endpoint for student workspace goal verification by path parameters.
+    """
+    client_ip = get_client_ip(request)
+    allowed, remaining = check_rate_limit(client_ip, f"goal_verify:{assignment_id}", max_requests=40, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
+
+    res = assignment_engine.verify_goal(
+        assignment_id=assignment_id,
+        goal_number=goal_number,
         student_code=body.student_code,
         student_id=body.student_id
     )

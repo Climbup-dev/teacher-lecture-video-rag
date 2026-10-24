@@ -1392,6 +1392,8 @@ class AssignmentEngine:
         - Unlocks the next sequential goal only when current goal passes verification.
         """
         assignment = self.db.get_assignment_by_id(assignment_id)
+        if not assignment and hasattr(self.db, "get_assignment_by_lesson"):
+            assignment = self.db.get_assignment_by_lesson(assignment_id)
         if not assignment:
             return {"error": "Assignment not found."}
 
@@ -1426,6 +1428,64 @@ class AssignmentEngine:
                 "checkpoint_evaluations": [],
                 "unlocked_next_goal": False
             }
+
+        # -----------------------------------------------------------------
+        # GUARD: Verify Student Has Written Actual Code (No Empty/Stub Submissions)
+        # -----------------------------------------------------------------
+        starter_raw = str(target_prob.get("starter_code") or assignment.get("starter_code") or "").strip()
+        if starter_raw and clean_code == starter_raw:
+            return {
+                "goal_number": goal_number,
+                "goal_type": goal_type,
+                "status": "needs_revision",
+                "passed": False,
+                "marks_earned": 0,
+                "max_marks": target_prob.get("marks", 25),
+                "feedback": "Submission Rejected: Unmodified starter template. Please write your code solution before running verification.",
+                "test_results": [
+                    {
+                        "name": "User Code Submission Verification",
+                        "passed": False,
+                        "detail": "No code written by student. Starter template submitted unchanged."
+                    }
+                ],
+                "checkpoint_evaluations": [],
+                "unlocked_next_goal": False
+            }
+
+        # For CODING goals, reject submissions that only contain comments or 'pass' stubs
+        if goal_type == "CODING":
+            lines_no_comments = []
+            for line in clean_code.splitlines():
+                stripped = re.sub(r'#.*$', '', line)
+                stripped = re.sub(r'--.*$', '', stripped)
+                stripped = re.sub(r'//.*$', '', stripped)
+                if stripped.strip():
+                    lines_no_comments.append(stripped.strip())
+            substantive_code = "\n".join(lines_no_comments).strip()
+
+            if not substantive_code or substantive_code.lower() in [
+                "pass", "...", "return", "return none",
+                "raise notimplementederror", "raise notimplementederror()"
+            ]:
+                return {
+                    "goal_number": goal_number,
+                    "goal_type": goal_type,
+                    "status": "needs_revision",
+                    "passed": False,
+                    "marks_earned": 0,
+                    "max_marks": target_prob.get("marks", 25),
+                    "feedback": "Submission Rejected: Empty code implementation. Only placeholder stubs ('pass' / '# TODO') were detected. Please write the required logic.",
+                    "test_results": [
+                        {
+                            "name": "Implementation Substantiveness Check",
+                            "passed": False,
+                            "detail": "No executable code logic detected. Code contains only placeholder stubs or comments."
+                        }
+                    ],
+                    "checkpoint_evaluations": [],
+                    "unlocked_next_goal": False
+                }
 
         # Security check on untrusted code: RCE / Host command injection prevention
         rce_disallowed = [
@@ -1659,10 +1719,11 @@ class AssignmentEngine:
         if is_python:
             try:
                 import ast
-                ast.parse(clean_code)
+                tree = ast.parse(clean_code)
             except SyntaxError as se:
                 return {
                     "goal_number": goal_number,
+                    "goal_type": "CODING",
                     "status": "needs_revision",
                     "passed": False,
                     "marks_earned": 0,
@@ -1675,8 +1736,56 @@ class AssignmentEngine:
                             "detail": f"Syntax error at line {se.lineno}: {se.msg}"
                         }
                     ],
+                    "checkpoint_evaluations": [],
                     "unlocked_next_goal": False
                 }
+
+            # Inspect AST for placeholder functions (functions where the body is only Pass / Docstring / Ellipsis / NotImplementedError)
+            func_defs = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            if func_defs:
+                all_are_stubs = True
+                for f in func_defs:
+                    meaningful = []
+                    for stmt in f.body:
+                        # Skip docstrings
+                        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                            continue
+                        # Skip pass
+                        if isinstance(stmt, ast.Pass):
+                            continue
+                        # Skip ...
+                        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
+                            continue
+                        # Skip raise NotImplementedError
+                        if isinstance(stmt, ast.Raise):
+                            if isinstance(stmt.exc, ast.Name) and stmt.exc.id == "NotImplementedError":
+                                continue
+                            if isinstance(stmt.exc, ast.Call) and isinstance(stmt.exc.func, ast.Name) and stmt.exc.func.id == "NotImplementedError":
+                                continue
+                        meaningful.append(stmt)
+                    if len(meaningful) > 0:
+                        all_are_stubs = False
+                        break
+                
+                if all_are_stubs:
+                    return {
+                        "goal_number": goal_number,
+                        "goal_type": "CODING",
+                        "status": "needs_revision",
+                        "passed": False,
+                        "marks_earned": 0,
+                        "max_marks": target_prob.get("marks", 25),
+                        "feedback": "Submission Rejected: Incomplete function implementation. Function body contains only stubs ('pass' / '# TODO'). Please write the required logic.",
+                        "test_results": [
+                            {
+                                "name": "Function Body Logic Verification",
+                                "passed": False,
+                                "detail": "All declared functions have empty stub bodies (only docstring/pass/NotImplementedError)."
+                            }
+                        ],
+                        "checkpoint_evaluations": [],
+                        "unlocked_next_goal": False
+                    }
 
         # Check SQL basic validity if SQL
         is_sql = "sql" in domain_name.lower() or "select " in clean_code_lower or "create " in clean_code_lower
@@ -1768,9 +1877,11 @@ class AssignmentEngine:
                 })
 
         tests_all_ok = len(formatted_results) > 0 and all(r.get("passed", False) for r in formatted_results)
-        all_tests_passed = bool(tests_all_ok or passed)
+        all_tests_passed = bool(passed and tests_all_ok)
         if all_tests_passed and marks_awarded < int(max_marks * 0.7):
             marks_awarded = max_marks
+        elif not all_tests_passed:
+            marks_awarded = 0
 
         status = "passed" if all_tests_passed else "needs_revision"
 
@@ -1779,9 +1890,9 @@ class AssignmentEngine:
             "goal_type": "CODING",
             "status": status,
             "passed": all_tests_passed,
-            "marks_earned": marks_awarded if all_tests_passed else max(0, marks_awarded // 2),
+            "marks_earned": marks_awarded if all_tests_passed else 0,
             "max_marks": max_marks,
-            "feedback": parsed.get("feedback") or ("Goal verified successfully! You may now proceed to the next goal." if all_tests_passed else "Verification failed. Check test cases and revise your code."),
+            "feedback": parsed.get("feedback") or ("Goal verified successfully! You may now proceed to the next goal." if all_tests_passed else "Verification failed: Solution did not pass all required test cases. Revise your code."),
             "solution_hint": target_prob.get("solution_hint") or target_prob.get("lecture_timestamp"),
             "mentor_guidance": target_prob.get("mentor_guidance") or ("Examine the test case inputs, expected outputs, and edge case boundaries." if not all_tests_passed else ""),
             "test_results": formatted_results,
