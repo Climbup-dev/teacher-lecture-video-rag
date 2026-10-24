@@ -3036,18 +3036,43 @@ function setupAiAssignmentStudio() {
         ${problems.map((p, idx) => {
           const gNum = idx + 1;
           const gType = String(p.goal_type || (assignType === 'THEORY' ? 'THEORY' : 'CODING')).toUpperCase();
+          const isMcq = (gType === 'MCQ');
+          const isNumeric = (gType === 'NUMERIC');
           const isTheory = (gType === 'THEORY');
+          const isCoding = (!isMcq && !isNumeric && !isTheory);
+
           const gState = window._goalStates[gNum] || { status: idx === 0 ? "not-started" : "locked", code: p.starter_code || "" };
           const isLocked = gState.status === "locked";
           const stInfo = goalStatusLabels[gState.status] || goalStatusLabels["not-started"];
           const tier = p.tier || "Core";
           const tierLower = tier.toLowerCase();
-          const tierColor = tierLower === "basic" ? "#38bdf8" : tierLower === "intermediate" ? "#fbbf24" : "#f472b6";
+          const tierColor = tierLower.includes("basic") || tierLower.includes("beginner") ? "#38bdf8" : tierLower.includes("intermediate") ? "#fbbf24" : "#f472b6";
           const ts = p.lecture_timestamp || p.timestamp_hint || "";
           const testCases = p.test_cases || [];
           const visibleTests = testCases.filter(t => !t.is_hidden);
           const hiddenCount = testCases.filter(t => t.is_hidden).length;
           const checkpoints = p.conceptual_checkpoints || p.acceptance_criteria || [];
+
+          let typeLabel = '💻 Coding Challenge';
+          let typeClass = 'coding';
+          let btnGradient = 'linear-gradient(135deg, #38d399 0%, #059669 100%)';
+          let btnColor = '#021526';
+          if (isMcq) {
+            typeLabel = '📝 Multiple Choice Checkpoint';
+            typeClass = 'mcq';
+            btnGradient = 'linear-gradient(135deg, #38bdf8 0%, #0284c7 100%)';
+            btnColor = '#021526';
+          } else if (isNumeric) {
+            typeLabel = '🔢 Calculation Problem';
+            typeClass = 'numeric';
+            btnGradient = 'linear-gradient(135deg, #fbbf24 0%, #d97706 100%)';
+            btnColor = '#021526';
+          } else if (isTheory) {
+            typeLabel = '📚 Theory & Architecture';
+            typeClass = 'theory';
+            btnGradient = 'linear-gradient(135deg, #c084fc 0%, #7c3aed 100%)';
+            btnColor = '#ffffff';
+          }
 
           return `
             <div class="preview-goal-card ${isLocked ? 'goal-locked' : 'active-goal'}" id="preview-goal-card-${gNum}">
@@ -3056,8 +3081,8 @@ function setupAiAssignmentStudio() {
                   <span class="tier-badge-pill ${tierLower}" style="background: ${tierColor}22; color: ${tierColor}; border: 1px solid ${tierColor}55;">
                     Goal ${gNum}: ${tier}
                   </span>
-                  <span class="goal-type-badge ${isTheory ? 'theory' : 'coding'}">
-                    ${isTheory ? '📚 Theory Goal' : '💻 Coding Goal'}
+                  <span class="goal-type-badge ${typeClass}">
+                    ${typeLabel}
                   </span>
                   <span class="goal-status-badge ${stInfo.class}" id="goal-status-badge-${gNum}">
                     ${stInfo.label}
@@ -3077,8 +3102,40 @@ function setupAiAssignmentStudio() {
                 </div>
               ` : ''}
 
-              ${isTheory ? `
-                <!-- THEORY GOAL: Conceptual Checkpoints (No code test cases) -->
+              ${isMcq ? `
+                <!-- MCQ GOAL: Interactive Option Cards -->
+                <div style="margin-bottom: 12px;">
+                  <div style="font-size: 0.74rem; color: #38bdf8; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.04em;">
+                    Choose the Correct Answer:
+                  </div>
+                  <div style="display: grid; gap: 8px;">
+                    ${Object.entries(p.mcq?.options || { A: "Option A", B: "Option B", C: "Option C", D: "Option D" }).map(([optKey, optText]) => `
+                      <label class="goal-mcq-option" style="display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); padding: 10px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease;">
+                        <input type="radio" name="mcq_goal_${gNum}" value="${optKey}" ${gState.code === optKey ? 'checked' : ''} ${isLocked ? 'disabled' : ''} style="accent-color: #38bdf8; width: 16px; height: 16px;">
+                        <span style="font-weight: 800; color: #38bdf8; font-size: 0.95rem;">${optKey})</span>
+                        <span style="color: #e2e8f0; font-size: 0.88rem;">${escapeHtml(optText)}</span>
+                      </label>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : isNumeric ? `
+                <!-- NUMERIC GOAL: Numeric Input and Calculation Helper -->
+                <div style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px;">
+                  <div style="font-size: 0.74rem; font-weight: 700; color: #fbbf24; text-transform: uppercase; margin-bottom: 8px;">
+                    🔢 Enter Your Computed Numerical Result
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="text" id="goal-editor-${gNum}" class="form-control" value="${escapeHtml(gState.code)}" placeholder="Enter calculated value (e.g. 10.67)" ${isLocked ? 'disabled' : ''} style="max-width: 240px; font-weight: 700; font-size: 1rem; color: #fff; background: rgba(0,0,0,0.3); border: 1px solid rgba(245, 158, 11, 0.4); padding: 8px 12px; border-radius: 6px;">
+                    <span style="color: #fbbf24; font-weight: 700; font-size: 0.88rem;">${escapeHtml(p.numeric?.unit || '')}</span>
+                  </div>
+                  ${p.numeric?.formula_hint ? `
+                    <div style="font-size: 0.76rem; color: #94a3b8; margin-top: 8px; background: rgba(0,0,0,0.2); padding: 6px 10px; border-radius: 5px;">
+                      💡 <strong>Formula Hint:</strong> ${escapeHtml(p.numeric.formula_hint)}
+                    </div>
+                  ` : ''}
+                </div>
+              ` : isTheory ? `
+                <!-- THEORY GOAL: Conceptual Checkpoints & Response Textarea -->
                 <div style="margin-bottom: 12px;">
                   <div style="font-size: 0.72rem; color: #c084fc; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
                     📋 Key Conceptual Requirements & Checkpoints:
@@ -3093,7 +3150,6 @@ function setupAiAssignmentStudio() {
                   </div>
                 </div>
 
-                <!-- THEORY GOAL: Conceptual & Descriptive Analysis Area (NO code editor) -->
                 <div class="goal-theory-response-wrapper">
                   <div class="goal-theory-header">
                     <span style="font-size: 0.74rem; font-weight: 700; color: #c084fc; text-transform: uppercase;">
@@ -3104,7 +3160,7 @@ function setupAiAssignmentStudio() {
                   <textarea id="goal-editor-${gNum}" class="goal-theory-textarea" rows="7" ${isLocked ? 'disabled' : ''} placeholder="Provide your structured conceptual explanation, scenario analysis, trade-off comparisons, and concrete examples for Goal ${gNum} here...">${escapeHtml(gState.code)}</textarea>
                 </div>
               ` : `
-                <!-- CODING GOAL: Verification Test Cases -->
+                <!-- CODING GOAL: Verification Test Cases & Code Editor -->
                 <div style="margin-bottom: 12px;">
                   <div style="font-size: 0.72rem; color: #94a3b8; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
                     🧪 Verification Test Cases:
@@ -3128,7 +3184,6 @@ function setupAiAssignmentStudio() {
                   </div>
                 </div>
 
-                <!-- CODING GOAL: Independent Code Editor -->
                 <div class="goal-code-editor-wrapper">
                   <div class="goal-editor-header">
                     <span style="font-size: 0.74rem; font-weight: 700; color: #94a3b8; text-transform: uppercase;">
@@ -3142,12 +3197,18 @@ function setupAiAssignmentStudio() {
                 </div>
               `}
 
+              ${p.mentor_guidance ? `
+                <div style="margin-top: 10px; font-size: 0.78rem; color: #a5b4fc; background: rgba(99, 102, 241, 0.08); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(99, 102, 241, 0.25);">
+                  🎓 <strong>Socratic Mentor Guidance:</strong> ${escapeHtml(p.mentor_guidance)}
+                </div>
+              ` : ''}
+
               <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px;">
                 <div style="font-size: 0.74rem; color: #64748b;">
-                  ${isLocked ? `🔒 Locked — Pass Goal ${gNum - 1} to unlock this challenge.` : (isTheory ? '📋 Conceptual rubric verification' : '⚡ Server-side sandbox verification')}
+                  ${isLocked ? `🔒 Locked — Pass Goal ${gNum - 1} to unlock this challenge.` : (isMcq ? '⚡ Immediate zero-leakage check' : isNumeric ? '⚡ Precision calculation check' : isTheory ? '📋 Conceptual rubric verification' : '⚡ Server-side sandbox verification')}
                 </div>
-                <button type="button" class="btn btn-primary btn-verify-goal" id="btn-verify-goal-${gNum}" data-goal="${gNum}" ${isLocked ? 'disabled' : ''} style="background: linear-gradient(135deg, ${isTheory ? '#a855f7 0%, #7c3aed 100%' : '#38d399 0%, #059669 100%'}); color: ${isTheory ? '#fff' : '#021526'}; font-weight: 800; font-size: 0.82rem; padding: 6px 16px;">
-                  ▶ ${isTheory ? `Submit & Verify Theory Goal ${gNum}` : `Run & Verify Goal ${gNum}`}
+                <button type="button" class="btn btn-primary btn-verify-goal" id="btn-verify-goal-${gNum}" data-goal="${gNum}" ${isLocked ? 'disabled' : ''} style="background: ${btnGradient}; color: ${btnColor}; font-weight: 800; font-size: 0.82rem; padding: 6px 16px;">
+                  ▶ ${isMcq ? `Check Answer (Goal ${gNum})` : isNumeric ? `Verify Calculation (Goal ${gNum})` : isTheory ? `Submit Theory (Goal ${gNum})` : `Run & Verify Goal ${gNum}`}
                 </button>
               </div>
 
@@ -3175,6 +3236,24 @@ function setupAiAssignmentStudio() {
       const editor = document.getElementById(`goal-editor-${gNum}`);
       const verifyBtn = document.getElementById(`btn-verify-goal-${gNum}`);
       const resetBtn = document.querySelector(`.btn-reset-goal[data-goal="${gNum}"]`);
+
+      // Radio inputs for MCQ
+      const radios = document.querySelectorAll(`input[name="mcq_goal_${gNum}"]`);
+      radios.forEach(r => {
+        r.addEventListener("change", () => {
+          if (r.checked && window._goalStates[gNum]) {
+            window._goalStates[gNum].code = r.value;
+            if (window._goalStates[gNum].status === "not-started") {
+              window._goalStates[gNum].status = "in-progress";
+              const b = document.getElementById(`goal-status-badge-${gNum}`);
+              if (b) {
+                b.className = "goal-status-badge in-progress";
+                b.textContent = "⏳ In Progress";
+              }
+            }
+          }
+        });
+      });
 
       if (editor) {
         editor.addEventListener("input", () => {
@@ -3205,7 +3284,12 @@ function setupAiAssignmentStudio() {
 
       if (verifyBtn) {
         verifyBtn.addEventListener("click", async () => {
-          const studentCode = editor ? editor.value : "";
+          let studentCode = editor ? editor.value : "";
+          if (isMcq) {
+            const checkedRadio = document.querySelector(`input[name="mcq_goal_${gNum}"]:checked`);
+            studentCode = checkedRadio ? checkedRadio.value : "";
+          }
+
           verifyBtn.disabled = true;
           verifyBtn.textContent = "⏳ Verifying...";
 
@@ -3252,6 +3336,11 @@ function setupAiAssignmentStudio() {
                     </div>
                   </div>
                   <div style="margin-bottom: 8px;">${escapeHtml(data.feedback)}</div>
+                  ${data.mentor_guidance ? `
+                    <div style="margin: 8px 0; font-size: 0.78rem; color: #a5b4fc; background: rgba(99, 102, 241, 0.12); padding: 8px 10px; border-radius: 6px; border-left: 3px solid #6366f1;">
+                      🎓 <strong>Mentor Guidance:</strong> ${escapeHtml(data.mentor_guidance)}
+                    </div>
+                  ` : ''}
                   ${Array.isArray(data.test_results) && data.test_results.length > 0 ? `
                     <div style="margin-top: 8px; display: grid; gap: 4px; font-size: 0.78rem;">
                       ${data.test_results.map(tr => `
@@ -3282,6 +3371,8 @@ function setupAiAssignmentStudio() {
                 }
                 const nextEditor = document.getElementById(`goal-editor-${nextNum}`);
                 if (nextEditor) nextEditor.disabled = false;
+                const nextRadios = document.querySelectorAll(`input[name="mcq_goal_${nextNum}"]`);
+                nextRadios.forEach(r => r.disabled = false);
                 const nextBtn = document.getElementById(`btn-verify-goal-${nextNum}`);
                 if (nextBtn) nextBtn.disabled = false;
                 const nextReset = document.querySelector(`.btn-reset-goal[data-goal="${nextNum}"]`);

@@ -35,12 +35,42 @@ class AssignmentEngine:
     def _call_llm(self, system_prompt: str, user_prompt: str, temperature: float = 0.2, is_json: Optional[bool] = None) -> Optional[str]:
         """
         Executes LLM completion with automatic dual-provider failover.
-        Priority: Groq (Qwen / GPT-OSS) -> Gemini 2.5 Flash.
+        Priority: Gemini 2.5 Flash (Primary high-context engine) -> Groq (Fallback).
         """
         if is_json is None:
             is_json = ("json" in system_prompt.lower() or "json" in user_prompt.lower())
 
-        # 1. Try Groq First
+        # 1. Primary Engine: Google Gemini 2.5 Flash
+        if self.gemini_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.GEMINI_MODEL}:generateContent?key={self.gemini_key}"
+                combined_prompt = f"{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"
+                gen_config = {
+                    "temperature": temperature,
+                    "maxOutputTokens": 8192
+                }
+                if is_json:
+                    gen_config["responseMimeType"] = "application/json"
+                    combined_prompt = f"{system_prompt}\n\nSTRICT JSON OUTPUT REQUIRED.\n\nUSER REQUEST:\n{user_prompt}"
+
+                payload = {
+                    "contents": [{"parts": [{"text": combined_prompt}]}],
+                    "generationConfig": gen_config
+                }
+                r = requests.post(url, json=payload, timeout=30)
+                if r.ok:
+                    res_json = r.json()
+                    candidates = res_json.get("candidates", [])
+                    if candidates:
+                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if text:
+                            return text
+                else:
+                    logger.warning(f"[AssignmentEngine] Gemini API warning ({r.status_code}): {r.text[:200]}")
+            except Exception as e:
+                logger.warning(f"[AssignmentEngine] Gemini execution exception: {e}")
+
+        # 2. Fallback Engine: Groq
         if self.groq_key:
             headers = {
                 "Authorization": f"Bearer {self.groq_key}",
@@ -55,12 +85,12 @@ class AssignmentEngine:
                             {"role": "user", "content": user_prompt}
                         ],
                         "temperature": temperature,
-                        "max_tokens": 3000
+                        "max_tokens": 4000
                     }
                     if is_json:
                         payload["response_format"] = {"type": "json_object"}
 
-                    r = requests.post(self.GROQ_API_URL, headers=headers, json=payload, timeout=18)
+                    r = requests.post(self.GROQ_API_URL, headers=headers, json=payload, timeout=20)
                     if r.ok:
                         res_json = r.json()
                         content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -70,36 +100,6 @@ class AssignmentEngine:
                         logger.warning(f"[AssignmentEngine] Groq model {model_name} warning ({r.status_code}): {r.text[:150]}")
                 except Exception as e:
                     logger.warning(f"[AssignmentEngine] Groq execution exception on {model_name}: {e}")
-
-        # 2. Fallback to Gemini 2.5 Flash
-        if self.gemini_key:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.GEMINI_MODEL}:generateContent?key={self.gemini_key}"
-                combined_prompt = f"{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"
-                gen_config = {
-                    "temperature": temperature,
-                    "maxOutputTokens": 3000
-                }
-                if is_json:
-                    gen_config["responseMimeType"] = "application/json"
-                    combined_prompt = f"{system_prompt}\n\nSTRICT JSON OUTPUT REQUIRED.\n\nUSER REQUEST:\n{user_prompt}"
-
-                payload = {
-                    "contents": [{"parts": [{"text": combined_prompt}]}],
-                    "generationConfig": gen_config
-                }
-                r = requests.post(url, json=payload, timeout=25)
-                if r.ok:
-                    res_json = r.json()
-                    candidates = res_json.get("candidates", [])
-                    if candidates:
-                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        if text:
-                            return text
-                else:
-                    logger.warning(f"[AssignmentEngine] Gemini API warning ({r.status_code}): {r.text[:200]}")
-            except Exception as e:
-                logger.warning(f"[AssignmentEngine] Gemini execution exception: {e}")
 
         return None
 
@@ -586,23 +586,16 @@ class AssignmentEngine:
 
         if assign_type == "THEORY":
             system_prompt = (
-                f"You are a Senior Academic Professor and Curriculum Architect specializing in {domain_name}.\n"
+                f"You are a Senior Academic Professor and Principal Curriculum Architect specializing in {domain_name}.\n"
                 "Your objective is to design a high-quality, comprehensive THEORY & CONCEPTUAL ASSIGNMENT grounded in the lecture.\n\n"
-                "CRITICAL INSTRUCTIONS FOR THEORY ASSIGNMENTS:\n"
-                "1. NO CODE EDITORS / NO PROGRAMMING TASKS:\n"
-                "   - Do NOT generate code sections, programming challenges, starter code, or coding test cases.\n"
-                "   - Top-level 'starter_code' must be \"\".\n"
-                "   - For each problem, 'goal_type' must be 'THEORY' and 'starter_code' must be \"\".\n"
-                "2. CONCEPTUAL & DESCRIPTIVE GOALS:\n"
-                "   - Goal 1 (Basic / Foundation): 25 marks — Core concept definitions, architectural principles, and foundational models.\n"
-                "   - Goal 2 (Intermediate / Analytical): 35 marks — In-depth scenario analysis, trade-off comparisons, step-by-step traces/calculations (e.g. Gantt charts, normalization anomalies, ACID isolation anomalies), with concrete examples.\n"
-                "   - Goal 3 (Advanced / Critical Evaluation): 40 marks — Edge-case evaluations, failure modes, real-world case study analysis, and architectural decision-making.\n"
-                "3. CONCEPTUAL CHECKPOINTS & EVALUATION CRITERIA:\n"
-                "   - In each problem, provide 'conceptual_checkpoints' (list of 2-3 specific concepts the student must address).\n"
-                "   - Provide 'acceptance_criteria' (clear rubrics for complete and accurate answers).\n"
-                "   - 'test_cases' must be [] (empty array).\n"
-                "   - 'expected_deliverable' should describe the written analysis (e.g. 'Comprehensive analytical breakdown with step-by-step scenario trace').\n"
-                "4. LECTURE GROUNDING: Attach lecture timestamps (e.g. '~00:25:30') and concise 'solution_hint'.\n\n"
+                "CORE PEDAGOGICAL PRINCIPLES:\n"
+                "1. NO PROGRAMMING CODE / NO CODE EDITORS: Top-level starter_code is \"\". Goals must not require writing code.\n"
+                "2. DYNAMIC GOAL MODALITIES:\n"
+                "   - Goal 1 (Beginner / Foundation, 25 marks): Core concept definitions or quick diagnostic MCQ / mental model.\n"
+                "   - Goal 2 (Intermediate / Analytical, 35 marks): Deep scenario analysis, calculation (NUMERIC if applicable, e.g. Gantt TAT/WT, Page faults, Subnetting), or trade-off evaluation.\n"
+                "   - Goal 3 (Advanced / Critical Synthesis, 40 marks): Architectural trade-offs, system edge cases, and real-world failure mode evaluations.\n"
+                "3. CHECKPOINTS & EVALUATION: In each problem, provide 'conceptual_checkpoints' and 'acceptance_criteria'. 'test_cases' is [].\n"
+                "4. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' (constructive step-by-step guidance without spoiling answers) and 'solution_hint'.\n\n"
                 "OUTPUT FORMAT (Strict JSON Object):\n"
                 "{\n"
                 '  "title": string,\n'
@@ -614,15 +607,16 @@ class AssignmentEngine:
                 '    {\n'
                 '      "problem_number": 1,\n'
                 '      "goal_type": "THEORY",\n'
-                '      "tier": "Basic",\n'
+                '      "tier": "Beginner / Foundation",\n'
                 '      "marks": 25,\n'
-                '      "problem_statement": string (concise conceptual question & requirements),\n'
+                '      "problem_statement": string,\n'
                 '      "starter_code": "",\n'
                 '      "test_cases": [],\n'
                 '      "conceptual_checkpoints": [string, string],\n'
-                '      "solution_hint": string,\n'
-                '      "lecture_timestamp": string,\n'
                 '      "acceptance_criteria": [string, string],\n'
+                '      "solution_hint": string,\n'
+                '      "mentor_guidance": string,\n'
+                '      "lecture_timestamp": string,\n'
                 '      "expected_deliverable": string\n'
                 '    }\n'
                 '  ],\n'
@@ -639,61 +633,59 @@ class AssignmentEngine:
             user_prompt = (
                 f"LECTURE TITLE: {lesson.get('title')}\n"
                 f"SUBJECT DOMAIN: {domain_name}\n"
-                f"ASSIGNMENT TYPE: THEORY (Strictly conceptual analysis, zero code editors)\n\n"
-                f"LECTURE CONCEPTS & HIGH-SIGNAL EVIDENCE SAMPLES:\n"
-                f"{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the comprehensive theory-based milestone assignment in strict JSON format."
+                f"ASSIGNMENT TYPE: THEORY (Conceptual & analytical mastery)\n\n"
+                f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
+                "Synthesize the high-quality milestone assignment in strict JSON format."
             )
 
         elif assign_type == "MIXED":
             system_prompt = (
                 f"You are a Lead Curriculum Architect and Principal Engineer specializing in {domain_name}.\n"
-                "Your objective is to design a high-impact MIXED assignment combining theoretical foundations with practical code implementation.\n\n"
-                "CORE PRINCIPLES FOR MIXED ASSIGNMENTS:\n"
-                "1. SEPARATE THEORY GOALS AND CODING GOALS:\n"
-                "   - Goal 1 (Theory / Conceptual): 'goal_type': 'THEORY', 'starter_code': \"\", 'test_cases': [], 'conceptual_checkpoints': [...]. Focus on explaining core architecture, mathematical calculations, or trade-offs.\n"
-                "   - Goal 2 & 3 (Coding / Practical): 'goal_type': 'CODING', with dedicated 'starter_code' in " + language.upper() + " and concrete 'test_cases' (public and hidden). Code editors will ONLY be displayed for these goals.\n"
-                "2. MARKS PROGRESSION (100 MARKS TOTAL):\n"
-                "   - Goal 1 (Theory): 25 marks\n"
-                "   - Goal 2 (Coding): 35 marks\n"
-                "   - Goal 3 (Coding): 40 marks\n"
-                "3. GROUNDING: Realistic lecture timestamps and hints.\n\n"
+                "Your objective is to design a high-impact MIXED assignment seamlessly combining conceptual theory, analytical calculations, and hands-on coding.\n\n"
+                "CORE PEDAGOGICAL PRINCIPLES:\n"
+                "1. PROGRESSIVE MODALITIES:\n"
+                "   - Goal 1 (Theory / Conceptual / MCQ, 25 marks): 'goal_type': 'THEORY' or 'MCQ', starter_code: \"\", test_cases: []. Covers mental models or core architecture.\n"
+                "   - Goal 2 (Analytical / Coding, 35 marks): 'goal_type': 'NUMERIC' or 'CODING', practical calculation or baseline implementation.\n"
+                "   - Goal 3 (Advanced Coding, 40 marks): 'goal_type': 'CODING', with dedicated starter_code in " + language.upper() + " and test_cases (public and hidden).\n"
+                "2. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
                 "OUTPUT FORMAT (Strict JSON Object):\n"
                 "{\n"
                 '  "title": string,\n'
                 '  "assignment_type": "MIXED",\n'
                 '  "scenario_context": string,\n'
                 '  "description": string,\n'
-                '  "starter_code": string (template for coding problems),\n'
+                '  "starter_code": string,\n'
                 '  "problems": [\n'
                 '    {\n'
                 '      "problem_number": 1,\n'
                 '      "goal_type": "THEORY",\n'
-                '      "tier": "Basic",\n'
+                '      "tier": "Beginner / Foundation",\n'
                 '      "marks": 25,\n'
-                '      "problem_statement": string (conceptual question),\n'
+                '      "problem_statement": string,\n'
                 '      "starter_code": "",\n'
                 '      "test_cases": [],\n'
                 '      "conceptual_checkpoints": [string, string],\n'
-                '      "solution_hint": string,\n'
-                '      "lecture_timestamp": string,\n'
                 '      "acceptance_criteria": [string, string],\n'
+                '      "solution_hint": string,\n'
+                '      "mentor_guidance": string,\n'
+                '      "lecture_timestamp": string,\n'
                 '      "expected_deliverable": string\n'
                 '    },\n'
                 '    {\n'
                 '      "problem_number": 2,\n'
                 '      "goal_type": "CODING",\n'
-                '      "tier": "Intermediate",\n'
+                '      "tier": "Intermediate / Real-World Scenario",\n'
                 '      "marks": 35,\n'
                 '      "problem_statement": string,\n'
-                '      "starter_code": string (goal-specific starter code),\n'
+                '      "starter_code": string,\n'
                 '      "test_cases": [\n'
                 '        {"input_description": string, "expected_output": string, "is_hidden": false},\n'
                 '        {"input_description": string, "expected_output": string, "is_hidden": true}\n'
                 '      ],\n'
-                '      "solution_hint": string,\n'
-                '      "lecture_timestamp": string,\n'
                 '      "acceptance_criteria": [string, string],\n'
+                '      "solution_hint": string,\n'
+                '      "mentor_guidance": string,\n'
+                '      "lecture_timestamp": string,\n'
                 '      "expected_deliverable": string\n'
                 '    }\n'
                 '  ],\n'
@@ -710,59 +702,45 @@ class AssignmentEngine:
             user_prompt = (
                 f"LECTURE TITLE: {lesson.get('title')}\n"
                 f"PRIMARY TECHNICAL DOMAIN: {domain_name} ({language})\n"
-                f"ASSIGNMENT TYPE: MIXED (Goal 1 Theory, Goal 2 & 3 Coding)\n\n"
-                f"LECTURE CONCEPTS & HIGH-SIGNAL EVIDENCE SAMPLES:\n"
-                f"{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the progressive mixed assignment in strict JSON format with distinct theory and coding goals."
+                f"ASSIGNMENT TYPE: MIXED (Conceptual foundations + hands-on code)\n\n"
+                f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
+                "Synthesize the progressive mixed assignment in strict JSON format."
             )
 
         else:  # CODING
             system_prompt = (
                 f"You are a Lead Curriculum Architect and Principal Engineer specializing in {domain_name}.\n"
-                "Your objective is to design an engaging, practical CODING assignment where every challenge feels like a meaningful real-world mission.\n\n"
-                "CORE EDUCATIONAL PRINCIPLES:\n"
-                "1. CONCISE REAL-WORLD MISSION (NO UNWANTED TEXT):\n"
-                "   - State the scenario and each goal clearly in concise, direct English.\n"
-                "   - Focus strictly on what the student must achieve, expected inputs, and expected outputs.\n"
-                f"2. STRICT DOMAIN & LANGUAGE ALIGNMENT: Technical domain is {domain_name} ({language.upper()}). All code, queries, deliverables, and problems MUST be in {language.upper()}.\n"
-                "3. SEPARATE INDEPENDENT STARTER CODE PER GOAL:\n"
-                "   - Every problem/goal MUST have 'goal_type': 'CODING' and its own dedicated 'starter_code' snippet directly relevant to that goal.\n"
-                "4. REAL TEST CASES WITH EXPECTED OUTPUTS:\n"
-                "   - Each goal MUST include 2-3 concrete 'test_cases' (with at least 1 public and 1 hidden 'is_hidden': true).\n"
-                "5. SEQUENTIAL PROGRESSION (100 MARKS TOTAL):\n"
-                "   - Goal 1 (Basic): 25 marks, Goal 2 (Intermediate): 35 marks, Goal 3 (Advanced): 40 marks.\n"
-                "6. LECTURE GROUNDING: Attach realistic lecture timestamps and concise solution hints.\n\n"
+                "Your objective is to design an engaging, practical CODING assignment where every challenge is an impactful real-world software mission.\n\n"
+                "CORE PEDAGOGICAL PRINCIPLES:\n"
+                "1. CLEAN REAL-WORLD MISSION: Clear, direct requirements focusing on expected inputs, outputs, and edge cases.\n"
+                f"2. LANGUAGE ALIGNMENT: Technical domain is {domain_name} ({language.upper()}). All code and deliverables must be in {language.upper()}.\n"
+                "3. INDEPENDENT STARTER CODE & TEST CASES: Each coding goal must have its own starter snippet and 2-3 concrete test_cases (with is_hidden: true for edge cases).\n"
+                "4. PROGRESSIVE TIERS (100 MARKS TOTAL): Goal 1 (25 marks), Goal 2 (35 marks), Goal 3 (40 marks).\n"
+                "5. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
                 "OUTPUT FORMAT (Strict JSON Object):\n"
                 "{\n"
                 '  "title": string,\n'
                 '  "assignment_type": "CODING",\n'
                 '  "scenario_context": string,\n'
                 '  "description": string,\n'
-                '  "starter_code": string (overall template matching ' + language.upper() + '),\n'
+                '  "starter_code": string,\n'
                 '  "problems": [\n'
                 '    {\n'
                 '      "problem_number": 1,\n'
                 '      "goal_type": "CODING",\n'
-                '      "tier": "Basic",\n'
+                '      "tier": "Beginner / Foundation",\n'
                 '      "marks": 25,\n'
                 '      "problem_statement": string,\n'
-                '      "starter_code": string (goal-specific starter snippet in ' + language.upper() + '),\n'
+                '      "starter_code": string,\n'
                 '      "test_cases": [\n'
-                '        {\n'
-                '          "input_description": string,\n'
-                '          "expected_output": string,\n'
-                '          "is_hidden": false\n'
-                '        },\n'
-                '        {\n'
-                '          "input_description": string,\n'
-                '          "expected_output": string,\n'
-                '          "is_hidden": true\n'
-                '        }\n'
+                '        {"input_description": string, "expected_output": string, "is_hidden": false},\n'
+                '        {"input_description": string, "expected_output": string, "is_hidden": true}\n'
                 '      ],\n'
-                '      "solution_hint": string,\n'
-                '      "lecture_timestamp": string (e.g. "~' + (timestamps[0] if timestamps else "00:15:00") + '"),\n'
                 '      "acceptance_criteria": [string, string],\n'
-                '      "expected_deliverable": string (e.g. "' + deliverable_desc + '")\n'
+                '      "solution_hint": string,\n'
+                '      "mentor_guidance": string,\n'
+                '      "lecture_timestamp": string (e.g. "~' + (timestamps[0] if timestamps else "00:15:00") + '"),\n'
+                '      "expected_deliverable": string\n'
                 '    }\n'
                 '  ],\n'
                 '  "rubric": {\n'
@@ -779,9 +757,8 @@ class AssignmentEngine:
                 f"LECTURE TITLE: {lesson.get('title')}\n"
                 f"PRIMARY TECHNICAL DOMAIN: {domain_name} ({language})\n"
                 f"ASSIGNMENT TYPE: CODING\n\n"
-                f"LECTURE CONCEPTS & HIGH-SIGNAL EVIDENCE SAMPLES:\n"
-                f"{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the practical, student-friendly milestone coding assignment in strict JSON format with per-goal starter code and test cases."
+                f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
+                "Synthesize the practical milestone coding assignment in strict JSON format with per-goal starter code, test cases, and mentor guidance."
             )
 
         return system_prompt, user_prompt, classification
@@ -804,6 +781,11 @@ class AssignmentEngine:
         score = 100
 
         # Check 1: Required Schema Keys
+        if not assignment.get("max_score") and assignment.get("rubric", {}).get("max_score"):
+            assignment["max_score"] = int(assignment["rubric"]["max_score"])
+        elif not assignment.get("max_score"):
+            assignment["max_score"] = 100
+
         required_keys = ["title", "scenario_context", "description", "problems", "rubric", "max_score"]
         missing_keys = [k for k in required_keys if not assignment.get(k)]
         if missing_keys:
@@ -874,12 +856,13 @@ class AssignmentEngine:
         else:
             checks.append({"name": "Acceptance Criteria", "passed": True, "details": "All problems include clear, verifiable acceptance criteria"})
 
-        # Check 6: Starter Code Syntax & Sanity
+        # Check 6: Starter Code Syntax & Sanity (Only for coding problems)
         assign_type = str(assignment.get("assignment_type", "CODING")).upper()
         starter_code = str(assignment.get("starter_code", "")).strip()
         domain = lecture_analysis.get("domain", {}).get("language", "") if lecture_analysis else ""
-        if assign_type == "THEORY":
-            checks.append({"name": "Starter Code Syntax", "passed": True, "details": "Theory assignment: Code editor and starter code intentionally omitted."})
+        has_coding_problems = any(str(p.get("goal_type", "")).upper() == "CODING" for p in problems)
+        if assign_type == "THEORY" or not has_coding_problems:
+            checks.append({"name": "Starter Code Syntax", "passed": True, "details": "Theory/Analytical assignment: Code editor and starter code intentionally omitted."})
         elif not starter_code or len(starter_code) < 15:
             warnings.append("Starter code was minimal or empty; generated clean starter skeleton.")
             checks.append({"name": "Starter Code Syntax", "passed": False, "details": "Starter code was empty or too brief"})
@@ -927,19 +910,42 @@ class AssignmentEngine:
             else:
                 checks.append({"name": "Problem Diversity", "passed": True, "details": "Problems cover distinct, progressive learning milestones"})
 
-        # Check 9: Goal-Specific Deliverables & Test/Rubric Suites
+        # Check 9: Multi-Modal Goal Deliverables & Test/Rubric Suites
         domain_lang = lecture_analysis.get("domain", {}).get("language", "") if lecture_analysis else ""
         for idx, p in enumerate(problems, 1):
-            g_type = str(p.get("goal_type") or ("THEORY" if assign_type == "THEORY" else "CODING")).upper()
-            p["goal_type"] = g_type
-            if g_type == "THEORY":
+            raw_gt = str(p.get("goal_type") or ("THEORY" if assign_type == "THEORY" else "CODING")).upper()
+            if raw_gt not in ["THEORY", "CODING", "MCQ", "NUMERIC"]:
+                raw_gt = "THEORY" if assign_type == "THEORY" else "CODING"
+            p["goal_type"] = raw_gt
+
+            if raw_gt == "MCQ":
                 p["starter_code"] = ""
+                p["test_cases"] = []
+                if not p.get("mcq"):
+                    p["mcq"] = {
+                        "options": {"A": "Option A", "B": "Option B", "C": "Option C", "D": "Option D"},
+                        "correct_answer": "A",
+                        "explanation": "Core lecture principle verification."
+                    }
+            elif raw_gt == "NUMERIC":
+                p["starter_code"] = ""
+                p["test_cases"] = []
+                if not p.get("numeric"):
+                    p["numeric"] = {
+                        "target_value": 0.0,
+                        "tolerance": 0.05,
+                        "unit": "units",
+                        "formula_hint": "Check lecture formulas for step-by-step calculation."
+                    }
+            elif raw_gt == "THEORY":
+                p["starter_code"] = ""
+                p["test_cases"] = []
                 if not p.get("conceptual_checkpoints"):
                     p["conceptual_checkpoints"] = p.get("acceptance_criteria") or [
                         "Provides complete, accurate conceptual explanation citing lecture principles",
                         "Includes illustrative scenario or concrete example"
                     ]
-            else:
+            else:  # CODING
                 if not p.get("starter_code") or len(str(p.get("starter_code")).strip()) < 5:
                     p_tier = p.get("tier") or "Goal"
                     if domain_lang == "sql":
@@ -1399,9 +1405,15 @@ class AssignmentEngine:
 
         goal_type = str(target_prob.get("goal_type") or ("THEORY" if str(assignment.get("assignment_type", "")).upper() == "THEORY" else "CODING")).upper()
         clean_code = str(student_code or "").strip()
-        min_len = 15 if goal_type == "THEORY" else 5
+        if goal_type in ["MCQ", "NUMERIC"]:
+            min_len = 1
+        elif goal_type == "THEORY":
+            min_len = 15
+        else:
+            min_len = 5
+
         if len(clean_code) < min_len:
-            msg = "Please write your substantive conceptual explanation and analysis before submitting." if goal_type == "THEORY" else "Please write your solution code before running verification."
+            msg = "Please write your substantive conceptual explanation and analysis before submitting." if goal_type == "THEORY" else "Please provide your answer before running verification."
             return {
                 "goal_number": goal_number,
                 "goal_type": goal_type,
@@ -1411,6 +1423,7 @@ class AssignmentEngine:
                 "max_marks": target_prob.get("marks", 25),
                 "feedback": msg,
                 "test_results": [],
+                "checkpoint_evaluations": [],
                 "unlocked_next_goal": False
             }
 
@@ -1437,7 +1450,108 @@ class AssignmentEngine:
                         "detail": "Prohibited system call or dangerous keyword detected."
                     }
                 ],
+                "checkpoint_evaluations": [],
                 "unlocked_next_goal": False
+            }
+
+        # -----------------------------------------------------------------
+        # BRANCH A1: MCQ GOAL EVALUATION
+        # -----------------------------------------------------------------
+        if goal_type == "MCQ":
+            mcq_data = target_prob.get("mcq") or {}
+            correct = str(mcq_data.get("correct_answer") or target_prob.get("correct_answer") or "A").strip().upper()
+            student_choice = clean_code.strip().upper()
+            idx_map = {"0": "A", "1": "B", "2": "C", "3": "D"}
+            if student_choice in idx_map:
+                student_choice = idx_map[student_choice]
+            elif len(student_choice) > 1 and student_choice[0] in ["A", "B", "C", "D"]:
+                student_choice = student_choice[0]
+
+            is_correct = (student_choice == correct)
+            max_marks = int(target_prob.get("marks", 25))
+            explanation = mcq_data.get("explanation") or target_prob.get("solution_hint") or "Option verified."
+            feedback = f"✅ Correct! {explanation}" if is_correct else f"Incorrect choice. Review the concept and try again."
+
+            return {
+                "goal_number": goal_number,
+                "goal_type": "MCQ",
+                "status": "passed" if is_correct else "needs_revision",
+                "passed": is_correct,
+                "marks_earned": max_marks if is_correct else 0,
+                "max_marks": max_marks,
+                "feedback": feedback,
+                "solution_hint": target_prob.get("solution_hint") or target_prob.get("lecture_timestamp"),
+                "mentor_guidance": target_prob.get("mentor_guidance") or ("Review the lecture timestamp hints before re-attempting." if not is_correct else ""),
+                "test_results": [
+                    {
+                        "name": f"Multiple Choice Assessment (Selected: {student_choice})",
+                        "passed": is_correct,
+                        "detail": explanation if is_correct else "Selected choice did not match the correct pedagogical answer."
+                    }
+                ],
+                "checkpoint_evaluations": [],
+                "unlocked_next_goal": is_correct,
+                "security_mode": "Zero-Leakage Server-Side MCQ Evaluation"
+            }
+
+        # -----------------------------------------------------------------
+        # BRANCH A2: NUMERIC CALCULATION GOAL EVALUATION
+        # -----------------------------------------------------------------
+        if goal_type == "NUMERIC":
+            numeric_data = target_prob.get("numeric") or {}
+            target_val = numeric_data.get("target_value")
+            tolerance = float(numeric_data.get("tolerance") or 0.05)
+            max_marks = int(target_prob.get("marks", 25))
+
+            numbers_found = re.findall(r"[-+]?\d*\.?\d+", clean_code)
+            is_correct = False
+            user_val = None
+            if numbers_found:
+                try:
+                    user_val = float(numbers_found[0])
+                    if isinstance(target_val, (int, float)):
+                        target_float = float(target_val)
+                        diff = abs(user_val - target_float)
+                        allowed = max(abs(target_float) * tolerance, tolerance)
+                        is_correct = (diff <= allowed)
+                    elif isinstance(target_val, dict):
+                        target_nums = [float(v) for v in target_val.values() if isinstance(v, (int, float))]
+                        if len(numbers_found) >= len(target_nums):
+                            all_match = True
+                            for u_str, t_f in zip(numbers_found, target_nums):
+                                if abs(float(u_str) - t_f) > max(abs(t_f) * tolerance, tolerance):
+                                    all_match = False
+                                    break
+                            is_correct = all_match
+                        else:
+                            is_correct = any(abs(user_val - t_f) <= max(abs(t_f) * tolerance, tolerance) for t_f in target_nums)
+                except Exception:
+                    is_correct = False
+
+            unit = numeric_data.get("unit", "")
+            feedback = f"✅ Calculation verified! Accurate within tolerance limits." if is_correct else f"Calculation result did not match expected value. Check your arithmetic and formula."
+            formula_hint = numeric_data.get("formula_hint") or target_prob.get("solution_hint")
+
+            return {
+                "goal_number": goal_number,
+                "goal_type": "NUMERIC",
+                "status": "passed" if is_correct else "needs_revision",
+                "passed": is_correct,
+                "marks_earned": max_marks if is_correct else 0,
+                "max_marks": max_marks,
+                "feedback": feedback,
+                "solution_hint": formula_hint,
+                "mentor_guidance": target_prob.get("mentor_guidance") or ("Double-check each step of the formula given in the lecture." if not is_correct else ""),
+                "test_results": [
+                    {
+                        "name": f"Numerical Precision Check ({f'{user_val} {unit}'.strip() if user_val is not None else 'Input'})",
+                        "passed": is_correct,
+                        "detail": "Calculated value matches reference solution within tolerance." if is_correct else f"Calculation mismatch. Formula hint: {formula_hint}"
+                    }
+                ],
+                "checkpoint_evaluations": [],
+                "unlocked_next_goal": is_correct,
+                "security_mode": "Deterministic Numeric Tolerance Verification"
             }
 
         # -----------------------------------------------------------------
@@ -1512,7 +1626,9 @@ class AssignmentEngine:
                 "max_marks": max_marks,
                 "feedback": parsed.get("feedback") or ("Conceptual explanation verified! Proceed to the next goal." if all_passed else "Conceptual explanation needs more technical depth. Check the criteria and revise."),
                 "solution_hint": target_prob.get("solution_hint") or target_prob.get("lecture_timestamp"),
+                "mentor_guidance": target_prob.get("mentor_guidance") or ("Focus on addressing every conceptual checkpoint listed above with concrete examples." if not all_passed else ""),
                 "test_results": chk_results,
+                "checkpoint_evaluations": chk_results,
                 "unlocked_next_goal": all_passed,
                 "security_mode": "Conceptual Rubric Verification (Host Sandboxed)"
             }
@@ -1667,7 +1783,9 @@ class AssignmentEngine:
             "max_marks": max_marks,
             "feedback": parsed.get("feedback") or ("Goal verified successfully! You may now proceed to the next goal." if all_tests_passed else "Verification failed. Check test cases and revise your code."),
             "solution_hint": target_prob.get("solution_hint") or target_prob.get("lecture_timestamp"),
+            "mentor_guidance": target_prob.get("mentor_guidance") or ("Examine the test case inputs, expected outputs, and edge case boundaries." if not all_tests_passed else ""),
             "test_results": formatted_results,
+            "checkpoint_evaluations": [],
             "unlocked_next_goal": all_tests_passed,
             "security_mode": "Deterministic Static & Test-Case Verification (Host Sandboxed)"
         }
