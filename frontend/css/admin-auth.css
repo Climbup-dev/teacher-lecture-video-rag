@@ -215,3 +215,292 @@
   border-radius: 10px;
   padding: 10px 14px;
 }
+
+.studio-tab-btn {
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.studio-tab-btn:hover:not(.active) {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.preview-mission-header {
+  background: linear-gradient(135deg, rgba(18, 30, 52, 0.85) 0%, rgba(10, 16, 30, 0.95) 100%);
+  border: 1px solid rgba(56, 211, 153, 0.25);
+  border-radius: 12px;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+}
+
+.preview-problem-card {
+  background: rgba(18, 30, 52, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 14px;
+}
+
+.timestamp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+/* Goal-by-Goal Progression States */
+.goal-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.goal-status-badge.not-started {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.goal-status-badge.in-progress {
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.goal-status-badge.passed {
+  background: rgba(56, 211, 153, 0.16);
+  color: #38d399;
+  border: 1px solid rgba(56, 211, 153, 0.4);
+  box-shadow: 0 0 12px rgba(56, 211, 153, 0.2);
+}
+
+.goal-status-badge.needs-revision {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.goal-status-badge.locked {
+  background: rgba(255, 255, 255, 0.05);
+  color: #64748b;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.preview-goal-card {
+  background: rgba(18, 30, 52, 0.7);
+  border: 1.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 18px 22px;
+  margin-bottom: 20px;
+  transition: all 0.25s ease;
+}
+
+.preview-goal-card.active-goal {
+  border-color: rgba(56, 211, 153, 0.4);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+.preview-goal-card.goal-locked {
+  opacity: 0.55;
+  filter: grayscale(0.2);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Independent Code Editor per Goal */
+.goal-code-editor-wrapper {
+  background: #020712;
+  border: 1px solid rgba(56, 211, 153, 0.25);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 14px;
+  margin-bottom: 12px;
+}
+
+.goal-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.goal-code-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  color: #9ef8dc;
+  border: none;
+  padding: 12px 14px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  tab-size: 4;
+  outline: none;
+  resize: vertical;
+  min-height: 120px;
+}
+
+.goal-code-textarea:focus {
+  background: rgba(56, 211, 153, 0.02);
+}
+
+/* Test Cases UI */
+.goal-test-case-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(10, 16, 30, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  margin-bottom: 6px;
+}
+
+.goal-verify-banner {
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-top: 10px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.goal-verify-banner.success {
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #a7f3d0;
+}
+
+.goal-verify-banner.error {
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fde68a;
+}
+
+/* Theory vs Coding Archetype Styles */
+.assignment-type-pill {
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.assignment-type-pill.theory {
+  background: rgba(168, 85, 247, 0.14);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.assignment-type-pill.coding {
+  background: rgba(16, 185, 129, 0.14);
+  color: #38d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.assignment-type-pill.mixed {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.goal-type-badge {
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.goal-type-badge.theory {
+  background: rgba(168, 85, 247, 0.16);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.goal-type-badge.coding {
+  background: rgba(16, 185, 129, 0.16);
+  color: #38d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.goal-type-badge.practical {
+  background: rgba(6, 182, 212, 0.16);
+  color: #22d3ee;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+/* Theory Response & Explanation Workspace */
+.goal-theory-response-wrapper {
+  background: rgba(18, 24, 38, 0.85);
+  border: 1px solid rgba(168, 85, 247, 0.28);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 14px;
+  margin-bottom: 12px;
+}
+
+.goal-theory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: rgba(168, 85, 247, 0.08);
+  border-bottom: 1px solid rgba(168, 85, 247, 0.18);
+}
+
+.goal-theory-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  color: #f1f5f9;
+  border: none;
+  padding: 14px;
+  font-family: inherit;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  outline: none;
+  resize: vertical;
+  min-height: 140px;
+}
+
+.goal-theory-textarea:focus {
+  background: rgba(168, 85, 247, 0.03);
+}
+
+.goal-theory-checkpoint-item {
+  background: rgba(10, 16, 30, 0.6);
+  border: 1px solid rgba(168, 85, 247, 0.18);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+

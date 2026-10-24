@@ -1050,96 +1050,148 @@
     <!-- ============================================================ -->
     <div class="modal" id="modal-ai-assignment-editor" style="display: none;">
       <div class="modal-dialog ai-assignment-modal-dialog">
-        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 16px;">
+        <!-- Modal Top Bar -->
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 14px;">
           <div>
-            <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 999px; margin-bottom: 8px;">
-              <span>✦</span> Dual-AI Assignment Studio
+            <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 999px; margin-bottom: 6px;">
+              <span>✦</span> Admin Assignment Studio
             </div>
-            <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin: 0;">
-              Synthesize & Edit Milestone Assignment
+            <h2 style="font-size: 1.35rem; font-weight: 800; color: #fff; margin: 0;">
+              Lecture Mission & Assignment Studio
             </h2>
-            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 4px 0 0 0;">
-              Grounded in 1–4 hour video lecture audio & transcripts. Review, customize, and publish to enrolled students.
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 3px 0 0 0;">
+              Synthesize, review, and publish real-world practical missions grounded in actual lecture content.
             </p>
           </div>
           <button type="button" class="btn btn-icon" id="btn-close-ai-assign-modal" style="font-size: 1.3rem;">&times;</button>
         </div>
 
-        <!-- Lecture Selection & Synthesize Action Bar -->
-        <div style="background: rgba(18, 30, 52, 0.7); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
-          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1;">
-            <div>
-              <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">TARGET LECTURE:</label>
-              <select id="ai-assign-lecture-select" class="styled-dropdown-mini" style="background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.35); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 0.88rem; outline: none;"></select>
-            </div>
+        <!-- Top Action Bar: Lecture Selection & Synthesize Button -->
+        <div class="studio-top-bar" style="background: rgba(18, 30, 52, 0.7); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1;">
+            <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8;">TARGET LECTURE:</label>
+            <select id="ai-assign-lecture-select" class="styled-dropdown-mini" style="background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.35); color: #fff; border-radius: 8px; padding: 7px 12px; font-size: 0.88rem; outline: none; min-width: 260px; max-width: 100%;"></select>
           </div>
-          <button type="button" class="btn btn-primary" id="btn-trigger-ai-synthesis" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800;">
+          <button type="button" class="btn btn-primary" id="btn-trigger-ai-synthesis" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800; padding: 8px 18px; font-size: 0.88rem; box-shadow: 0 4px 14px rgba(56, 211, 153, 0.35);">
             ⚡ Synthesize Assignment with AI
           </button>
         </div>
 
         <!-- Synthesis Status Banner -->
-        <div id="ai-assign-status-banner" style="display: none; padding: 12px 16px; border-radius: 10px; margin-bottom: 20px; font-size: 0.88rem;"></div>
+        <div id="ai-assign-status-banner" style="display: none; padding: 10px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.86rem;"></div>
 
-        <!-- EDITABLE ASSIGNMENT FORM -->
-        <form id="ai-assign-edit-form" style="display: none;">
-          <!-- Title & Meta Row -->
-          <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; margin-bottom: 18px;">
-            <div>
-              <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">Assignment Title:</label>
-              <input type="text" id="ai-edit-title" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 10px 12px; color: #fff;">
+        <!-- EMPTY STATE (Before Assignment Exists or Loaded) -->
+        <div id="ai-assign-empty-state" style="display: none; text-align: center; padding: 40px 20px; background: rgba(18, 30, 52, 0.4); border: 1px dashed rgba(255, 255, 255, 0.12); border-radius: 12px; margin-bottom: 20px;">
+          <div style="font-size: 2rem; margin-bottom: 10px;">📋</div>
+          <h3 style="font-size: 1.1rem; color: #fff; margin: 0 0 6px 0;">No Assignment Generated Yet</h3>
+          <p style="font-size: 0.85rem; color: #94a3b8; max-width: 480px; margin: 0 auto 16px auto;">
+            Select a lecture above and click <strong>"⚡ Synthesize Assignment with AI"</strong> to automatically extract high-signal concepts, detect domain requirements, and create a quality-verified mission.
+          </p>
+        </div>
+
+        <!-- GENERATED ASSIGNMENT WORKSPACE (Loaded or Generated) -->
+        <div id="ai-assign-workspace" style="display: none;">
+          <!-- Top Quality & Navigation Bar -->
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 10px 14px; background: rgba(10, 16, 30, 0.6); border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06);">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span id="ai-assign-status-pill" style="font-size: 0.75rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; text-transform: uppercase;"></span>
+              <span id="ai-assign-archetype-pill" class="assignment-type-pill" style="display: none;"></span>
+              <span id="ai-assign-quality-pill" style="font-size: 0.75rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: rgba(56, 211, 153, 0.12); color: #38d399; border: 1px solid rgba(56, 211, 153, 0.3);">
+                🛡️ Quality Gate: 100/100 Verified
+              </span>
+              <span id="ai-assign-domain-pill" style="font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: rgba(99, 102, 241, 0.12); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3);"></span>
             </div>
-            <div>
-              <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">Due Date Label:</label>
-              <input type="text" id="ai-edit-due" class="form-input" value="Next Sunday, 11:59 PM" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 10px 12px; color: #fff;">
-            </div>
-            <div>
-              <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">Max Score:</label>
-              <input type="number" id="ai-edit-maxscore" class="form-input" value="100" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 10px 12px; color: #fff;">
-            </div>
-          </div>
 
-          <!-- Enterprise Scenario Context Box (Editable) -->
-          <div style="margin-bottom: 20px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 700; color: #38d399; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em;">
-              🏭 Real-World Enterprise Scenario Context (Editable):
-            </label>
-            <textarea id="ai-edit-scenario" rows="3" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(56, 211, 153, 0.35); border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 0.88rem; line-height: 1.5;"></textarea>
-          </div>
-
-          <!-- 3-Tier Progressive Challenges (Editable) -->
-          <div style="margin-bottom: 22px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-              <label style="font-size: 0.82rem; font-weight: 700; color: #38d399; text-transform: uppercase; letter-spacing: 0.05em;">
-                ⚡ 3-Tier Progressive Implementation Challenges:
-              </label>
-            </div>
-            <div id="ai-edit-challenges-list"></div>
-          </div>
-
-          <!-- Starter Code Boilerplate (Editable) -->
-          <div style="margin-bottom: 22px;">
-            <label style="display: block; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.85); margin-bottom: 6px;">
-              💻 Starter Boilerplate Code Console (Editable):
-            </label>
-            <textarea id="ai-edit-starter" rows="6" class="form-input" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 12px 14px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.84rem; line-height: 1.5;"></textarea>
-          </div>
-
-          <!-- Action Buttons Bar -->
-          <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 20px; flex-wrap: wrap; gap: 14px;">
-            <button type="button" class="btn btn-secondary" id="btn-view-submissions-modal">
-              📋 View Cohort Submissions & AI Grades
-            </button>
-            <div style="display: flex; gap: 10px; align-items: center;">
-              <button type="button" class="btn btn-secondary" id="btn-save-draft-assignment" style="border: 1px solid rgba(255, 255, 255, 0.25); font-weight: 700;">
-                💾 Save as Draft
+            <!-- Mode Switcher Tabs -->
+            <div style="display: flex; gap: 6px; background: rgba(18, 30, 52, 0.8); padding: 3px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08);">
+              <button type="button" id="tab-btn-edit-mode" class="studio-tab-btn active" style="background: rgba(56, 211, 153, 0.18); color: #38d399; border: none; padding: 5px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer;">
+                ✏️ Review & Edit
               </button>
-              <button type="submit" class="btn btn-primary" id="btn-confirm-publish-assignment" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800; padding: 12px 28px; font-size: 0.95rem; box-shadow: 0 4px 18px rgba(56, 211, 153, 0.4);">
-                🚀 Confirm & Publish to Students
+              <button type="button" id="tab-btn-preview-mode" class="studio-tab-btn" style="background: transparent; color: #94a3b8; border: none; padding: 5px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer;">
+                👁️ Student Preview
               </button>
             </div>
           </div>
-        </form>
+
+          <!-- TAB PANE 1: EDIT FORM -->
+          <form id="ai-assign-edit-form">
+            <!-- Title & Overview Card -->
+            <div style="background: rgba(18, 30, 52, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;">
+              <div style="margin-bottom: 12px;">
+                <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase;">
+                  Mission Title:
+                </label>
+                <input type="text" id="ai-edit-title" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 9px 12px; color: #fff; font-size: 0.95rem; font-weight: 700;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #38d399; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em;">
+                  🌐 Real-World Mission Scenario:
+                </label>
+                <textarea id="ai-edit-scenario" rows="2" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 8px; padding: 8px 12px; color: #cbd5e1; font-size: 0.84rem; line-height: 1.45; resize: vertical;"></textarea>
+              </div>
+            </div>
+
+            <!-- Problem Cards List -->
+            <div style="margin-bottom: 18px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 0.78rem; font-weight: 800; color: #38d399; text-transform: uppercase; letter-spacing: 0.05em;">
+                  ⚡ Progressive Challenge Problems (100 Marks Total):
+                </span>
+                <span id="ai-edit-total-marks-badge" style="font-size: 0.75rem; color: #94a3b8;">Sum: 100 pts</span>
+              </div>
+              <div id="ai-edit-challenges-list"></div>
+            </div>
+
+            <!-- Collapsible: Advanced Options & Starter Boilerplate -->
+            <details id="ai-edit-advanced-details" style="background: rgba(10, 16, 30, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 16px; margin-bottom: 20px;">
+              <summary style="font-size: 0.82rem; font-weight: 700; color: #94a3b8; cursor: pointer; user-select: none;">
+                ⚙️ Advanced Options, Boilerplate & Quality Breakdown (Click to expand)
+              </summary>
+              <div style="margin-top: 14px; display: grid; gap: 14px;">
+                <!-- Row: Due Date & Max Score -->
+                <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+                  <div>
+                    <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">Due Date Label:</label>
+                    <input type="text" id="ai-edit-due" class="form-input" value="Next Sunday, 11:59 PM" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem;">
+                  </div>
+                  <div>
+                    <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">Max Score:</label>
+                    <input type="number" id="ai-edit-maxscore" class="form-input" value="100" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem;">
+                  </div>
+                </div>
+
+                <!-- Starter Code -->
+                <div>
+                  <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">Starter Boilerplate Template:</label>
+                  <textarea id="ai-edit-starter" rows="5" class="form-input" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 8px; padding: 10px 12px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45;"></textarea>
+                </div>
+
+                <!-- Quality Gate Checks List -->
+                <div id="ai-quality-checks-breakdown" style="font-size: 0.8rem; color: #94a3b8; background: rgba(18, 30, 52, 0.5); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(56, 211, 153, 0.15);"></div>
+              </div>
+            </details>
+
+            <!-- Action Buttons Bar -->
+            <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 16px; flex-wrap: wrap; gap: 12px;">
+              <button type="button" class="btn btn-secondary" id="btn-view-submissions-modal" style="font-size: 0.84rem;">
+                📋 View Cohort Submissions & AI Grades
+              </button>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <button type="button" class="btn btn-secondary" id="btn-save-draft-assignment" style="border: 1px solid rgba(255, 255, 255, 0.25); font-weight: 700; font-size: 0.85rem;">
+                  💾 Save as Draft
+                </button>
+                <button type="submit" class="btn btn-primary" id="btn-confirm-publish-assignment" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800; padding: 10px 22px; font-size: 0.9rem; box-shadow: 0 4px 16px rgba(56, 211, 153, 0.4);">
+                  🚀 Confirm & Publish to Students
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <!-- TAB PANE 2: STUDENT VIEW PREVIEW -->
+          <div id="ai-assign-student-preview-pane" style="display: none; padding-bottom: 10px;">
+            <div id="student-preview-content"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1228,6 +1280,6 @@
 
   </div>
 
-  <script src="app.js?v=20261023e"></script>
+  <script src="app.js?v=20261024_theory_vs_coding"></script>
 </body>
 </html>

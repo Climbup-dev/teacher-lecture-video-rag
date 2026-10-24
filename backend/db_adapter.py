@@ -1307,8 +1307,11 @@ class DBAdapter:
             "status": status,
             "scenario_context": scenario,
             "problems": problems,
-            "rubric": rubric
+            "rubric": rubric,
+            "assignment_type": assignment_data.get("assignment_type", "CODING")
         }
+        if "quality_report" in assignment_data:
+            desc_payload["quality_report"] = assignment_data["quality_report"]
 
         return {
             "id": aid,
@@ -1331,6 +1334,12 @@ class DBAdapter:
             except Exception:
                 parsed = {}
 
+        raw_problems = parsed.get("problems") or []
+        assign_type = parsed.get("assignment_type") or "CODING"
+        for p in raw_problems:
+            if "goal_type" not in p:
+                p["goal_type"] = "THEORY" if assign_type == "THEORY" else "CODING"
+
         return {
             "id": row.get("id"),
             "course_id": row.get("course_id"),
@@ -1339,7 +1348,8 @@ class DBAdapter:
             "description": parsed.get("summary") or desc,
             "scenario_context": parsed.get("scenario_context") or "",
             "starter_code": row.get("starter_code") or "",
-            "problems": parsed.get("problems") or [],
+            "assignment_type": assign_type,
+            "problems": raw_problems,
             "rubric": parsed.get("rubric") or {
                 "logic_and_correctness": 50,
                 "syntax_and_quality": 25,
@@ -1349,6 +1359,7 @@ class DBAdapter:
             "max_score": row.get("max_score") or 100,
             "due_date": row.get("due_date") or "",
             "status": parsed.get("status") or "published",
+            "quality_report": parsed.get("quality_report"),
             "created_at": row.get("created_at")
         }
 

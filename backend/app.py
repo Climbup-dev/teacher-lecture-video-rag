@@ -1110,6 +1110,17 @@ class AssignmentSubmitRequest(BaseModel):
     submission_content: str
     approach_notes: Optional[str] = ""
 
+class GoalVerifyRequest(BaseModel):
+    goal_number: int
+    student_code: str
+    student_id: Optional[str] = "student_user"
+
+class AssignmentGenerateRequest(BaseModel):
+    difficulty: Optional[str] = "intermediate"
+    focus_topics: Optional[List[str]] = None
+    custom_instructions: Optional[str] = None
+    assignment_type: Optional[str] = None
+
 class AssignmentPublishRequest(BaseModel):
     status: Optional[str] = "published"
     title: Optional[str] = None
@@ -1118,6 +1129,8 @@ class AssignmentPublishRequest(BaseModel):
     max_score: Optional[int] = None
     due_date: Optional[str] = None
     problems: Optional[List[Dict[str, Any]]] = None
+    quality_report: Optional[Dict[str, Any]] = None
+    assignment_type: Optional[str] = None
 
 
 @app.api_route("/api/lessons/{lesson_id}/mcqs/quiz", methods=["GET", "POST"])
@@ -1167,15 +1180,18 @@ async def verify_lesson_mcq_quiz(
 async def admin_generate_assignment(
     lesson_id: str,
     request: Request,
+    body: Optional[AssignmentGenerateRequest] = None,
     authorization: Optional[str] = Header(None),
     admin_key: Optional[str] = Query(None)
 ):
     """
-    Admin/Teacher endpoint: Uses 4-milestone concept sampling to generate a high-impact,
-    practical draft assignment from 1-4 hour lectures.
+    Admin/Teacher endpoint: Uses high-signal lecture concept analysis,
+    structured blueprinting, and deterministic quality validation to generate
+    practical, lecture-grounded assignments from 1-4 hour lectures.
     """
     verify_admin_or_instructor_auth(request, authorization, admin_key)
-    assignment = assignment_engine.generate_lecture_assignment(lesson_id)
+    options = body.model_dump() if body else {}
+    assignment = assignment_engine.generate_lecture_assignment(lesson_id, options=options)
     if not assignment:
         raise HTTPException(status_code=500, detail="Failed to synthesize assignment from lecture milestones.")
     return {
@@ -1195,6 +1211,7 @@ async def admin_publish_assignment(
 ):
     """
     Admin/Teacher endpoint: Publishes draft assignment to enrolled students.
+    Enforces deterministic quality gate check before marking published.
     """
     verify_admin_or_instructor_auth(request, authorization, admin_key)
     updates: Dict[str, Any] = {}
@@ -1206,8 +1223,24 @@ async def admin_publish_assignment(
         if body.max_score is not None: updates["max_score"] = body.max_score
         if body.due_date is not None: updates["due_date"] = body.due_date
         if body.problems is not None: updates["problems"] = body.problems
+        if body.quality_report is not None: updates["quality_report"] = body.quality_report
+        if body.assignment_type is not None: updates["assignment_type"] = body.assignment_type
     else:
         updates["status"] = "published"
+
+    # Deterministic Quality Gate validation before publishing live
+    if updates.get("status") == "published":
+        existing = db.get_assignment_by_id(assignment_id) or {}
+        merged_candidate = {**existing, **updates}
+        lesson = db.get_lesson(merged_candidate.get("lesson_id", "")) or {}
+        val_res = assignment_engine.validate_assignment_quality(merged_candidate, lesson)
+        if not val_res.get("passed", False):
+            failed_reasons = [c.get("details") for c in val_res.get("checks", []) if not c.get("passed")]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Assignment Quality Gate failed: {'; '.join(failed_reasons)}"
+            )
+        updates["quality_report"] = val_res
 
     success = db.update_assignment(assignment_id, updates)
     if not success:
@@ -1299,6 +1332,33 @@ async def submit_assignment(
         "feedback": final_feedback,
         "submission": res
     }
+
+
+@app.post("/api/assignments/{assignment_id}/verify-goal")
+async def verify_assignment_goal(
+    assignment_id: str,
+    body: GoalVerifyRequest,
+    request: Request
+):
+    """
+    Goal-by-goal real verification endpoint:
+    Evaluates student code against goal-specific test cases and expected outputs.
+    Shields host application server with isolated static analysis & server-side verification.
+    """
+    client_ip = get_client_ip(request)
+    allowed, remaining = check_rate_limit(client_ip, f"goal_verify:{assignment_id}", max_requests=40, window_seconds=60)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
+
+    res = assignment_engine.verify_goal(
+        assignment_id=assignment_id,
+        goal_number=body.goal_number,
+        student_code=body.student_code,
+        student_id=body.student_id
+    )
+    if "error" in res and "status" not in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
 
 
 @app.get("/api/admin/assignments/{assignment_id}/submissions")

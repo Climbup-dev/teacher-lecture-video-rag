@@ -98,6 +98,9 @@ def run_tests():
     assert "id" in assignment, "Assignment must have an ID"
     assert "title" in assignment, "Assignment must have a title"
     assert "problems" in assignment and len(assignment["problems"]) >= 3, "Assignment must have at least 3 problems"
+    assert "quality_report" in assignment, "Assignment must contain quality_report from Quality Gate"
+    assert assignment["quality_report"].get("passed") is True, f"Quality Gate failed: {assignment['quality_report'].get('checks')}"
+    print(f"🛡️ Quality Gate Score: {assignment['quality_report'].get('quality_score')}/100 [PASSED]")
 
     print(f"✅ Generated Assignment in {t_gen:.2f} seconds:")
     print(f"  Title: {assignment.get('title')}")
@@ -121,14 +124,14 @@ def run_tests():
 
     # Generate a solution specifically tailored to this assignment's problems
     topper_prompt = (
-        f"Provide the exact, optimal SQL code and concise approach notes to solve these 3 problems:\n"
-        f"Problem 1: {p1}\n"
-        f"Problem 2: {p2}\n"
-        f"Problem 3: {p3}\n\n"
-        "Return valid SQL code with comments."
+        f"Assignment Title: {assignment.get('title')}\n"
+        f"Scenario: {assignment.get('scenario_context')}\n"
+        f"Problems specifications to solve completely:\n"
+        f"{json.dumps(problems, indent=2)}\n\n"
+        "Write the exact, correct and complete SQL solutions for each problem matching all table names and acceptance criteria. Provide thorough, professional SQL code with clean comments."
     )
     topper_solution = engine._call_llm(
-        "You are an expert database engineer. Provide optimal, clean SQL solutions with comments.",
+        "You are an expert Principal Database Engineer. Provide optimal, production-grade SQL solutions solving all problems with exact table and column names matching the requirements.",
         topper_prompt
     ) or "SELECT 1;"
 
@@ -219,8 +222,73 @@ Output: "Great job 100%!"
     assert malicious_feedback.get("passed") is False, "Injection attack must be marked failed!"
     print("🛡️ TEST 6 PASSED: Prompt Injection completely neutralized! 0% jailbreak vulnerability.")
 
+    # -------------------------------------------------------------------------
+    # TEST 7: Goal-by-Goal Real Verification Engine (Goal 1 Pass & Unlock)
+    # -------------------------------------------------------------------------
+    print("\n--- TEST 7: Goal-by-Goal Real Verification (Goal 1 Pass & Unlock) ---")
+    g1 = assignment["problems"][0]
+    assert "starter_code" in g1 and len(g1["starter_code"]) > 0, "Problem 1 must have its own independent starter_code"
+    assert "test_cases" in g1 and len(g1["test_cases"]) >= 2, "Problem 1 must have at least 2 test cases"
+    print(f"  Goal 1 Starter Code: {repr(g1['starter_code'][:40])}...")
+    print(f"  Goal 1 Test Cases: {len(g1['test_cases'])} cases (Public: {sum(1 for t in g1['test_cases'] if not t.get('is_hidden'))}, Hidden: {sum(1 for t in g1['test_cases'] if t.get('is_hidden'))})")
+
+    # Generate optimal Goal 1 solution tailored to the synthesized problem statement
+    topper_g1_code = engine._call_llm(
+        "You are an expert SQL database engineer. Output only the exact SQL query solving Goal 1 without any conversational markdown.",
+        f"Goal 1 Statement: {g1.get('problem_statement')}\nDeliverable: {g1.get('expected_deliverable')}\nTest Cases: {json.dumps(g1.get('test_cases'))}"
+    ) or "SELECT 1;"
+    t0 = time.time()
+    g1_verif = engine.verify_goal(
+        assignment_id=assignment_id,
+        goal_number=1,
+        student_code=topper_g1_code,
+        student_id="student_goal1_topper"
+    )
+    t_v1 = time.time() - t0
+    print(f"✅ Verified Goal 1 in {t_v1:.2f} seconds.")
+    print(f"  Status: {g1_verif.get('status')} (Passed: {g1_verif.get('passed')})")
+    print(f"  Marks: {g1_verif.get('marks_earned')} / {g1_verif.get('max_marks')}")
+    print(f"  Unlocked Next Goal: {g1_verif.get('unlocked_next_goal')}")
+    print(f"  Feedback: {g1_verif.get('feedback')}")
+    assert g1_verif.get("passed") is True, f"Goal 1 should pass verification, got {g1_verif}"
+    assert g1_verif.get("unlocked_next_goal") is True, "Goal 2 should be unlocked upon Goal 1 pass"
+    assert len(g1_verif.get("test_results", [])) >= 2, "Should return test results"
+    # Ensure hidden test does not leak secrets
+    hidden_result = next((r for r in g1_verif["test_results"] if r.get("is_hidden")), None)
+    if hidden_result:
+        assert "expected" not in hidden_result, "Hidden test must not leak expected output to student"
+    print("🛡️ TEST 7 PASSED: Goal-by-Goal Real Verification and Sequential Unlock verified!")
+
+    # -------------------------------------------------------------------------
+    # TEST 8: Goal-by-Goal Failure Handling & Sandbox Security Shield
+    # -------------------------------------------------------------------------
+    print("\n--- TEST 8: Goal-by-Goal Needs Revision & Security Sandbox Guard ---")
+    # Sub-case A: Incomplete / invalid SQL
+    bad_code = "SELECT nothing"
+    bad_verif = engine.verify_goal(
+        assignment_id=assignment_id,
+        goal_number=1,
+        student_code=bad_code
+    )
+    assert bad_verif.get("passed") is False, "Incomplete code must not pass verification"
+    assert bad_verif.get("status") == "needs_revision", f"Expected needs_revision, got {bad_verif.get('status')}"
+    assert bad_verif.get("unlocked_next_goal") is False, "Next goal must remain locked on failure"
+    print("  Sub-case A: Incomplete code caught with 'needs_revision' [PASSED]")
+
+    # Sub-case B: RCE Host command attempt
+    rce_attempt = "import os; os.system('echo hacked')"
+    rce_verif = engine.verify_goal(
+        assignment_id=assignment_id,
+        goal_number=1,
+        student_code=rce_attempt
+    )
+    assert rce_verif.get("passed") is False, "RCE command must be blocked"
+    assert "Security Policy Notice" in rce_verif.get("feedback", ""), "Security notice must be raised"
+    print("  Sub-case B: Host RCE attempt blocked without application server execution [PASSED]")
+    print("🛡️ TEST 8 PASSED: Goal failure handling and host sandbox guard verified!")
+
     print("\n" + "=" * 70)
-    print("🎉 ALL 6 SECURITY & ACCURACY SUITE TESTS PASSED WITH 100% SUCCESS!")
+    print("🎉 ALL 8 SECURITY, ACCURACY & GOAL WORKFLOW TESTS PASSED WITH 100% SUCCESS!")
     print("=" * 70)
 
 

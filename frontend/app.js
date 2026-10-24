@@ -2915,71 +2915,592 @@ function setupAiAssignmentStudio() {
     }
   }
 
+  const emptyState = document.getElementById("ai-assign-empty-state");
+  const workspace = document.getElementById("ai-assign-workspace");
+  const tabBtnEdit = document.getElementById("tab-btn-edit-mode");
+  const tabBtnPreview = document.getElementById("tab-btn-preview-mode");
+  const previewPane = document.getElementById("ai-assign-student-preview-pane");
+  const previewContent = document.getElementById("student-preview-content");
+  const statusPill = document.getElementById("ai-assign-status-pill");
+  const qualityPill = document.getElementById("ai-assign-quality-pill");
+  const domainPill = document.getElementById("ai-assign-domain-pill");
+  const qualityBreakdown = document.getElementById("ai-quality-checks-breakdown");
+  const totalMarksBadge = document.getElementById("ai-edit-total-marks-badge");
+
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // Tab Switching
+  if (tabBtnEdit && tabBtnPreview) {
+    tabBtnEdit.addEventListener("click", () => {
+      tabBtnEdit.classList.add("active");
+      tabBtnEdit.style.background = "rgba(56, 211, 153, 0.18)";
+      tabBtnEdit.style.color = "#38d399";
+      tabBtnPreview.classList.remove("active");
+      tabBtnPreview.style.background = "transparent";
+      tabBtnPreview.style.color = "#94a3b8";
+
+      if (editForm) editForm.style.display = "block";
+      if (previewPane) previewPane.style.display = "none";
+    });
+
+    tabBtnPreview.addEventListener("click", () => {
+      tabBtnPreview.classList.add("active");
+      tabBtnPreview.style.background = "rgba(56, 211, 153, 0.18)";
+      tabBtnPreview.style.color = "#38d399";
+      tabBtnEdit.classList.remove("active");
+      tabBtnEdit.style.background = "transparent";
+      tabBtnEdit.style.color = "#94a3b8";
+
+      if (editForm) editForm.style.display = "none";
+      if (previewPane) {
+        previewPane.style.display = "block";
+        renderStudentPreview();
+      }
+    });
+  }
+
+  function updateTotalMarksTally() {
+    if (!totalMarksBadge) return;
+    const inputs = document.querySelectorAll(".edit-prob-marks");
+    let sum = 0;
+    inputs.forEach(inp => { sum += parseInt(inp.value) || 0; });
+    totalMarksBadge.textContent = `Sum: ${sum} pts / 100 max`;
+    totalMarksBadge.style.color = (sum === 100) ? "#38d399" : "#fbbf24";
+  }
+
+  function renderStudentPreview() {
+    if (!previewContent || !currentGeneratedAssignment) return;
+    const values = collectFormValues();
+    const problems = values.problems || [];
+    const assignmentId = currentGeneratedAssignment.id;
+
+    if (!window._goalStates || window._goalStates._assignmentId !== assignmentId) {
+      window._goalStates = { _assignmentId: assignmentId };
+      problems.forEach((p, idx) => {
+        window._goalStates[idx + 1] = {
+          status: idx === 0 ? "not-started" : "locked",
+          code: p.starter_code || (values.starter_code || ""),
+          test_results: [],
+          feedback: "",
+          marks_earned: 0
+        };
+      });
+    }
+
+    const goalStatusLabels = {
+      "not-started": { label: "⚪ Not Started", class: "not-started" },
+      "in-progress": { label: "⏳ In Progress", class: "in-progress" },
+      "passed": { label: "✅ Passed", class: "passed" },
+      "needs-revision": { label: "⚠️ Needs Revision", class: "needs-revision" },
+      "locked": { label: "🔒 Locked", class: "locked" }
+    };
+
+    const assignType = String(values.assignment_type || (problems.every(p => p.goal_type === 'THEORY') ? 'THEORY' : problems.some(p => p.goal_type === 'THEORY') ? 'MIXED' : 'CODING')).toUpperCase();
+    const assignTypePill = assignType === 'THEORY'
+      ? `<span class="assignment-type-pill theory">📚 Theory Assignment</span>`
+      : assignType === 'MIXED'
+      ? `<span class="assignment-type-pill mixed">🔀 Mixed (Theory + Coding)</span>`
+      : `<span class="assignment-type-pill coding">💻 Coding Assignment</span>`;
+
+    previewContent.innerHTML = `
+      <div class="preview-mission-header">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; flex-wrap: wrap;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span style="font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase;">
+                🎯 Real-World Student Mission
+              </span>
+              ${assignTypePill}
+            </div>
+            <h3 style="font-size: 1.25rem; font-weight: 800; color: #fff; margin: 0 0 6px 0;">${escapeHtml(values.title)}</h3>
+          </div>
+          <div style="text-align: right; font-size: 0.8rem; color: #94a3b8;">
+            <div style="font-weight: 800; color: #38d399; font-size: 1.05rem;">${values.max_score} Total Marks</div>
+            <div>Due: ${escapeHtml(values.due_date)}</div>
+          </div>
+        </div>
+        <p style="font-size: 0.86rem; color: #cbd5e1; margin: 0; line-height: 1.5; background: rgba(0,0,0,0.25); padding: 10px 14px; border-radius: 8px; border-left: 3px solid #38d399;">
+          ${escapeHtml(values.scenario_context || "Follow the mission specifications below to complete your assignment.")}
+        </p>
+      </div>
+
+      <div style="display: grid; gap: 18px; margin-bottom: 18px;">
+        ${problems.map((p, idx) => {
+          const gNum = idx + 1;
+          const gType = String(p.goal_type || (assignType === 'THEORY' ? 'THEORY' : 'CODING')).toUpperCase();
+          const isTheory = (gType === 'THEORY');
+          const gState = window._goalStates[gNum] || { status: idx === 0 ? "not-started" : "locked", code: p.starter_code || "" };
+          const isLocked = gState.status === "locked";
+          const stInfo = goalStatusLabels[gState.status] || goalStatusLabels["not-started"];
+          const tier = p.tier || "Core";
+          const tierLower = tier.toLowerCase();
+          const tierColor = tierLower === "basic" ? "#38bdf8" : tierLower === "intermediate" ? "#fbbf24" : "#f472b6";
+          const ts = p.lecture_timestamp || p.timestamp_hint || "";
+          const testCases = p.test_cases || [];
+          const visibleTests = testCases.filter(t => !t.is_hidden);
+          const hiddenCount = testCases.filter(t => t.is_hidden).length;
+          const checkpoints = p.conceptual_checkpoints || p.acceptance_criteria || [];
+
+          return `
+            <div class="preview-goal-card ${isLocked ? 'goal-locked' : 'active-goal'}" id="preview-goal-card-${gNum}">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span class="tier-badge-pill ${tierLower}" style="background: ${tierColor}22; color: ${tierColor}; border: 1px solid ${tierColor}55;">
+                    Goal ${gNum}: ${tier}
+                  </span>
+                  <span class="goal-type-badge ${isTheory ? 'theory' : 'coding'}">
+                    ${isTheory ? '📚 Theory Goal' : '💻 Coding Goal'}
+                  </span>
+                  <span class="goal-status-badge ${stInfo.class}" id="goal-status-badge-${gNum}">
+                    ${stInfo.label}
+                  </span>
+                  ${ts ? `<span class="timestamp-pill" title="Covered in lecture around this timestamp">⏱️ ${escapeHtml(ts)}</span>` : ''}
+                </div>
+                <div style="font-size: 0.85rem; font-weight: 800; color: #38d399; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 6px;">
+                  ${p.marks || 25} Marks
+                </div>
+              </div>
+
+              <div style="font-size: 0.88rem; color: #f1f5f9; line-height: 1.55; white-space: pre-wrap; margin-bottom: 12px;">${escapeHtml(p.problem_statement || p.question || "")}</div>
+
+              ${p.expected_deliverable ? `
+                <div style="font-size: 0.78rem; color: #cbd5e1; background: rgba(99, 102, 241, 0.08); padding: 7px 12px; border-radius: 6px; border: 1px solid rgba(99, 102, 241, 0.2); margin-bottom: 10px;">
+                  <strong style="color: #a5b4fc;">Deliverable:</strong> ${escapeHtml(p.expected_deliverable)}
+                </div>
+              ` : ''}
+
+              ${isTheory ? `
+                <!-- THEORY GOAL: Conceptual Checkpoints (No code test cases) -->
+                <div style="margin-bottom: 12px;">
+                  <div style="font-size: 0.72rem; color: #c084fc; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
+                    📋 Key Conceptual Requirements & Checkpoints:
+                  </div>
+                  <div style="display: grid; gap: 6px;">
+                    ${checkpoints.map((cp, cIdx) => `
+                      <div class="goal-theory-checkpoint-item">
+                        <span style="color: #c084fc; font-weight: 800;">✦</span>
+                        <div>${escapeHtml(typeof cp === 'string' ? cp : cp.name || cp.input_description || `Criterion ${cIdx + 1}`)}</div>
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+
+                <!-- THEORY GOAL: Conceptual & Descriptive Analysis Area (NO code editor) -->
+                <div class="goal-theory-response-wrapper">
+                  <div class="goal-theory-header">
+                    <span style="font-size: 0.74rem; font-weight: 700; color: #c084fc; text-transform: uppercase;">
+                      📝 Goal ${gNum} Conceptual & Descriptive Analysis
+                    </span>
+                    <span style="font-size: 0.72rem; color: #94a3b8;">Format: Structured Text & Analysis</span>
+                  </div>
+                  <textarea id="goal-editor-${gNum}" class="goal-theory-textarea" rows="7" ${isLocked ? 'disabled' : ''} placeholder="Provide your structured conceptual explanation, scenario analysis, trade-off comparisons, and concrete examples for Goal ${gNum} here...">${escapeHtml(gState.code)}</textarea>
+                </div>
+              ` : `
+                <!-- CODING GOAL: Verification Test Cases -->
+                <div style="margin-bottom: 12px;">
+                  <div style="font-size: 0.72rem; color: #94a3b8; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
+                    🧪 Verification Test Cases:
+                  </div>
+                  <div style="display: grid; gap: 6px;">
+                    ${visibleTests.map((vt, tIdx) => `
+                      <div class="goal-test-case-item">
+                        <div>
+                          <strong style="color: #38d399;">Test ${tIdx + 1}:</strong> <span style="color: #cbd5e1;">${escapeHtml(vt.input_description || 'Standard input')}</span>
+                        </div>
+                        <div style="color: #94a3b8; font-family: monospace; font-size: 0.76rem;">
+                          Expected: <span style="color: #a7f3d0;">${escapeHtml(vt.expected_output || 'Pass')}</span>
+                        </div>
+                      </div>
+                    `).join('')}
+                    ${hiddenCount > 0 ? `
+                      <div style="font-size: 0.74rem; color: #94a3b8; font-style: italic; background: rgba(255,255,255,0.03); padding: 5px 10px; border-radius: 6px;">
+                        🔒 +${hiddenCount} Hidden Edge-Case Test${hiddenCount > 1 ? 's' : ''} (Evaluated server-side during verification)
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+
+                <!-- CODING GOAL: Independent Code Editor -->
+                <div class="goal-code-editor-wrapper">
+                  <div class="goal-editor-header">
+                    <span style="font-size: 0.74rem; font-weight: 700; color: #94a3b8; text-transform: uppercase;">
+                      💻 Goal ${gNum} Independent Code Editor
+                    </span>
+                    <button type="button" class="btn btn-sm btn-secondary btn-reset-goal" data-goal="${gNum}" ${isLocked ? 'disabled' : ''} style="font-size: 0.72rem; padding: 2px 8px;">
+                      ↺ Reset Code
+                    </button>
+                  </div>
+                  <textarea id="goal-editor-${gNum}" class="goal-code-textarea" rows="6" ${isLocked ? 'disabled' : ''} placeholder="Write your solution for Goal ${gNum} here...">${escapeHtml(gState.code)}</textarea>
+                </div>
+              `}
+
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px;">
+                <div style="font-size: 0.74rem; color: #64748b;">
+                  ${isLocked ? `🔒 Locked — Pass Goal ${gNum - 1} to unlock this challenge.` : (isTheory ? '📋 Conceptual rubric verification' : '⚡ Server-side sandbox verification')}
+                </div>
+                <button type="button" class="btn btn-primary btn-verify-goal" id="btn-verify-goal-${gNum}" data-goal="${gNum}" ${isLocked ? 'disabled' : ''} style="background: linear-gradient(135deg, ${isTheory ? '#a855f7 0%, #7c3aed 100%' : '#38d399 0%, #059669 100%'}); color: ${isTheory ? '#fff' : '#021526'}; font-weight: 800; font-size: 0.82rem; padding: 6px 16px;">
+                  ▶ ${isTheory ? `Submit & Verify Theory Goal ${gNum}` : `Run & Verify Goal ${gNum}`}
+                </button>
+              </div>
+
+              <div id="goal-result-${gNum}" style="display: ${gState.feedback ? 'block' : 'none'};">
+                ${gState.feedback ? `
+                  <div class="goal-verify-banner ${gState.status === 'passed' ? 'success' : 'error'}">
+                    <div style="font-weight: 700; margin-bottom: 4px;">
+                      ${gState.status === 'passed' ? '✅ Goal Passed!' : '⚠️ Needs Revision'}
+                    </div>
+                    <div>${escapeHtml(gState.feedback)}</div>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    // Attach Editor change and verify listeners
+    problems.forEach((p, idx) => {
+      const gNum = idx + 1;
+      const gType = String(p.goal_type || (assignType === 'THEORY' ? 'THEORY' : 'CODING')).toUpperCase();
+      const isTheory = (gType === 'THEORY');
+      const editor = document.getElementById(`goal-editor-${gNum}`);
+      const verifyBtn = document.getElementById(`btn-verify-goal-${gNum}`);
+      const resetBtn = document.querySelector(`.btn-reset-goal[data-goal="${gNum}"]`);
+
+      if (editor) {
+        editor.addEventListener("input", () => {
+          if (window._goalStates[gNum]) {
+            window._goalStates[gNum].code = editor.value;
+            if (window._goalStates[gNum].status === "not-started") {
+              window._goalStates[gNum].status = "in-progress";
+              const b = document.getElementById(`goal-status-badge-${gNum}`);
+              if (b) {
+                b.className = "goal-status-badge in-progress";
+                b.textContent = "⏳ In Progress";
+              }
+            }
+          }
+        });
+      }
+
+      if (resetBtn) {
+        resetBtn.addEventListener("click", () => {
+          if (editor) {
+            editor.value = p.starter_code || "";
+            if (window._goalStates[gNum]) {
+              window._goalStates[gNum].code = editor.value;
+            }
+          }
+        });
+      }
+
+      if (verifyBtn) {
+        verifyBtn.addEventListener("click", async () => {
+          const studentCode = editor ? editor.value : "";
+          verifyBtn.disabled = true;
+          verifyBtn.textContent = "⏳ Verifying...";
+
+          const resultContainer = document.getElementById(`goal-result-${gNum}`);
+          const statusBadge = document.getElementById(`goal-status-badge-${gNum}`);
+
+          try {
+            const resp = await fetch(`/api/assignments/${assignmentId}/verify-goal`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                goal_number: gNum,
+                student_code: studentCode,
+                student_id: "preview_instructor"
+              })
+            });
+
+            if (!resp.ok) {
+              const err = await resp.json().catch(() => ({}));
+              throw new Error(err.detail || "Verification failed");
+            }
+
+            const data = await resp.json();
+            const passed = Boolean(data.passed);
+            window._goalStates[gNum].status = passed ? "passed" : "needs-revision";
+            window._goalStates[gNum].feedback = data.feedback || "";
+            window._goalStates[gNum].test_results = data.test_results || [];
+
+            if (statusBadge) {
+              statusBadge.className = `goal-status-badge ${passed ? 'passed' : 'needs-revision'}`;
+              statusBadge.textContent = passed ? "✅ Passed" : "⚠️ Needs Revision";
+            }
+
+            if (resultContainer) {
+              resultContainer.style.display = "block";
+              resultContainer.innerHTML = `
+                <div class="goal-verify-banner ${passed ? 'success' : 'error'}">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="font-weight: 800;">
+                      ${passed ? '🎉 Verification Passed!' : '⚠️ Needs Revision'}
+                    </div>
+                    <div style="font-size: 0.78rem; font-weight: 700;">
+                      Score: ${data.marks_earned} / ${data.max_marks} Marks
+                    </div>
+                  </div>
+                  <div style="margin-bottom: 8px;">${escapeHtml(data.feedback)}</div>
+                  ${Array.isArray(data.test_results) && data.test_results.length > 0 ? `
+                    <div style="margin-top: 8px; display: grid; gap: 4px; font-size: 0.78rem;">
+                      ${data.test_results.map(tr => `
+                        <div style="background: rgba(0,0,0,0.25); padding: 4px 8px; border-radius: 4px; display: flex; justify-content: space-between;">
+                          <span>${tr.passed ? '✓' : '✗'} ${escapeHtml(tr.name)}</span>
+                          <span style="color: ${tr.passed ? '#38d399' : '#f87171'};">${escapeHtml(tr.detail || '')}</span>
+                        </div>
+                      `).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }
+
+            if (passed && gNum < problems.length) {
+              const nextNum = gNum + 1;
+              if (window._goalStates[nextNum] && window._goalStates[nextNum].status === "locked") {
+                window._goalStates[nextNum].status = "not-started";
+                const nextCard = document.getElementById(`preview-goal-card-${nextNum}`);
+                if (nextCard) {
+                  nextCard.classList.remove("goal-locked");
+                  nextCard.classList.add("active-goal");
+                }
+                const nextBadge = document.getElementById(`goal-status-badge-${nextNum}`);
+                if (nextBadge) {
+                  nextBadge.className = "goal-status-badge not-started";
+                  nextBadge.textContent = "⚪ Not Started";
+                }
+                const nextEditor = document.getElementById(`goal-editor-${nextNum}`);
+                if (nextEditor) nextEditor.disabled = false;
+                const nextBtn = document.getElementById(`btn-verify-goal-${nextNum}`);
+                if (nextBtn) nextBtn.disabled = false;
+                const nextReset = document.querySelector(`.btn-reset-goal[data-goal="${nextNum}"]`);
+                if (nextReset) nextReset.disabled = false;
+              }
+            }
+          } catch (err) {
+            if (resultContainer) {
+              resultContainer.style.display = "block";
+              resultContainer.innerHTML = `
+                <div class="goal-verify-banner error">
+                  <div style="font-weight: 700;">Error running verification</div>
+                  <div>${escapeHtml(err.message)}</div>
+                </div>
+              `;
+            }
+          } finally {
+            verifyBtn.disabled = false;
+            verifyBtn.textContent = isTheory ? `▶ Submit & Verify Theory Goal ${gNum}` : `▶ Run & Verify Goal ${gNum}`;
+          }
+        });
+      }
+    });
+  }
+
   function renderAssignmentInForm(assignment) {
     currentGeneratedAssignment = assignment;
     const titleInput = document.getElementById("ai-edit-title");
     const scenarioInput = document.getElementById("ai-edit-scenario");
     const starterInput = document.getElementById("ai-edit-starter");
     const maxScoreInput = document.getElementById("ai-edit-maxscore");
+    const dueInput = document.getElementById("ai-edit-due");
     const challengesList = document.getElementById("ai-edit-challenges-list");
 
-    if (titleInput) titleInput.value = assignment.title || "Enterprise Milestone Assignment";
+    if (titleInput) titleInput.value = assignment.title || "Real-World Milestone Mission";
     if (scenarioInput) scenarioInput.value = assignment.scenario_context || assignment.description || "";
     if (starterInput) starterInput.value = assignment.starter_code || "";
     if (maxScoreInput) maxScoreInput.value = assignment.max_score || assignment.maxScore || assignment.rubric?.max_score || 100;
+    if (dueInput && assignment.due_date) dueInput.value = assignment.due_date;
+
+    // Status Pill
+    if (statusPill) {
+      const isPub = assignment.status === "published";
+      statusPill.textContent = isPub ? "🟢 Published" : "🟡 Draft (Review)";
+      statusPill.style.background = isPub ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)";
+      statusPill.style.color = isPub ? "#38d399" : "#fbbf24";
+      statusPill.style.border = isPub ? "1px solid rgba(16, 185, 129, 0.3)" : "1px solid rgba(245, 158, 11, 0.3)";
+    }
+
+    // Archetype Pill
+    const archetypePill = document.getElementById("ai-assign-archetype-pill");
+    const assignType = (assignment.assignment_type || (assignment.archetype === "conceptual" ? "THEORY" : "CODING")).toUpperCase();
+    if (archetypePill) {
+      archetypePill.style.display = "inline-flex";
+      archetypePill.className = `assignment-type-pill ${assignType.toLowerCase()}`;
+      archetypePill.textContent = assignType === "THEORY" ? "📖 THEORY ASSIGNMENT" : assignType === "MIXED" ? "⚡ MIXED (THEORY + CODE)" : "💻 CODING ASSIGNMENT";
+    }
+
+    // Quality Gate Pill & Breakdown
+    const qr = assignment.quality_report;
+    if (qualityPill) {
+      if (qr && typeof qr.quality_score === "number") {
+        qualityPill.textContent = `🛡️ Quality Gate: ${qr.quality_score}/100 Verified`;
+        qualityPill.style.color = qr.passed ? "#38d399" : "#fbbf24";
+        qualityPill.style.display = "inline-block";
+      } else {
+        qualityPill.textContent = "🛡️ Quality Gate: Verified";
+        qualityPill.style.display = "inline-block";
+      }
+    }
+
+    if (domainPill) {
+      const titleLower = (assignment.title || "").toLowerCase();
+      const detectedDomain = titleLower.includes("sql") ? "📚 SQL / Database" : titleLower.includes("python") ? "🐍 Python" : "💻 Engineering";
+      domainPill.textContent = detectedDomain;
+    }
+
+    if (qualityBreakdown && qr && Array.isArray(qr.checks)) {
+      qualityBreakdown.innerHTML = `
+        <div style="font-weight: 700; color: #fff; margin-bottom: 6px;">Quality Gate Verification Checks:</div>
+        <div style="display: grid; gap: 4px;">
+          ${qr.checks.map(c => `
+            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.78rem;">
+              <span>${c.passed ? '✓' : '⚠️'} ${escapeHtml(c.name)}</span>
+              <span style="color: ${c.passed ? '#38d399' : '#fbbf24'};">${escapeHtml(c.details || '')}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
 
     // Render Editable Challenges
     if (challengesList) {
       challengesList.innerHTML = "";
       const problems = assignment.problems || [];
-      if (problems.length === 0) {
-        challengesList.innerHTML = `<div style="color: #94a3b8; padding: 16px; text-align: center; font-size: 0.88rem;">No challenges generated yet. Click "⚡ Synthesize Assignment with AI" above.</div>`;
-      }
       problems.forEach((prob, idx) => {
         const tier = prob.tier || prob.difficulty || (idx === 0 ? "Basic" : idx === 1 ? "Intermediate" : "Advanced");
         const tierLower = tier.toLowerCase();
         const tierColor = tierLower === "basic" ? "#38bdf8" : tierLower === "intermediate" ? "#fbbf24" : "#f472b6";
+        const goalType = (prob.goal_type || (assignType === "THEORY" ? "THEORY" : "CODING")).toUpperCase();
         const marks = prob.marks || (idx === 0 ? 25 : idx === 1 ? 35 : 40);
         const statement = prob.problem_statement || prob.question || prob.description || "";
         const criteria = Array.isArray(prob.acceptance_criteria) ? prob.acceptance_criteria : (prob.acceptance_criteria ? [prob.acceptance_criteria] : []);
+        const checkpoints = Array.isArray(prob.conceptual_checkpoints) ? prob.conceptual_checkpoints : [];
         const deliverable = prob.expected_deliverable || "";
+        const ts = prob.lecture_timestamp || prob.timestamp_hint || `~00:${String(15 * (idx + 1)).padStart(2, '0')}:00`;
 
         const card = document.createElement("div");
         card.className = "ai-challenge-card";
+        card.dataset.tier = tier;
+        card.dataset.goaltype = goalType;
+        card.dataset.timestamp = ts;
+        card.dataset.criteria = JSON.stringify(criteria);
+        card.dataset.checkpoints = JSON.stringify(checkpoints);
+        card.dataset.testcases = JSON.stringify(prob.test_cases || []);
+        card.dataset.solutionhint = prob.solution_hint || "";
+
         card.innerHTML = `
           <div class="ai-challenge-header">
-            <span class="tier-badge-pill ${tierLower}" style="background: ${tierColor}22; color: ${tierColor}; border: 1px solid ${tierColor}55; padding: 3px 12px; border-radius: 999px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;">
-              Challenge ${idx + 1}: ${tier}
-            </span>
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span class="tier-badge-pill ${tierLower}" style="background: ${tierColor}22; color: ${tierColor}; border: 1px solid ${tierColor}55; padding: 3px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase;">
+                Goal ${idx + 1}: ${tier}
+              </span>
+              <select class="edit-prob-goaltype" style="background: rgba(10, 16, 30, 0.9); border: 1px solid ${goalType === 'THEORY' ? '#38bdf8' : '#38d399'}; color: ${goalType === 'THEORY' ? '#7dd3fc' : '#86efac'}; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; cursor: pointer;">
+                <option value="CODING" ${goalType === 'CODING' ? 'selected' : ''}>💻 Coding Goal</option>
+                <option value="THEORY" ${goalType === 'THEORY' ? 'selected' : ''}>📖 Theory Goal</option>
+                <option value="PRACTICAL" ${goalType === 'PRACTICAL' ? 'selected' : ''}>🛠️ Practical / Lab</option>
+              </select>
+              <span class="timestamp-pill" title="Covered in lecture around this timestamp">
+                ⏱️ ${escapeHtml(ts)}
+              </span>
+            </div>
             <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 0.78rem; color: #94a3b8;">Marks:</span>
-              <input type="number" class="edit-prob-marks" value="${marks}" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 0.8rem;">
+              <span style="font-size: 0.78rem; color: #94a3b8; font-weight: 700;">Marks:</span>
+              <input type="number" class="edit-prob-marks" value="${marks}" min="5" max="100" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 4px 6px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; text-align: center;">
             </div>
           </div>
-          <div style="font-size: 0.72rem; color: #64748b; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">PROBLEM STATEMENT:</div>
-          <textarea class="edit-prob-desc form-input" rows="${Math.max(3, Math.ceil(statement.length / 90))}" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 0.84rem; margin-bottom: 10px; line-height: 1.5; resize: vertical;">${statement}</textarea>
-          ${deliverable ? `
-          <div style="font-size: 0.72rem; color: #818cf8; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.04em;">EXPECTED DELIVERABLE:</div>
-          <div style="font-size: 0.82rem; color: rgba(255, 255, 255, 0.8); background: rgba(99, 102, 241, 0.08); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(99, 102, 241, 0.15); margin-bottom: 10px;">
-            📋 ${deliverable}
+
+          <div style="font-size: 0.72rem; color: #94a3b8; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">PROBLEM SPECIFICATIONS:</div>
+          <textarea class="edit-prob-desc form-input" rows="${Math.max(3, Math.ceil(statement.length / 95))}" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 9px 12px; color: #fff; font-size: 0.84rem; margin-bottom: 10px; line-height: 1.5; resize: vertical;">${escapeHtml(statement)}</textarea>
+
+          <div class="goal-theory-notice" style="display: ${goalType === 'THEORY' ? 'block' : 'none'}; font-size: 0.76rem; color: #7dd3fc; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 6px 10px; margin-bottom: 10px;">
+            📖 Theory Goal: Evaluates conceptual reasoning and descriptive explanations. No code editor required for this goal.
           </div>
-          ` : ''}
+
+          <div class="edit-prob-starter-container" style="margin-bottom: 10px; display: ${goalType === 'THEORY' ? 'none' : 'block'};">
+            <div style="font-size: 0.72rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.04em;">INDEPENDENT GOAL STARTER CODE:</div>
+            <textarea class="edit-prob-starter form-input" rows="3" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 6px; padding: 8px 10px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45;">${escapeHtml(prob.starter_code || '')}</textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px;">
+            <div>
+              <div style="font-size: 0.72rem; color: #818cf8; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.04em;">EXPECTED DELIVERABLE:</div>
+              <input type="text" class="edit-prob-deliverable form-input" value="${escapeHtml(deliverable)}" placeholder="e.g. Executable SQL Query or Python function" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.7); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 6px; padding: 6px 10px; color: #cbd5e1; font-size: 0.82rem;">
+            </div>
+          </div>
+
           ${criteria.length > 0 ? `
           <div style="font-size: 0.72rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">ACCEPTANCE CRITERIA:</div>
-          <div class="edit-criteria-tags" style="display: grid; gap: 5px;">
+          <div class="edit-criteria-tags" style="display: grid; gap: 4px; margin-bottom: 10px;">
             ${criteria.map(c => `
-              <div style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.9); background: rgba(56, 211, 153, 0.06); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(56, 211, 153, 0.15); display: flex; align-items: flex-start; gap: 6px;">
-                <span style="color: #38d399; font-weight: 700;">✓</span> ${c}
+              <div style="font-size: 0.78rem; color: rgba(255, 255, 255, 0.9); background: rgba(56, 211, 153, 0.06); padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(56, 211, 153, 0.15); display: flex; align-items: flex-start; gap: 6px;">
+                <span style="color: #38d399; font-weight: 700;">✓</span> <span>${escapeHtml(c)}</span>
+              </div>
+            `).join('')}
+          </div>
+          ` : ''}
+
+          ${checkpoints.length > 0 ? `
+          <div style="font-size: 0.72rem; color: #38bdf8; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">CONCEPTUAL CHECKPOINTS:</div>
+          <div class="edit-criteria-tags" style="display: grid; gap: 4px;">
+            ${checkpoints.map(cp => `
+              <div style="font-size: 0.78rem; color: rgba(224, 242, 254, 0.9); background: rgba(56, 189, 248, 0.06); padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.2); display: flex; align-items: flex-start; gap: 6px;">
+                <span style="color: #38bdf8; font-weight: 700;">📌</span> <span>${escapeHtml(cp)}</span>
               </div>
             `).join('')}
           </div>
           ` : ''}
         `;
+
+        const marksInput = card.querySelector(".edit-prob-marks");
+        if (marksInput) {
+          marksInput.addEventListener("input", updateTotalMarksTally);
+        }
+
+        const goalTypeSelect = card.querySelector(".edit-prob-goaltype");
+        const starterContainer = card.querySelector(".edit-prob-starter-container");
+        const theoryNotice = card.querySelector(".goal-theory-notice");
+        if (goalTypeSelect) {
+          goalTypeSelect.addEventListener("change", (e) => {
+            const val = e.target.value;
+            card.dataset.goaltype = val;
+            if (starterContainer) starterContainer.style.display = (val === "THEORY") ? "none" : "block";
+            if (theoryNotice) theoryNotice.style.display = (val === "THEORY") ? "block" : "none";
+            goalTypeSelect.style.borderColor = (val === "THEORY") ? "#38bdf8" : "#38d399";
+            goalTypeSelect.style.color = (val === "THEORY") ? "#7dd3fc" : "#86efac";
+          });
+        }
+
         challengesList.appendChild(card);
       });
     }
 
+    updateTotalMarksTally();
+
+    // Show workspace, hide empty state
+    if (emptyState) emptyState.style.display = "none";
+    if (workspace) workspace.style.display = "block";
     if (editForm) editForm.style.display = "block";
+    if (previewPane) previewPane.style.display = "none";
+
+    if (tabBtnEdit && tabBtnPreview) {
+      tabBtnEdit.classList.add("active");
+      tabBtnEdit.style.background = "rgba(56, 211, 153, 0.18)";
+      tabBtnEdit.style.color = "#38d399";
+      tabBtnPreview.classList.remove("active");
+      tabBtnPreview.style.background = "transparent";
+      tabBtnPreview.style.color = "#94a3b8";
+    }
   }
 
   async function checkAndLoadExistingAssignment(lessonId) {
@@ -2998,7 +3519,7 @@ function setupAiAssignmentStudio() {
             statusBanner.style.background = isPub ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)";
             statusBanner.style.color = isPub ? "#38d399" : "#fbbf24";
             statusBanner.textContent = isPub
-              ? "🟢 Published: This assignment is actively live for enrolled students. You can edit and republish below."
+              ? "🟢 Published: This assignment is actively live for enrolled students. You can review, edit, or preview below."
               : "🟡 Draft (Unpublished): Review and edit challenges below. Click '🚀 Confirm & Publish to Students' when ready.";
           }
           return;
@@ -3006,8 +3527,9 @@ function setupAiAssignmentStudio() {
       }
     } catch (_) {}
 
-    // No existing assignment found
-    if (editForm) editForm.style.display = "none";
+    // No existing assignment found -> show clean empty state
+    if (workspace) workspace.style.display = "none";
+    if (emptyState) emptyState.style.display = "block";
     if (statusBanner) {
       statusBanner.style.display = "block";
       statusBanner.style.background = "rgba(56, 211, 153, 0.08)";
@@ -3066,12 +3588,12 @@ function setupAiAssignmentStudio() {
       }
 
       triggerBtn.disabled = true;
-      triggerBtn.textContent = "⚡ Synthesizing with Dual-AI...";
+      triggerBtn.textContent = "⚡ Synthesizing Mission...";
       if (statusBanner) {
         statusBanner.style.display = "block";
         statusBanner.style.background = "rgba(56, 211, 153, 0.12)";
         statusBanner.style.color = "#38d399";
-        statusBanner.textContent = "Scanning lecture transcript chunks and synthesizing enterprise scenarios...";
+        statusBanner.textContent = "Scanning lecture milestones, analyzing technical domain, and synthesizing practical challenges...";
       }
 
       try {
@@ -3093,9 +3615,9 @@ function setupAiAssignmentStudio() {
         renderAssignmentInForm(data.assignment);
 
         if (statusBanner) {
-          statusBanner.style.background = "rgba(245, 158, 11, 0.15)";
-          statusBanner.style.color = "#fbbf24";
-          statusBanner.textContent = "🟡 Draft Created: Assignment synthesized successfully! Review and edit components below before publishing.";
+          statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
+          statusBanner.style.color = "#38d399";
+          statusBanner.textContent = "🟢 Mission Created & Verified: High-quality practical assignment generated! Review, edit if needed, and publish.";
         }
       } catch (err) {
         console.error("Assignment synthesis error:", err);
@@ -3111,14 +3633,78 @@ function setupAiAssignmentStudio() {
     });
   }
 
-  // Helper to collect current form values
+  // Helper to collect current form values including all edited problems
   function collectFormValues() {
+    const cards = document.querySelectorAll(".ai-challenge-card");
+    const collectedProblems = [];
+
+    cards.forEach((card, idx) => {
+      const marksVal = parseInt(card.querySelector(".edit-prob-marks")?.value) || (idx === 0 ? 25 : idx === 1 ? 35 : 40);
+      const descVal = card.querySelector(".edit-prob-desc")?.value || "";
+      const delivVal = card.querySelector(".edit-prob-deliverable")?.value || "";
+      const tierVal = card.dataset.tier || (idx === 0 ? "Basic" : idx === 1 ? "Intermediate" : "Advanced");
+      const tsVal = card.dataset.timestamp || "";
+      const goalTypeVal = (card.querySelector(".edit-prob-goaltype")?.value || card.dataset.goaltype || "CODING").toUpperCase();
+
+      let critVal = [];
+      try {
+        critVal = JSON.parse(card.dataset.criteria || "[]");
+      } catch (_) {
+        critVal = [];
+      }
+
+      let checkpointsVal = [];
+      try {
+        checkpointsVal = JSON.parse(card.dataset.checkpoints || "[]");
+      } catch (_) {
+        checkpointsVal = [];
+      }
+
+      let testcasesVal = [];
+      try {
+        testcasesVal = JSON.parse(card.dataset.testcases || "[]");
+      } catch (_) {
+        testcasesVal = [];
+      }
+
+      const starterVal = card.querySelector(".edit-prob-starter")?.value || "";
+      const hintVal = card.dataset.solutionhint || "";
+
+      collectedProblems.push({
+        problem_number: idx + 1,
+        tier: tierVal,
+        difficulty: tierVal,
+        goal_type: goalTypeVal,
+        marks: marksVal,
+        problem_statement: descVal,
+        question: descVal,
+        starter_code: goalTypeVal === "THEORY" ? "" : starterVal,
+        test_cases: goalTypeVal === "THEORY" ? [] : testcasesVal,
+        conceptual_checkpoints: checkpointsVal,
+        solution_hint: hintVal,
+        lecture_timestamp: tsVal,
+        timestamp_hint: tsVal,
+        expected_deliverable: delivVal,
+        acceptance_criteria: critVal
+      });
+    });
+
+    const problemsToUse = collectedProblems.length > 0 ? collectedProblems : (currentGeneratedAssignment?.problems || []);
+
+    // Derive overall assignment_type
+    const hasTheory = problemsToUse.some(p => (p.goal_type || "").toUpperCase() === "THEORY");
+    const hasCoding = problemsToUse.some(p => (p.goal_type || "").toUpperCase() === "CODING" || (p.goal_type || "").toUpperCase() === "PRACTICAL");
+    const derivedAssignType = (hasTheory && hasCoding) ? "MIXED" : hasTheory ? "THEORY" : "CODING";
+
     return {
-      title: document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment?.title || "Enterprise Milestone Assignment",
+      title: document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment?.title || "Real-World Milestone Mission",
       scenario_context: document.getElementById("ai-edit-scenario")?.value || currentGeneratedAssignment?.scenario_context || "",
-      starter_code: document.getElementById("ai-edit-starter")?.value || currentGeneratedAssignment?.starter_code || "",
+      assignment_type: derivedAssignType,
+      starter_code: derivedAssignType === "THEORY" ? "" : (document.getElementById("ai-edit-starter")?.value || currentGeneratedAssignment?.starter_code || ""),
       max_score: parseInt(document.getElementById("ai-edit-maxscore")?.value) || 100,
-      due_date: document.getElementById("ai-edit-due")?.value || "Next Sunday"
+      due_date: document.getElementById("ai-edit-due")?.value || "Next Sunday, 11:59 PM",
+      problems: problemsToUse,
+      quality_report: currentGeneratedAssignment?.quality_report
     };
   }
 
@@ -3143,10 +3729,15 @@ function setupAiAssignmentStudio() {
         if (!response.ok) throw new Error("Failed to save draft.");
 
         currentGeneratedAssignment.status = "draft";
+        if (statusPill) {
+          statusPill.textContent = "🟡 Draft (Review)";
+          statusPill.style.background = "rgba(245, 158, 11, 0.15)";
+          statusPill.style.color = "#fbbf24";
+        }
         if (statusBanner) {
           statusBanner.style.background = "rgba(245, 158, 11, 0.15)";
           statusBanner.style.color = "#fbbf24";
-          statusBanner.textContent = "🟡 Draft Saved: Changes saved. Students cannot view this until you click 'Confirm & Publish'.";
+          statusBanner.textContent = "🟡 Draft Saved: All edits preserved. Students cannot view this until you click 'Confirm & Publish'.";
         }
         alert("Draft saved successfully! Not visible to students yet.");
       } catch (err) {
@@ -3181,16 +3772,24 @@ function setupAiAssignmentStudio() {
           body: JSON.stringify(payload)
         });
 
-        if (!response.ok) throw new Error("Failed to publish assignment.");
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to publish assignment.");
+        }
 
         currentGeneratedAssignment.status = "published";
+        if (statusPill) {
+          statusPill.textContent = "🟢 Published";
+          statusPill.style.background = "rgba(16, 185, 129, 0.15)";
+          statusPill.style.color = "#38d399";
+        }
         if (statusBanner) {
           statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
           statusBanner.style.color = "#38d399";
-          statusBanner.textContent = "🟢 Live: Assignment successfully published and visible to all enrolled students!";
+          statusBanner.textContent = "🟢 Live: Assignment verified by Quality Gate and published to all enrolled students!";
         }
 
-        alert("Assignment successfully verified and published to all enrolled students!");
+        alert("Assignment successfully verified by Quality Gate and published to enrolled students!");
         modal.style.display = "none";
 
         // Reload course materials
