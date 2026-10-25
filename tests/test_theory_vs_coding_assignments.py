@@ -366,6 +366,17 @@ class TestTheoryVsCodingAssignments(unittest.TestCase):
             self.assertEqual(res["status"], "passed")
             self.assertTrue(res["unlocked_next_goal"])
 
+    def test_classify_introductory_lecture_as_theory(self):
+        # Lesson 1: 2m 41s lecture introducing Python without writing code
+        lesson_intro = {
+            "title": "1.Python for Absolute Beginners   Learn Python from Scratch in 2025! 1080p (2m 41s)",
+            "duration": "2m 41s",
+            "duration_seconds": 161,
+            "raw_transcript": "Welcome to Python. High level programming language. Created in 1991 by Guido van Rossum. Used in Web development, PUBG game engines, and automation of emails and excel sheets."
+        }
+        res = self.engine.classify_assignment_mode(lesson_intro, lesson_intro["raw_transcript"])
+        self.assertEqual(res["assignment_type"], "THEORY", "Introductory motivational overview lecture must be classified as THEORY so beginners are not overwhelmed.")
+
 
 if __name__ == "__main__":
     unittest.main()

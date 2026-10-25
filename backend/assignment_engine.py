@@ -472,6 +472,42 @@ class AssignmentEngine:
         summary_lower = str(lecture_summary).lower()
         combined = f"{title} {summary_lower}"
 
+        # -----------------------------------------------------------------
+        # GUARD: Detect Introductory / Overview Lectures (Must be THEORY)
+        # -----------------------------------------------------------------
+        intro_keywords = [
+            "introduction", "intro to", "overview", "what is", "why learn", "why python",
+            "history", "use cases", "applications of", "getting started", "welcome", "roadmap", "features of"
+        ]
+        is_intro_title = any(kw in title for kw in intro_keywords) or title.startswith("1.") or title.startswith("01.") or title.startswith("1 ")
+
+        explicit_coding_topics = [
+            "function", "recursion", "variable", "data type", "loop", "array", "list", "tuple", "dictionary",
+            "class", "object", "query", "queries", "crud", "api", "endpoint", "pointer", "dsa", "leetcode", "build", "hands-on"
+        ]
+        teaches_code = any(topic in combined for topic in explicit_coding_topics)
+
+        # Look for actual code implementation in the summary/transcript
+        code_syntax_patterns = [
+            r"\bdef\s+[a-zA-Z_]",
+            r"\bprint\s*\(",
+            r"\bimport\s+[a-zA-Z_]",
+            r"\bclass\s+[a-zA-Z_]",
+            r"\bselect\s+.+\bfrom\b",
+            r"\bcreate\s+table\b",
+            r"\b[a-zA-Z_]\w*\s*=\s*(?:[0-9]+|True|False|\[|\()"
+        ]
+        has_actual_code = any(re.search(p, summary_lower, re.IGNORECASE) for p in code_syntax_patterns)
+        duration_sec = int(lesson.get("duration_seconds") or 0)
+
+        # If it is strictly an introductory overview lecture without code, or short intro without explicit coding topics:
+        if (is_intro_title or not has_actual_code) and not teaches_code:
+            return {
+                "assignment_type": "THEORY",
+                "primary_learning_objective": "Foundational understanding of core concepts, origins, and real-world application domains covered in the lecture.",
+                "reasoning": "Lecture is an introductory conceptual overview without hands-on coding demonstrations. Classifying as THEORY ensures accessible, encouraging beginner milestones directly grounded in the teacher's examples."
+            }
+
         # 2. Check Strong Theory Keywords
         theory_indicators = [
             "acid", "normalization", "normal form", "1nf", "2nf", "3nf", "bcnf",
@@ -507,6 +543,7 @@ class AssignmentEngine:
             "1. 'THEORY':\n"
             "   - Core objective is conceptual understanding, architecture, models, trade-offs, protocols, theory, derivations, or scenario analysis.\n"
             "   - Examples: Operating Systems theory (process scheduling, page replacement, deadlocks), DBMS concepts (ACID properties, normalization 1NF-BCNF, relational algebra, concurrency control), Networking fundamentals (OSI model, TCP/IP handshake, routing protocols), Software Engineering SDLC models, Computer Architecture, Cryptography principles.\n"
+            "   - MANDATORY INTRO GUARD: If this lecture is Lesson 1, an orientation, an overview, history, language features, or 'where is it used' (e.g. 'Introduction to Python', 'What is Python') WITHOUT the instructor writing coding exercises in the video: IT MUST BE CLASSIFIED AS 'THEORY'. Never overwhelm absolute beginners with coding on an introductory overview video!\n"
             "   - STRICT GUARD: Do NOT classify as CODING merely because the lecture mentions a programming language (e.g. C, Python, SQL) or an algorithm (e.g. Round Robin, Dijkstra). If the student's task is to analyze, calculate Gantt charts, explain, or evaluate, it is strictly THEORY.\n\n"
             "2. 'CODING':\n"
             "   - Core objective is writing, executing, and testing software code or queries.\n"
@@ -583,19 +620,25 @@ class AssignmentEngine:
         language = domain_info.get("language", "code")
         deliverable_desc = domain_info.get("default_deliverable", "Production code")
         timestamps = lecture_analysis.get("timestamps", ["00:00"])
+        duration_sec = int(lesson.get("duration_seconds") or 0)
+        duration_label = lesson.get("duration") or (f"{duration_sec // 60:02d}:{duration_sec % 60:02d}" if duration_sec else "02:40")
 
         if assign_type == "THEORY":
             system_prompt = (
                 f"You are a Senior Academic Professor and Principal Curriculum Architect specializing in {domain_name}.\n"
-                "Your objective is to design a high-quality, comprehensive THEORY & CONCEPTUAL ASSIGNMENT grounded in the lecture.\n\n"
-                "CORE PEDAGOGICAL PRINCIPLES:\n"
-                "1. NO PROGRAMMING CODE / NO CODE EDITORS: Top-level starter_code is \"\". Goals must not require writing code.\n"
-                "2. DYNAMIC GOAL MODALITIES:\n"
-                "   - Goal 1 (Beginner / Foundation, 25 marks): Core concept definitions or quick diagnostic MCQ / mental model.\n"
-                "   - Goal 2 (Intermediate / Analytical, 35 marks): Deep scenario analysis, calculation (NUMERIC if applicable, e.g. Gantt TAT/WT, Page faults, Subnetting), or trade-off evaluation.\n"
-                "   - Goal 3 (Advanced / Critical Synthesis, 40 marks): Architectural trade-offs, system edge cases, and real-world failure mode evaluations.\n"
-                "3. CHECKPOINTS & EVALUATION: In each problem, provide 'conceptual_checkpoints' and 'acceptance_criteria'. 'test_cases' is [].\n"
-                "4. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' (constructive step-by-step guidance without spoiling answers) and 'solution_hint'.\n\n"
+                "Your objective is to design a high-quality, comprehensive THEORY & CONCEPTUAL ASSIGNMENT strictly grounded in the lecture.\n\n"
+                "CRITICAL PEDAGOGICAL BOUNDARIES (ZERO HALLUCINATION & STRICT LECTURE GROUNDING):\n"
+                "1. STRICT LECTURE GROUNDING: You MUST base all scenarios and questions strictly on the instructor's spoken words, explanations, and real-world examples in the provided transcript!\n"
+                "2. NO OUTSIDE/ADVANCED FABRICATIONS: If the instructor gave an introduction or conceptual overview (e.g., Python is high-level, released in 1991 by Guido van Rossum, used in web, game engines like PUBG, and automation of emails/Excel), the goals MUST focus on those exact topics!\n"
+                "3. ACCESSIBLE & MOTIVATING: Never intimidate students. Design encouraging, clear questions that make absolute beginners feel confident and engaged.\n"
+                f"4. ACCURATE TIMESTAMPS: Video duration is {duration_label} ({duration_sec}s). All lecture_timestamp values MUST fall between 00:00 and {duration_label}. Never invent timestamps beyond video length.\n"
+                "5. NO PROGRAMMING CODE / NO CODE EDITORS: Top-level starter_code is \"\". Goals must not require writing code.\n"
+                "6. DYNAMIC GOAL MODALITIES (100 MARKS TOTAL):\n"
+                "   - Goal 1 (Beginner / Foundation, 25 marks): Core concept definitions and mental models taught in the video.\n"
+                "   - Goal 2 (Intermediate / Analytical, 35 marks): Deep conceptual scenario analysis or trade-off evaluation based on lecture examples.\n"
+                "   - Goal 3 (Advanced / Real-World Application, 40 marks): Analyzing the real-world application domains and practical use cases highlighted by the instructor.\n"
+                "7. CHECKPOINTS & EVALUATION: In each problem, provide 'conceptual_checkpoints' and 'acceptance_criteria'. 'test_cases' is [].\n"
+                "8. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint'.\n\n"
                 "OUTPUT FORMAT (Strict JSON Object):\n"
                 "{\n"
                 '  "title": string,\n'
@@ -632,22 +675,25 @@ class AssignmentEngine:
 
             user_prompt = (
                 f"LECTURE TITLE: {lesson.get('title')}\n"
+                f"LECTURE DURATION: {duration_label} ({duration_sec}s)\n"
                 f"SUBJECT DOMAIN: {domain_name}\n"
                 f"ASSIGNMENT TYPE: THEORY (Conceptual & analytical mastery)\n\n"
-                f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the high-quality milestone assignment in strict JSON format."
+                f"LECTURE HIGH-SIGNAL SAMPLES & TRANSCRIPT:\n{lecture_analysis.get('summary')}\n\n"
+                "Synthesize the high-quality, lecture-grounded milestone assignment in strict JSON format. Strictly follow all grounding and timestamp limits."
             )
 
         elif assign_type == "MIXED":
             system_prompt = (
                 f"You are a Lead Curriculum Architect and Principal Engineer specializing in {domain_name}.\n"
-                "Your objective is to design a high-impact MIXED assignment seamlessly combining conceptual theory, analytical calculations, and hands-on coding.\n\n"
+                "Your objective is to design a high-impact MIXED assignment seamlessly combining conceptual theory, analytical calculations, and hands-on coding strictly grounded in this lecture.\n\n"
                 "CORE PEDAGOGICAL PRINCIPLES:\n"
-                "1. PROGRESSIVE MODALITIES:\n"
+                "1. STRICT LECTURE GROUNDING: All questions and coding exercises must strictly match what the instructor actually taught in the lecture transcript! Do not introduce unrelated advanced topics.\n"
+                f"2. ACCURATE TIMESTAMPS: Video duration is {duration_label}. All timestamps must fall within 00:00 and {duration_label}.\n"
+                "3. PROGRESSIVE MODALITIES:\n"
                 "   - Goal 1 (Theory / Conceptual / MCQ, 25 marks): 'goal_type': 'THEORY' or 'MCQ', starter_code: \"\", test_cases: []. Covers mental models or core architecture.\n"
                 "   - Goal 2 (Analytical / Coding, 35 marks): 'goal_type': 'NUMERIC' or 'CODING', practical calculation or baseline implementation.\n"
-                "   - Goal 3 (Advanced Coding, 40 marks): 'goal_type': 'CODING', with dedicated starter_code in " + language.upper() + " and test_cases (public and hidden).\n"
-                "2. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
+                "   - Goal 3 (Applied Coding, 40 marks): 'goal_type': 'CODING', with dedicated starter_code in " + language.upper() + " and test_cases (public and hidden).\n"
+                "4. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
                 "OUTPUT FORMAT (Strict JSON Object):\n"
                 "{\n"
                 '  "title": string,\n'
@@ -701,6 +747,7 @@ class AssignmentEngine:
 
             user_prompt = (
                 f"LECTURE TITLE: {lesson.get('title')}\n"
+                f"LECTURE DURATION: {duration_label} ({duration_sec}s)\n"
                 f"PRIMARY TECHNICAL DOMAIN: {domain_name} ({language})\n"
                 f"ASSIGNMENT TYPE: MIXED (Conceptual foundations + hands-on code)\n\n"
                 f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
@@ -710,13 +757,14 @@ class AssignmentEngine:
         else:  # CODING
             system_prompt = (
                 f"You are a Lead Curriculum Architect and Principal Engineer specializing in {domain_name}.\n"
-                "Your objective is to design an engaging, practical CODING assignment where every challenge is an impactful real-world software mission.\n\n"
-                "CORE PEDAGOGICAL PRINCIPLES:\n"
-                "1. CLEAN REAL-WORLD MISSION: Clear, direct requirements focusing on expected inputs, outputs, and edge cases.\n"
-                f"2. LANGUAGE ALIGNMENT: Technical domain is {domain_name} ({language.upper()}). All code and deliverables must be in {language.upper()}.\n"
-                "3. INDEPENDENT STARTER CODE & TEST CASES: Each coding goal must have its own starter snippet and 2-3 concrete test_cases (with is_hidden: true for edge cases).\n"
-                "4. PROGRESSIVE TIERS (100 MARKS TOTAL): Goal 1 (25 marks), Goal 2 (35 marks), Goal 3 (40 marks).\n"
-                "5. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
+                "Your objective is to design an engaging, practical CODING assignment strictly grounded in what was demonstrated in this lecture.\n\n"
+                "CRITICAL PEDAGOGICAL BOUNDARIES (ZERO HALLUCINATION & STRICT PROPORTIONALITY):\n"
+                "1. STRICT LECTURE GROUNDING: Every challenge MUST directly derive from concepts, syntax, and techniques taught in this specific lecture! DO NOT introduce advanced topics (such as multiline CSV parsing, custom exceptions, file systems, or complex libraries) if the lecture only covers foundational syntax or basics!\n"
+                "2. PROPORTIONATE TO STUDENT LEVEL: For beginner lessons, tasks must be friendly, accessible, and build confidence. Never terrify students with un-taught concepts!\n"
+                f"3. ACCURATE TIMESTAMPS: Video duration is strictly {duration_label} ({duration_sec}s). All lecture_timestamp values MUST be within 00:00 and {duration_label}. Never fabricate timestamps beyond the video length!\n"
+                "4. INDEPENDENT STARTER CODE & TEST CASES: Each coding goal must have its own starter snippet and 2-3 concrete test_cases (with is_hidden: true for edge cases).\n"
+                "5. PROGRESSIVE TIERS (100 MARKS TOTAL): Goal 1 (25 marks), Goal 2 (35 marks), Goal 3 (40 marks).\n"
+                "6. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
                 "OUTPUT FORMAT (Strict JSON Object):\n"
                 "{\n"
                 '  "title": string,\n'
@@ -739,7 +787,7 @@ class AssignmentEngine:
                 '      "acceptance_criteria": [string, string],\n'
                 '      "solution_hint": string,\n'
                 '      "mentor_guidance": string,\n'
-                '      "lecture_timestamp": string (e.g. "~' + (timestamps[0] if timestamps else "00:15:00") + '"),\n'
+                '      "lecture_timestamp": string,\n'
                 '      "expected_deliverable": string\n'
                 '    }\n'
                 '  ],\n'
@@ -755,10 +803,11 @@ class AssignmentEngine:
 
             user_prompt = (
                 f"LECTURE TITLE: {lesson.get('title')}\n"
+                f"LECTURE DURATION: {duration_label} ({duration_sec}s)\n"
                 f"PRIMARY TECHNICAL DOMAIN: {domain_name} ({language})\n"
                 f"ASSIGNMENT TYPE: CODING\n\n"
-                f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the practical milestone coding assignment in strict JSON format with per-goal starter code, test cases, and mentor guidance."
+                f"LECTURE HIGH-SIGNAL SAMPLES & TRANSCRIPT:\n{lecture_analysis.get('summary')}\n\n"
+                "Synthesize the practical milestone coding assignment in strict JSON format with per-goal starter code, test cases, and mentor guidance. Strictly adhere to the lecture grounding and duration constraints."
             )
 
         return system_prompt, user_prompt, classification
