@@ -27,10 +27,14 @@ class AssignmentEngine:
     GROQ_MODELS = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
     GEMINI_MODEL = "gemini-2.5-flash"
 
+    OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+    OPENROUTER_MODELS = ["nvidia/nemotron-3.5-lightning:free", "cohere/north-mini-code:free"]
+
     def __init__(self, db: DBAdapter):
         self.db = db
         self.groq_key = (Config.GROQ_API_KEY or "").strip()
         self.gemini_key = (Config.GEMINI_API_KEY or "").strip()
+        self.openrouter_key = (Config.OPENROUTER_API_KEY or "").strip()
 
     def _call_llm(self, system_prompt: str, user_prompt: str, temperature: float = 0.2, is_json: Optional[bool] = None) -> Optional[str]:
         """
@@ -100,6 +104,34 @@ class AssignmentEngine:
                         logger.warning(f"[AssignmentEngine] Groq model {model_name} warning ({r.status_code}): {r.text[:150]}")
                 except Exception as e:
                     logger.warning(f"[AssignmentEngine] Groq execution exception on {model_name}: {e}")
+
+        # 3. High-Quality Fallback Engine: OpenRouter
+        if self.openrouter_key:
+            or_headers = {
+                "Authorization": f"Bearer {self.openrouter_key}",
+                "Content-Type": "application/json"
+            }
+            for model_name in self.OPENROUTER_MODELS:
+                try:
+                    payload = {
+                        "model": model_name,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "temperature": temperature,
+                        "max_tokens": 4000
+                    }
+                    r = requests.post(self.OPENROUTER_API_URL, headers=or_headers, json=payload, timeout=20)
+                    if r.ok:
+                        res_json = r.json()
+                        content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if content:
+                            return content
+                    else:
+                        logger.warning(f"[AssignmentEngine] OpenRouter {model_name} notice ({r.status_code}): {r.text[:150]}")
+                except Exception as e:
+                    logger.warning(f"[AssignmentEngine] OpenRouter exception on {model_name}: {e}")
 
         return None
 

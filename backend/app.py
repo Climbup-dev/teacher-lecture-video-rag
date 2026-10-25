@@ -1784,7 +1784,9 @@ def chat_query(req: ChatRequest, request: Request):
             Config.GEMINI_API_KEY,
             db,
             groq_api_key=Config.GROQ_API_KEY,
-            groq_model=Config.GROQ_MODEL
+            groq_model=Config.GROQ_MODEL,
+            openrouter_api_key=Config.OPENROUTER_API_KEY,
+            openrouter_model=Config.OPENROUTER_MODEL
         )
         response = engine.answer_query(
             query=req.query,

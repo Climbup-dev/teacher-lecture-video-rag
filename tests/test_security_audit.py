@@ -2,6 +2,7 @@ import sys
 import unittest
 from fastapi.testclient import TestClient
 from backend.app import app
+from backend.config import Config
 from backend.security import (
     generate_signed_stream_token, 
     verify_signed_stream_token,
@@ -13,6 +14,12 @@ class SecurityAuditTestSuite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(app)
+        cls.orig_admin_key = Config.ADMIN_API_KEY
+        Config.ADMIN_API_KEY = "test_audit_admin_key_sec"
+
+    @classmethod
+    def tearDownClass(cls):
+        Config.ADMIN_API_KEY = cls.orig_admin_key
 
     def test_01_blocked_downloader_user_agents(self):
         """Verify that automated downloaders (IDM, yt-dlp, curl, etc.) are strictly blocked."""

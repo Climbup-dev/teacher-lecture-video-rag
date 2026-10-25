@@ -7,7 +7,15 @@ from backend.db_adapter import DBAdapter
 from backend.groq_intelligence import GroqIntelligence
 
 class RAGEngine:
-    def __init__(self, gemini_api_key: str, db_adapter: DBAdapter, groq_api_key: Optional[str] = None, groq_model: Optional[str] = None):
+    def __init__(
+        self,
+        gemini_api_key: str,
+        db_adapter: DBAdapter,
+        groq_api_key: Optional[str] = None,
+        groq_model: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        openrouter_model: Optional[str] = None
+    ):
         if not gemini_api_key:
             raise ValueError("Gemini API Key is required.")
         self.api_key = gemini_api_key
@@ -15,6 +23,8 @@ class RAGEngine:
         self.embedder = VectorEmbedder(gemini_api_key)
         self.generation_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
         self.groq = GroqIntelligence(api_key=groq_api_key, model=groq_model)
+        self.openrouter_api_key = (openrouter_api_key or "").strip()
+        self.openrouter_model = openrouter_model or "nvidia/nemotron-3.5-lightning:free"
 
     STOP_WORDS = {
         'hai', 'kya', 'in', 'the', 'a', 'an', 'sir', 'tell', 'explain', 'about',
@@ -140,7 +150,7 @@ class RAGEngine:
         1. Ultra-fast Groq Qwen 27B (~1.2s response time) for instant student feedback.
         2. High-precision Gemini 2.5 Flash as robust secondary fallback.
         """
-        # --- TIER 1: Ultra-Fast Groq Engine ---
+        # --- TIER 1: Ultra-Fast Groq Engine (~0.8s) ---
         if hasattr(self, "groq") and self.groq.is_available:
             groq_key = self.groq.api_key
             groq_endpoint = "https://api.groq.com/openai/v1/chat/completions"
@@ -148,7 +158,7 @@ class RAGEngine:
                 "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json"
             }
-            models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+            models = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
             for gm in models:
                 try:
                     payload = {
@@ -168,7 +178,39 @@ class RAGEngine:
                 except Exception:
                     continue
 
-        # --- TIER 2: Gemini Enterprise Fallback ---
+        # --- TIER 2: OpenRouter High-Quality Free Backup ---
+        openrouter_key = getattr(self, "openrouter_api_key", "")
+        if openrouter_key:
+            openrouter_endpoint = "https://openrouter.ai/api/v1/chat/completions"
+            or_headers = {
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json"
+            }
+            or_models = [
+                getattr(self, "openrouter_model", "nvidia/nemotron-3.5-lightning:free"),
+                "cohere/north-mini-code:free",
+                "liquid/lfm-2.5-2.6b:free"
+            ]
+            for om in or_models:
+                try:
+                    payload = {
+                        "model": om,
+                        "messages": [
+                            {"role": "system", "content": system_instructions},
+                            {"role": "user", "content": safe_query}
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 1024
+                    }
+                    r = requests.post(openrouter_endpoint, headers=or_headers, json=payload, timeout=10)
+                    if r.status_code == 200:
+                        choices = r.json().get("choices", [])
+                        if choices and choices[0].get("message", {}).get("content"):
+                            return choices[0]["message"]["content"].strip()
+                except Exception:
+                    continue
+
+        # --- TIER 3: Gemini Enterprise Fallback (Preserved primarily for video processing) ---
         payload = {
             "contents": [{"parts": [{"text": f"{system_instructions}\n\nSTUDENT QUESTION:\n{safe_query}"}]}],
             "generationConfig": {
