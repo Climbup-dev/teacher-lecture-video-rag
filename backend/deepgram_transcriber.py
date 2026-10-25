@@ -11,15 +11,26 @@ class DeepgramTranscriber:
         self.api_key = api_key
         self.base_url = "https://api.deepgram.com/v1/listen"
 
-    def transcribe_file(self, audio_file_path: str) -> Dict[str, Any]:
-        """
-        Transcribes a local audio file with Nova-2, diarization, punctuation,
-        and utterance-level timestamps.
-        """
-        path = Path(audio_file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
+    def _get_audio_duration(self, audio_path: Path) -> float:
+        """Probes exact audio duration in seconds using FFmpeg/imageio."""
+        try:
+            import subprocess
+            import shutil
+            import imageio_ffmpeg
+            ffmpeg_bin = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
+            cmd = [ffmpeg_bin, "-i", str(audio_path)]
+            res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+            for line in res.stderr.splitlines():
+                if "Duration:" in line:
+                    part = line.split("Duration:")[1].split(",")[0].strip()
+                    h, m, s = part.split(":")
+                    return float(h) * 3600 + float(m) * 60 + float(s)
+        except Exception:
+            pass
+        return 0.0
 
+    def _transcribe_single_file(self, path: Path) -> Dict[str, Any]:
+        """Low-level single audio file upload to Deepgram Nova-2."""
         params = {
             "model": "nova-2",
             "detect_language": "true",
@@ -53,7 +64,7 @@ class DeepgramTranscriber:
                 params=params,
                 headers=headers,
                 data=audio_file,
-                timeout=900
+                timeout=600
             )
 
         if response.status_code != 200:
@@ -61,6 +72,85 @@ class DeepgramTranscriber:
 
         data = response.json()
         return self._format_response(data)
+
+    def transcribe_file(self, audio_file_path: str) -> Dict[str, Any]:
+        """
+        Transcribes a local audio file with Nova-2, diarization, punctuation,
+        and utterance-level timestamps. For long lectures (>30m), automatically
+        slices into manageable segments to prevent Deepgram HTTP 504 timeouts.
+        """
+        path = Path(audio_file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
+
+        duration = self._get_audio_duration(path)
+        CHUNK_THRESHOLD = 1800.0  # 30 minutes
+        CHUNK_DURATION = 1200.0   # 20 minutes
+
+        # If short audio (<= 30 minutes), transcribe directly
+        if duration <= CHUNK_THRESHOLD:
+            return self._transcribe_single_file(path)
+
+        # Long lecture detected: Chunked transcription with timestamp preservation
+        import subprocess
+        import shutil
+        import imageio_ffmpeg
+        ffmpeg_bin = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
+
+        total_chunks = int((duration + CHUNK_DURATION - 1) // CHUNK_DURATION)
+        all_utterances: List[Dict[str, Any]] = []
+        transcript_parts: List[str] = []
+
+        chunk_dir = path.parent / f"chunks_{path.stem}"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            for idx in range(total_chunks):
+                start_s = idx * CHUNK_DURATION
+                seg_dur = min(CHUNK_DURATION, duration - start_s)
+                if seg_dur <= 0:
+                    break
+
+                chunk_file = chunk_dir / f"chunk_{idx}{path.suffix}"
+                # Fast slice with -c copy
+                cmd = [
+                    ffmpeg_bin, "-y",
+                    "-ss", str(start_s),
+                    "-t", str(seg_dur),
+                    "-i", str(path),
+                    "-c", "copy",
+                    str(chunk_file)
+                ]
+                subprocess.run(cmd, capture_output=True, check=True)
+
+                # Transcribe slice
+                res = self._transcribe_single_file(chunk_file)
+                if res.get("full_transcript"):
+                    transcript_parts.append(res["full_transcript"])
+
+                for utt in res.get("utterances", []):
+                    abs_start = round(utt["start_seconds"] + start_s, 2)
+                    abs_end = round(utt["end_seconds"] + start_s, 2)
+                    s_min, s_sec = divmod(int(abs_start), 60)
+                    e_min, e_sec = divmod(int(abs_end), 60)
+                    utt["start_seconds"] = abs_start
+                    utt["end_seconds"] = abs_end
+                    utt["timestamp_label"] = f"{s_min:02d}:{s_sec:02d} - {e_min:02d}:{e_sec:02d}"
+                    all_utterances.append(utt)
+
+                # Remove temporary chunk to save disk
+                if chunk_file.exists():
+                    chunk_file.unlink(missing_ok=True)
+
+            return {
+                "full_transcript": "\n".join(transcript_parts),
+                "duration_seconds": duration,
+                "utterances": all_utterances,
+                "raw_metadata": {"chunked": True, "total_chunks": total_chunks, "duration": duration}
+            }
+        finally:
+            # Cleanup chunk dir
+            shutil.rmtree(chunk_dir, ignore_errors=True)
 
     def transcribe_url(self, audio_url: str) -> Dict[str, Any]:
         """Transcribes audio from a remote URL."""
