@@ -385,6 +385,8 @@ class DBAdapter:
                     emb = c.get("embedding")
                     if emb and isinstance(emb, list) and len(emb) == 768:
                         row["embedding"] = emb
+                    else:
+                        row["embedding"] = [0.0] * 768
                     supabase_rows.append(row)
 
                 res = self.session.post(

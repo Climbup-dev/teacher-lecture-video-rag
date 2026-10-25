@@ -177,6 +177,29 @@ class IngestionJobManager:
             if self._is_cancelled(job_id): return
 
             # Check if audio was already extracted in a prior run
+            if clean_audio_path and Path(clean_audio_path).exists():
+                # If existing audio is oversized (>50MB), compress it to 16kHz mono to prevent Deepgram 504 Gateway Timeout
+                try:
+                    old_fpath = Path(clean_audio_path)
+                    if old_fpath.stat().st_size > 50 * 1024 * 1024:
+                        logger.info(f"Existing audio is {old_fpath.stat().st_size / (1024*1024):.1f}MB (>50MB). Compressing to compact 16kHz mono...")
+                        compact_path = extract_and_clean_audio(str(old_fpath))
+                        if compact_path and Path(compact_path).exists() and compact_path != str(old_fpath):
+                            try:
+                                old_fpath.unlink()
+                            except Exception:
+                                pass
+                            clean_audio_path = compact_path
+                            self.db.update_job_stage(
+                                job_id,
+                                stage="AUDIO_EXTRACTION",
+                                progress_percent=40,
+                                stage_message="Audio compressed to compact 16kHz mono.",
+                                checkpoint_data={"clean_audio_path": clean_audio_path}
+                            )
+                except Exception as comp_err:
+                    logger.warning(f"Notice on compressing existing audio: {comp_err}")
+
             if not clean_audio_path or not Path(clean_audio_path).exists():
                 self.db.update_job_stage(
                     job_id,

@@ -881,8 +881,10 @@ async def get_lesson_hls_playlist(
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("#EXT-X-KEY:"):
-            # Enforce clean key URI without ANY credentials (?pk=..., ?st=..., etc.)
+            # Enforce clean key URI and propagate signed token if provided
             clean_key_line = re.sub(r'URI="([^"?]+)(?:\?[^"]*)?"', r'URI="\1"', stripped)
+            if st:
+                clean_key_line = re.sub(r'URI="([^"]+)"', rf'URI="\1?st={st}"', clean_key_line)
             rewritten_lines.append(clean_key_line)
         else:
             rewritten_lines.append(stripped)

@@ -292,9 +292,15 @@ class RAGEngine:
         if hasattr(self, "groq") and self.groq.is_available:
             lesson_overview = ""
             if all_chunks:
-                sample_topics = [c.get("topic_name", "") for c in all_chunks[:6] if c.get("topic_name")]
-                sample_concepts = [c.get("key_concepts", "") for c in all_chunks[:6] if c.get("key_concepts")]
-                lesson_overview = f"Topics: {', '.join(sample_topics)}. Concepts: {', '.join(sample_concepts)}"
+                sample_topics = [str(c.get("topic_name", "")) for c in all_chunks[:6] if c.get("topic_name")]
+                sample_concepts = []
+                for c in all_chunks[:6]:
+                    kc = c.get("key_concepts", [])
+                    if isinstance(kc, list):
+                        sample_concepts.extend([str(k) for k in kc if k])
+                    elif isinstance(kc, str) and kc.strip():
+                        sample_concepts.append(kc.strip())
+                lesson_overview = f"Topics: {', '.join(sample_topics)}. Concepts: {', '.join(sample_concepts[:12])}"
 
             groq_analysis = self.groq.analyze_query(
                 query=safe_query,
