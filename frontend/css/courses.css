@@ -781,7 +781,7 @@
   position: fixed;
   inset: 0;
   z-index: 9999;
-  display: flex;               /* toggled to none/flex by JS */
+  display: none;               /* toggled to none/flex by JS */
   align-items: center;
   justify-content: center;
   background: rgba(4, 7, 18, 0.78);
@@ -789,6 +789,18 @@
   -webkit-backdrop-filter: blur(6px);
   padding: 24px 16px;
   animation: ccOverlayIn 0.18s ease;
+}
+
+.cc-modal-overlay.active,
+.cc-modal-overlay[style*="display: flex"],
+.cc-modal-overlay[style*="display:block"],
+.cc-modal-overlay[style*="display: block"] {
+  display: flex !important;
+}
+
+.cc-modal-overlay[style*="display: none"],
+.cc-modal-overlay[style*="display:none"] {
+  display: none !important;
 }
 
 @keyframes ccOverlayIn {

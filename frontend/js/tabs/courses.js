@@ -19,17 +19,19 @@ export function initCoursesTab() {
   // Toggle Create Course Form
   if (btnShowCreate && createPanel) {
     btnShowCreate.addEventListener("click", () => {
-      createPanel.style.display = "block";
-      createPanel.scrollIntoView({ behavior: "smooth" });
+      createPanel.classList.add("active");
+      createPanel.style.display = "flex";
     });
   }
   if (btnHideCreate && createPanel) {
     btnHideCreate.addEventListener("click", () => {
+      createPanel.classList.remove("active");
       createPanel.style.display = "none";
     });
   }
   if (btnCancelCreate && createPanel) {
     btnCancelCreate.addEventListener("click", () => {
+      createPanel.classList.remove("active");
       createPanel.style.display = "none";
     });
   }

@@ -874,6 +874,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Toggle Create Course Modal
   function openCreateCourseModal() {
     if (createCoursePanel) {
+      createCoursePanel.classList.add("active");
       createCoursePanel.style.display = "flex";
       document.body.style.overflow = "hidden";
       const titleInput = document.getElementById("new-course-title");
@@ -882,6 +883,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   function closeCreateCourseModal() {
     if (createCoursePanel) {
+      createCoursePanel.classList.remove("active");
       createCoursePanel.style.display = "none";
       document.body.style.overflow = "";
     }

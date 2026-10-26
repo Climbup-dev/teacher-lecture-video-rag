@@ -1180,7 +1180,7 @@
       width: 100vw !important;
       height: 100vh !important;
       z-index: 99999 !important;
-      display: flex !important;
+      display: none !important;
       align-items: center !important;
       justify-content: center !important;
       background: rgba(4, 7, 18, 0.85) !important;
@@ -1189,6 +1189,18 @@
       padding: 20px !important;
       box-sizing: border-box !important;
       animation: ccFadeIn 0.2s ease-out;
+    }
+
+    .cc-modal-overlay.active,
+    .cc-modal-overlay[style*="display: flex"],
+    .cc-modal-overlay[style*="display:block"],
+    .cc-modal-overlay[style*="display: block"] {
+      display: flex !important;
+    }
+
+    .cc-modal-overlay[style*="display: none"],
+    .cc-modal-overlay[style*="display:none"] {
+      display: none !important;
     }
 
     @keyframes ccFadeIn {
