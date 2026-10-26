@@ -1,4 +1,4 @@
-/* Interactive Studio, Video Player & AI Doubt Assistant Styles */
+/* Interactive Studio – Admin Management & AI Doubt Assistant Styles */
 
 .studio-layout {
   display: grid;
@@ -22,144 +22,17 @@
   height: 100%;
 }
 
-/* Video Player */
-.video-card {
+/* Lecture Selector Bar (Admin – replaces video player) */
+.lecture-selector-bar {
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
   border-radius: var(--radius-lg);
-  flex-shrink: 0;
-}
-
-.video-container {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.video-container video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.watermark-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 10;
-}
-
-.video-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-  cursor: pointer;
-  transition: opacity 0.2s ease;
-}
-
-.video-overlay.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.btn-big-play {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #fff;
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 0 25px var(--primary-glow);
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.btn-big-play:hover {
-  transform: scale(1.12);
-}
-
-.player-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: rgba(10, 14, 25, 0.85);
-  border-top: 1px solid var(--border-color);
-}
-
-.ctrl-btn {
-  background: transparent;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.time-display {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-
-.seek-bar {
-  flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 5px;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: var(--radius-full);
-  outline: none;
-  cursor: pointer;
-}
-
-.seek-bar::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--primary-light);
-  cursor: pointer;
-  box-shadow: 0 0 6px var(--primary);
-}
-
-.speed-select {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--border-color);
-  color: #fff;
-  font-size: 0.74rem;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  outline: none;
-  cursor: pointer;
-}
-
-.lecture-meta {
-  padding: 12px 18px 14px;
   background: rgba(15, 21, 38, 0.75);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.lecture-meta-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .lecture-badge {
@@ -168,6 +41,7 @@
   color: var(--accent-cyan);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  white-space: nowrap;
 }
 
 .lecture-picker-inline {
@@ -185,7 +59,7 @@
   font-size: 0.74rem;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  max-width: 220px;
+  max-width: 260px;
   outline: none;
 }
 
@@ -194,27 +68,16 @@
   color: #fff;
 }
 
-.lecture-title {
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: #fff;
-  margin-bottom: 6px;
-}
-
-.current-concept-pill {
-  font-size: 0.78rem;
-  color: #cbd5e1;
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.25);
-  padding: 5px 12px;
-  border-radius: var(--radius-full);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sparkle {
-  color: var(--accent-cyan);
+.lecture-title-inline {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 /* Studio Subtabs Card */

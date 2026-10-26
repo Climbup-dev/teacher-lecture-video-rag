@@ -618,58 +618,14 @@
               </div>
             </div>
 
-            <!-- Video Card -->
-            <div class="video-card glass-panel">
-              <div class="video-container" id="video-wrapper">
-                <video id="lecture-video" preload="none" playsinline controlsList="nodownload noplaybackrate" oncontextmenu="return false;" disablePictureInPicture poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450' viewBox='0 0 800 450'><rect width='800' height='450' fill='%230f141c'/><circle cx='400' cy='225' r='48' fill='%236366f1' fill-opacity='0.2'/><polygon points='390,205 425,225 390,245' fill='%23818cf8'/></svg>">
-                  Your browser does not support HTML5 video.
-                </video>
-                
-                <!-- Dynamic Anti-Piracy Forensic Watermark Layer -->
-                <canvas id="watermark-canvas" class="watermark-canvas"></canvas>
-
-                <iframe id="drive-iframe" style="display: none; width: 100%; height: 100%; border: none;" allowfullscreen></iframe>
-
-                <div class="video-overlay" id="video-overlay">
-                  <button class="btn-big-play" id="btn-overlay-play">
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                  </button>
-                </div>
+            <!-- Lecture Selector Header (Admin Management) -->
+            <div class="lecture-selector-bar glass-panel">
+              <div class="lecture-badge" id="lecture-category">Computer Science</div>
+              <div class="lecture-picker-inline">
+                <label for="studio-lecture-select">Lecture:</label>
+                <select id="studio-lecture-select" class="styled-dropdown-mini"></select>
               </div>
-
-              <!-- Video Custom Controls Bar -->
-              <div class="player-controls">
-                <button class="ctrl-btn" id="ctrl-play-pause" title="Play/Pause">
-                  <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                  <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
-                </button>
-                <span class="time-display" id="time-current">00:00</span>
-                <input type="range" class="seek-bar" id="seek-bar" value="0" min="0" step="0.5">
-                <span class="time-display" id="time-duration">00:00</span>
-                <div class="speed-select-wrap">
-                  <select id="playback-speed" class="speed-select">
-                    <option value="1">1x</option>
-                    <option value="1.25">1.25x</option>
-                    <option value="1.5" selected>1.5x</option>
-                    <option value="2">2x</option>
-                  </select>
-                </div>
-              </div>
-
-              <!-- Lecture Meta & Live Concept Indicator -->
-              <div class="lecture-meta">
-                <div class="lecture-meta-top">
-                  <div class="lecture-badge" id="lecture-category">Computer Science</div>
-                  <div class="lecture-picker-inline">
-                    <label for="studio-lecture-select">Switch Lecture:</label>
-                    <select id="studio-lecture-select" class="styled-dropdown-mini"></select>
-                  </div>
-                </div>
-                <h2 class="lecture-title" id="lecture-title">Applied AI: Vector RAG Architectures</h2>
-                <div class="current-concept-pill" id="current-concept-pill">
-                  <span class="sparkle">✦</span> Current Concept: <strong id="current-concept-name">00:00 - Introduction to Process Scheduling</strong>
-                </div>
-              </div>
+              <h2 class="lecture-title-inline" id="lecture-title">Select a Lecture</h2>
             </div>
 
             <!-- Studio Subtabs: Diarized Speech, Chunks & HyDE, Notes & Formulas -->
