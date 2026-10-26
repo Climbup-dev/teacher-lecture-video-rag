@@ -25,7 +25,7 @@ def extract_and_clean_audio(input_media_path: str, output_audio_path: str = None
 
     ffmpeg_bin = get_ffmpeg_binary()
 
-    # Strategy 1: Instant stream copy only if audio track is already compact (<= 50MB)
+    # Strategy 1: Instant stream copy only if audio track is already compact (<= 15MB)
     if not output_audio_path:
         fast_m4a = input_path.parent / f"{input_path.stem}_fast.m4a"
         copy_cmd = [
@@ -38,11 +38,11 @@ def extract_and_clean_audio(input_media_path: str, output_audio_path: str = None
         try:
             copy_res = subprocess.run(copy_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             if copy_res.returncode == 0 and fast_m4a.exists() and fast_m4a.stat().st_size > 1024:
-                # If stream copied file is <= 50MB, it's safe for Deepgram synchronous upload
-                if fast_m4a.stat().st_size <= 50 * 1024 * 1024:
+                # If stream copied file is <= 15MB, it's safe and fast for Deepgram upload
+                if fast_m4a.stat().st_size <= 15 * 1024 * 1024:
                     return str(fast_m4a)
-                # Oversized audio (>50MB) causes Deepgram 504 Gateway Timeout on synchronous HTTP!
-                # Clean up and let Strategy 2 compress it to 16kHz mono.
+                # Oversized audio (>15MB) causes slow network uploads to Deepgram.
+                # Clean up and let Strategy 2 compress it to 16kHz mono 32kbps.
                 try:
                     fast_m4a.unlink()
                 except Exception:

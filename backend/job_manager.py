@@ -271,7 +271,18 @@ class IngestionJobManager:
                     raise RuntimeError("Deepgram API Key is not configured on the server.")
 
                 transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
-                transcription_result = transcriber.transcribe_file(clean_audio_path)
+
+                def _on_transcription_progress(completed: int, total: int):
+                    if total > 1:
+                        pct = 45 + int((completed / total) * 15)
+                        self.db.update_job_stage(
+                            job_id,
+                            stage="TRANSCRIPTION",
+                            progress_percent=pct,
+                            stage_message=f"Deepgram Nova-2: Transcribed section {completed}/{total} (Diarization & Timestamps)..."
+                        )
+
+                transcription_result = transcriber.transcribe_file(clean_audio_path, progress_callback=_on_transcription_progress)
 
                 # Free the temporary clean audio file immediately after successful transcription!
                 if clean_audio_path and Path(clean_audio_path).exists():

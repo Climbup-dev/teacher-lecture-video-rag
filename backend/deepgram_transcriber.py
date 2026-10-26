@@ -1,6 +1,9 @@
 import os
 import json
+import time
+import threading
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -10,6 +13,10 @@ class DeepgramTranscriber:
             raise ValueError("Deepgram API Key is required.")
         self.api_key = api_key
         self.base_url = "https://api.deepgram.com/v1/listen"
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=1)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def _get_audio_duration(self, audio_path: Path) -> float:
         """Probes exact audio duration in seconds using FFmpeg/imageio."""
@@ -50,6 +57,8 @@ class DeepgramTranscriber:
             content_type = "audio/ogg"
         elif ext == ".flac":
             content_type = "audio/flac"
+        elif ext == ".mp3":
+            content_type = "audio/mp3"
         else:
             content_type = "audio/mpeg"
 
@@ -59,7 +68,7 @@ class DeepgramTranscriber:
         }
 
         with open(path, "rb") as audio_file:
-            response = requests.post(
+            response = self.session.post(
                 self.base_url,
                 params=params,
                 headers=headers,
@@ -73,38 +82,44 @@ class DeepgramTranscriber:
         data = response.json()
         return self._format_response(data)
 
-    def transcribe_file(self, audio_file_path: str) -> Dict[str, Any]:
+    def transcribe_file(self, audio_file_path: str, progress_callback=None) -> Dict[str, Any]:
         """
         Transcribes a local audio file with Nova-2, diarization, punctuation,
-        and utterance-level timestamps. For long lectures (>30m), automatically
-        slices into manageable segments to prevent Deepgram HTTP 504 timeouts.
+        and utterance-level timestamps. For long lectures (>25m), automatically
+        slices into manageable segments to prevent Deepgram HTTP 504 timeouts
+        and processes them concurrently with ThreadPoolExecutor for 3-4x speedup.
         """
         path = Path(audio_file_path)
         if not path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
 
         duration = self._get_audio_duration(path)
-        CHUNK_THRESHOLD = 1800.0  # 30 minutes
-        CHUNK_DURATION = 1200.0   # 20 minutes
+        CHUNK_THRESHOLD = 1500.0  # 25 minutes
+        CHUNK_DURATION = 900.0    # 15 minutes
 
-        # If short audio (<= 30 minutes), transcribe directly
-        if duration <= CHUNK_THRESHOLD:
-            return self._transcribe_single_file(path)
+        # If short audio (<= 25 minutes), transcribe directly
+        if duration <= 0 or duration <= CHUNK_THRESHOLD:
+            res = self._transcribe_single_file(path)
+            if progress_callback:
+                try:
+                    progress_callback(1, 1)
+                except Exception:
+                    pass
+            return res
 
-        # Long lecture detected: Chunked transcription with timestamp preservation
+        # Long lecture detected: Concurrent chunked transcription with timestamp preservation
         import subprocess
         import shutil
         import imageio_ffmpeg
         ffmpeg_bin = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 
         total_chunks = int((duration + CHUNK_DURATION - 1) // CHUNK_DURATION)
-        all_utterances: List[Dict[str, Any]] = []
-        transcript_parts: List[str] = []
-
         chunk_dir = path.parent / f"chunks_{path.stem}"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
+        chunk_tasks = []
         try:
+            # 1. Rapidly slice chunks using stream copy (-c copy) in < 1 second total
             for idx in range(total_chunks):
                 start_s = idx * CHUNK_DURATION
                 seg_dur = min(CHUNK_DURATION, duration - start_s)
@@ -112,7 +127,6 @@ class DeepgramTranscriber:
                     break
 
                 chunk_file = chunk_dir / f"chunk_{idx}{path.suffix}"
-                # Fast slice with -c copy
                 cmd = [
                     ffmpeg_bin, "-y",
                     "-ss", str(start_s),
@@ -122,9 +136,54 @@ class DeepgramTranscriber:
                     str(chunk_file)
                 ]
                 subprocess.run(cmd, capture_output=True, check=True)
+                chunk_tasks.append((idx, chunk_file, start_s, seg_dur))
 
-                # Transcribe slice
-                res = self._transcribe_single_file(chunk_file)
+            # 2. Concurrently transcribe slices with Deepgram Nova-2 (up to 4 parallel workers)
+            results_by_idx: Dict[int, Any] = {}
+            completed_count = 0
+            lock = threading.Lock()
+
+            def _process_chunk(item):
+                nonlocal completed_count
+                idx, cfile, start_s, seg_dur = item
+                res = None
+                try:
+                    # Retry once on transient network glitch
+                    for attempt in range(2):
+                        try:
+                            res = self._transcribe_single_file(cfile)
+                            break
+                        except Exception as err:
+                            if attempt == 1:
+                                raise err
+                            time.sleep(1.0)
+
+                    with lock:
+                        results_by_idx[idx] = (res, start_s)
+                        completed_count += 1
+                        if progress_callback:
+                            try:
+                                progress_callback(completed_count, len(chunk_tasks))
+                            except Exception:
+                                pass
+                finally:
+                    # Immediately purge temporary slice to protect container disk/tmpfs
+                    if cfile.exists():
+                        try:
+                            cfile.unlink()
+                        except Exception:
+                            pass
+
+            max_workers = min(4, len(chunk_tasks))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(_process_chunk, chunk_tasks))
+
+            # 3. Assemble results strictly ordered by timestamp
+            all_utterances: List[Dict[str, Any]] = []
+            transcript_parts: List[str] = []
+
+            for idx in range(len(chunk_tasks)):
+                res, start_s = results_by_idx[idx]
                 if res.get("full_transcript"):
                     transcript_parts.append(res["full_transcript"])
 
@@ -138,18 +197,13 @@ class DeepgramTranscriber:
                     utt["timestamp_label"] = f"{s_min:02d}:{s_sec:02d} - {e_min:02d}:{e_sec:02d}"
                     all_utterances.append(utt)
 
-                # Remove temporary chunk to save disk
-                if chunk_file.exists():
-                    chunk_file.unlink(missing_ok=True)
-
             return {
                 "full_transcript": "\n".join(transcript_parts),
                 "duration_seconds": duration,
                 "utterances": all_utterances,
-                "raw_metadata": {"chunked": True, "total_chunks": total_chunks, "duration": duration}
+                "raw_metadata": {"chunked": True, "total_chunks": len(chunk_tasks), "duration": duration}
             }
         finally:
-            # Cleanup chunk dir
             shutil.rmtree(chunk_dir, ignore_errors=True)
 
     def transcribe_url(self, audio_url: str) -> Dict[str, Any]:
