@@ -25,26 +25,170 @@ export function initChatTab() {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // ── Full-featured lightweight Markdown → HTML renderer ──────────────────
   function formatChatMarkdown(text) {
-    let html = text.replace(/\[(\d{1,2}:\d{2}:\d{2}|\d{1,3}:\d{2})\]/g, (match, p1) => {
-      return `<button class="ts-badge" data-time="${p1}">[${p1}]</button>`;
-    });
+    if (!text) return "";
 
-    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Normalize line endings
+    let lines = text.replace(/\r\n/g, "\n").split("\n");
+    let html = "";
+    let i = 0;
 
-    html = html.split('\n\n').map(p => {
-      if (p.startsWith('###')) {
-        return `<h4 style="margin: 8px 0 4px; color: var(--accent-cyan);">${p.replace('###', '')}</h4>`;
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // ── Fenced code block ```...``` ──────────────────────────────────
+      if (line.trim().startsWith("```")) {
+        let code = "";
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith("```")) {
+          code += escapeHtml(lines[i]) + "\n";
+          i++;
+        }
+        html += `<pre class="chat-code-block"><code>${code.trimEnd()}</code></pre>`;
+        i++;
+        continue;
       }
-      if (p.startsWith('* ') || p.startsWith('- ')) {
-        const items = p.split('\n').map(li => `<li>${li.replace(/^[\*\-]\s*/, '')}</li>`).join('');
-        return `<ul>${items}</ul>`;
+
+      // ── Markdown table (line starts with |) ──────────────────────────
+      if (line.trim().startsWith("|") && i + 1 < lines.length && lines[i + 1].trim().match(/^\|[-| :]+\|$/)) {
+        // Header row
+        const headers = line.trim().split("|").slice(1, -1).map(h => `<th>${renderInline(h.trim())}</th>`).join("");
+        i += 2; // skip header + separator
+        let rows = "";
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          const cells = lines[i].trim().split("|").slice(1, -1).map(c => `<td>${renderInline(c.trim())}</td>`).join("");
+          rows += `<tr>${cells}</tr>`;
+          i++;
+        }
+        html += `<div class="chat-table-wrap"><table class="chat-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+        continue;
       }
-      return `<p>${p.replace(/\n/g, '<br>')}</p>`;
-    }).join('');
+
+      // ── Horizontal rule ───────────────────────────────────────────────
+      if (line.trim().match(/^[-*_]{3,}$/)) {
+        html += `<hr class="chat-hr">`;
+        i++;
+        continue;
+      }
+
+      // ── ATX Headings ## / ### ─────────────────────────────────────────
+      const h3Match = line.match(/^###\s+(.+)/);
+      if (h3Match) {
+        html += `<h4 class="chat-h3">${renderInline(h3Match[1])}</h4>`;
+        i++;
+        continue;
+      }
+      const h2Match = line.match(/^##\s+(.+)/);
+      if (h2Match) {
+        html += `<h3 class="chat-h2">${renderInline(h2Match[1])}</h3>`;
+        i++;
+        continue;
+      }
+      const h1Match = line.match(/^#\s+(.+)/);
+      if (h1Match) {
+        html += `<h3 class="chat-h2">${renderInline(h1Match[1])}</h3>`;
+        i++;
+        continue;
+      }
+
+      // ── Numbered heading e.g. "1. What a container is" ────────────────
+      const numHeadMatch = line.match(/^(\d+)\.\s+(.+)/);
+      if (numHeadMatch && line === line.trim() && !line.match(/^\s/)) {
+        // Only treat as heading if it's at the start with no leading whitespace
+        // and not inside a list context — heuristic: short enough to be a heading
+        const content = numHeadMatch[2];
+        if (content.length < 80) {
+          html += `<h4 class="chat-numbered-heading"><span class="chat-num">${numHeadMatch[1]}.</span> ${renderInline(content)}</h4>`;
+          i++;
+          continue;
+        }
+      }
+
+      // ── Bullet list block (* or -) ────────────────────────────────────
+      if (line.trim().match(/^[*\-]\s/)) {
+        let items = "";
+        while (i < lines.length && lines[i].trim().match(/^[*\-]\s/)) {
+          items += `<li>${renderInline(lines[i].trim().replace(/^[*\-]\s/, ""))}</li>`;
+          i++;
+        }
+        html += `<ul class="chat-ul">${items}</ul>`;
+        continue;
+      }
+
+      // ── Timestamp jump lines (⏱️ ... [MM:SS]) ─────────────────────────
+      if (line.includes("⏱") || line.includes("[0") && line.includes("]")) {
+        html += `<p class="chat-ts-line">${renderInline(line)}</p>`;
+        i++;
+        continue;
+      }
+
+      // ── Pro tip / callout ─────────────────────────────────────────────
+      if (line.trim().startsWith("💡")) {
+        html += `<div class="chat-protip">${renderInline(line)}</div>`;
+        i++;
+        continue;
+      }
+
+      // ── Empty line → paragraph break ─────────────────────────────────
+      if (line.trim() === "") {
+        i++;
+        continue;
+      }
+
+      // ── Default: paragraph ───────────────────────────────────────────
+      // Collect consecutive non-special lines
+      let para = "";
+      while (
+        i < lines.length &&
+        lines[i].trim() !== "" &&
+        !lines[i].trim().match(/^[*\-]\s/) &&
+        !lines[i].trim().startsWith("|") &&
+        !lines[i].trim().startsWith("#") &&
+        !lines[i].trim().startsWith("```") &&
+        !lines[i].trim().match(/^[-*_]{3,}$/) &&
+        !lines[i].trim().startsWith("💡")
+      ) {
+        para += (para ? "<br>" : "") + renderInline(lines[i]);
+        i++;
+      }
+      if (para) html += `<p class="chat-p">${para}</p>`;
+    }
 
     return html;
   }
+
+  // ── Inline element renderer (bold, italic, code, timestamps, links) ───────
+  function renderInline(text) {
+    if (!text) return "";
+
+    // Preserve any raw <button class="ts-badge"...> already in the string
+    // (the backend sometimes sends pre-rendered badges)
+    // Pass them through by temporarily escaping other HTML first.
+    let out = text;
+
+    // Raw pre-rendered timestamp badge HTML from backend → keep as-is
+    // We process inline patterns on text outside of existing HTML tags.
+
+    // Inline code `code`
+    out = out.replace(/`([^`]+)`/g, '<code class="chat-code">$1</code>');
+
+    // Bold **text**
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    // Italic *text* or _text_
+    out = out.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    out = out.replace(/(?<!_)_([^_]+)_(?!_)/g, '<em>$1</em>');
+
+    // Timestamp badge [MM:SS] or [HH:MM:SS] — convert to button
+    out = out.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (match, ts) => {
+      return `<button class="ts-badge" data-time="${ts}">[${ts}]</button>`;
+    });
+
+    // ✅ / ❌ — keep as-is
+    return out;
+  }
+
 
   function appendUserMessage(text) {
     if (!chatMessages) return;
