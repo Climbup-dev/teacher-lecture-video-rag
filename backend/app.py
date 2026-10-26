@@ -197,6 +197,33 @@ def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, A
         with _packaging_lock:
             _packaging_in_progress.discard(lesson_id)
 
+
+@app.on_event("startup")
+def startup_prewarm_worker():
+    """
+    Background worker that runs automatically when the backend boots:
+    Scans catalog lessons and pre-packages any new or unpackaged lectures into
+    AES-128 encrypted HLS in the background. Students never experience delay or timeouts.
+    """
+    def _worker():
+        time.sleep(10)  # Wait for server to fully bind and start accepting traffic
+        try:
+            raw_lessons = db.list_lessons()
+            for l in raw_lessons:
+                lid = l.get("id") or l.get("lesson_id")
+                if not lid:
+                    continue
+                playlist = Config.CHUNKS_DIR / "hls" / lid / "master.m3u8"
+                if not playlist.exists():
+                    logger.info(f"[Auto-Packager] Detected unpackaged lecture {lid} ('{l.get('title')}'). Pre-packaging into encrypted HLS in background...")
+                    ensure_lesson_hls_packaged(lid, l)
+                    time.sleep(3)  # Gentle delay between videos to keep CPU and memory cool
+        except Exception as e:
+            logger.warning(f"[Auto-Packager] Notice during background pre-packaging: {e}")
+
+    threading.Thread(target=_worker, daemon=True, name="hls_auto_prepackager").start()
+
+
 class ChatRequest(BaseModel):
     query: str
     lesson_id: str
@@ -1105,6 +1132,36 @@ def admin_package_hls(
             "playlist_url": f"/api/lessons/{lesson_id}/hls/master.m3u8"
         }
     raise HTTPException(status_code=500, detail="Failed to package lesson into encrypted HLS.")
+
+
+@app.post("/api/admin/package-all-hls")
+def package_all_lessons_hls(
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    """
+    Admin batch endpoint to scan all catalog lessons and package any missing
+    AES-128 encrypted HLS streams asynchronously in the background.
+    """
+    verify_admin_or_instructor_auth(authorization, x_admin_key)
+
+    def _batch_job():
+        try:
+            raw_lessons = db.list_lessons()
+            for l in raw_lessons:
+                lid = l.get("id") or l.get("lesson_id")
+                if not lid:
+                    continue
+                playlist = Config.CHUNKS_DIR / "hls" / lid / "master.m3u8"
+                if not playlist.exists():
+                    logger.info(f"[Batch HLS] Packaging {lid} ('{l.get('title')}') into AES-128 HLS...")
+                    ensure_lesson_hls_packaged(lid, l)
+                    time.sleep(2)
+        except Exception as e:
+            logger.warning(f"[Batch HLS] Error: {e}")
+
+    threading.Thread(target=_batch_job, daemon=True, name="batch_hls_worker").start()
+    return {"status": "started", "message": "Batch HLS packaging triggered in the background for all unpackaged lessons."}
 
 
 # =============================================================================
