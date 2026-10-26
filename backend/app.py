@@ -146,8 +146,8 @@ def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, A
             is_active = False
 
     if is_active:
-        # Another worker is already packaging this video; wait up to 90 seconds
-        for _ in range(90):
+        # Another worker is already packaging this video; wait up to 180 seconds for large videos
+        for _ in range(180):
             time.sleep(1)
             if playlist_file.exists():
                 return True
@@ -827,8 +827,10 @@ async def get_lesson_hls_playlist(
         )
         raise HTTPException(status_code=403, detail="Automated download tools are blocked from playlist access.")
 
-    # Rate limit playlist requests
-    allowed, retry_after = check_rate_limit(client_ip, f"playlist_{lesson_id}", max_requests=40, window_seconds=60)
+    # Rate limit playlist requests (generous allowance for verified in-app player)
+    is_player = is_authorized_player(request)
+    max_pl_reqs = 120 if is_player else 40
+    allowed, retry_after = check_rate_limit(client_ip, f"playlist_{lesson_id}", max_requests=max_pl_reqs, window_seconds=60)
     if not allowed:
         raise HTTPException(status_code=429, detail=f"Playlist rate limit reached. Please wait {retry_after}s.")
 
@@ -837,7 +839,7 @@ async def get_lesson_hls_playlist(
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
     # Require in-app player authentication or valid signed token
-    if not is_authorized_player(request):
+    if not is_player:
         if st:
             is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
             if not is_valid:
@@ -855,6 +857,12 @@ async def get_lesson_hls_playlist(
 
     # On-demand HLS packaging if not yet packaged
     if not playlist_file.exists():
+        if lesson_id in _packaging_in_progress:
+            return JSONResponse(
+                status_code=202,
+                content={"status": "packaging", "detail": "Lesson stream is currently being prepared. Retrying in 5 seconds..."},
+                headers={"Retry-After": "5"}
+            )
         ensure_lesson_hls_packaged(lesson_id, lesson)
 
     if not playlist_file.exists():
@@ -1029,10 +1037,12 @@ async def get_lesson_hls_segment(
 
     # --- 2. ANTI-CHUNK-DUMPING SPEED GOVERNOR ---
     # Normal human playback consumes 1 segment every 6 seconds.
-    # Allow initial pre-buffering up to 15 segments per 6 seconds.
+    # Allow initial pre-buffering and timeline scrubbing up to 60 segments per 6s for authorized players (15 for others).
     # Key by user identity/token to support 200+ students even if sharing the same campus/hostel Wi-Fi NAT IP
+    is_player = is_authorized_player(request)
+    max_seg_reqs = 60 if is_player else 15
     rate_identity = authorization or token or st or client_ip
-    allowed, retry_after = check_rate_limit(rate_identity, f"chunk_dump_{lesson_id}", max_requests=15, window_seconds=6)
+    allowed, retry_after = check_rate_limit(rate_identity, f"chunk_dump_{lesson_id}", max_requests=max_seg_reqs, window_seconds=6)
     if not allowed:
         db.log_security_threat(
             lesson_id=lesson_id,
@@ -1040,7 +1050,7 @@ async def get_lesson_hls_segment(
             threat_type="BULK_CHUNK_DUMPING_DETECTED",
             ip_address=client_ip,
             user_agent=request.headers.get("user-agent", ""),
-            details=f"Automated segment dumping detected (exceeded 10 segments in 6s). Throttled for {retry_after}s."
+            details=f"Automated segment dumping detected (exceeded {max_seg_reqs} segments in 6s). Throttled for {retry_after}s."
         )
         raise HTTPException(
             status_code=429,
