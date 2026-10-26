@@ -198,6 +198,9 @@ export function initUploadTab() {
         const initData = await api.processVideo(formData);
         const jobId = initData.job_id;
 
+        // Immediately refresh lectures list so video is visible & accessible to user right away!
+        await refreshLessons();
+
         // Poll job status until complete
         let pollCount = 0;
         const maxPolls = 600;
@@ -289,16 +292,20 @@ export function initUploadTab() {
       card.className = "lecture-item-card";
       const uttLen = l.utterances ? l.utterances.length : 0;
       const durMin = l.duration_seconds ? Math.floor(l.duration_seconds / 60) : 0;
+      const isIndexing = l.processing_status === "indexing";
+      const statusBadge = isIndexing 
+        ? `<span class="badge-mini" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35);">⚡ AI Indexing</span>`
+        : `<span class="badge-mini">✓ Ready</span>`;
 
       card.innerHTML = `
         <div class="lecture-item-top">
           <span class="lecture-item-title">${l.title}</span>
-          <span class="badge-mini">Ready</span>
+          ${statusBadge}
         </div>
         <div class="lecture-item-stats">
-          <span>⏱️ ${durMin} mins</span>
-          <span>🗣️ ${uttLen} utterances</span>
-          <span>⚡ 768-dim RAG</span>
+          <span>⏱️ ${durMin > 0 ? durMin + " mins" : "Live Stream"}</span>
+          <span>🗣️ ${isIndexing ? "Transcribing..." : uttLen + " utterances"}</span>
+          <span>${isIndexing ? "⏳ Vector Sync" : "⚡ 768-dim RAG"}</span>
         </div>
         <div class="lecture-item-actions">
           <button class="btn btn-sm btn-primary btn-play-lecture" data-id="${l.id}">▶ Play in Studio</button>

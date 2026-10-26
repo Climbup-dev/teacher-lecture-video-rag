@@ -270,8 +270,8 @@ document.addEventListener("DOMContentLoaded", () => {
     btnHeaderCreateCourse.addEventListener("click", () => {
       switchView("courses");
       if (createCoursePanel) {
-        createCoursePanel.style.display = "block";
-        createCoursePanel.scrollIntoView({ behavior: "smooth" });
+        createCoursePanel.style.display = "flex";
+        document.body.style.overflow = "hidden";
       }
     });
   }
@@ -327,12 +327,79 @@ document.addEventListener("DOMContentLoaded", () => {
     renderStudentsTable();
   }
 
+  // Group raw enrollment records into unique student records
+  function getUniqueStudents(enrollmentsList) {
+    const map = new Map();
+
+    (enrollmentsList || []).forEach(std => {
+      const email = (std.email || "").toLowerCase().trim();
+      const key = email || (std.user_id ? String(std.user_id) : (std.name ? std.name.toLowerCase().trim() : std.id));
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key: key,
+          user_id: std.user_id,
+          name: std.name || "Student",
+          email: std.email || "student@university.edu",
+          avatar_url: std.avatar_url || null,
+          enrollments: []
+        });
+      }
+
+      const student = map.get(key);
+
+      const addEnrollment = (enr) => {
+        const cid = enr.course_id || enr.id;
+        if (!student.enrollments.some(existing => existing.course_id === cid)) {
+          student.enrollments.push({
+            id: enr.enrollment_id || enr.id || std.id,
+            course_id: cid,
+            course_title: enr.title || enr.course_title || "General Course",
+            enrolled_date: enr.enrolled_date || std.enrolled_date || "2026-10-18",
+            progress: parseInt(enr.progress !== undefined ? enr.progress : std.progress) || 0,
+            doubts_asked: parseInt(enr.doubts_asked !== undefined ? enr.doubts_asked : std.doubts_asked) || 0,
+            status: enr.status || std.status || "Active"
+          });
+        }
+      };
+
+      if (Array.isArray(std.courses) && std.courses.length > 0) {
+        std.courses.forEach(addEnrollment);
+      } else {
+        addEnrollment(std);
+      }
+    });
+
+    return Array.from(map.values()).map(student => {
+      const count = student.enrollments.length;
+      const totalProg = student.enrollments.reduce((sum, e) => sum + e.progress, 0);
+      const avgProg = count > 0 ? Math.round(totalProg / count) : 0;
+      const totalDoubts = student.enrollments.reduce((sum, e) => sum + e.doubts_asked, 0);
+
+      const dates = student.enrollments.map(e => e.enrolled_date).filter(Boolean).sort();
+      const enrolledDate = dates.length > 0 ? dates[0] : "2026-10-18";
+
+      const hasActive = student.enrollments.some(e => (e.status || "").toLowerCase() === "active");
+
+      return {
+        ...student,
+        coursesCount: count,
+        avgProgress: avgProg,
+        totalDoubts: totalDoubts,
+        enrolledDate: enrolledDate,
+        status: hasActive ? "Active" : (student.enrollments[0]?.status || "Active"),
+        enrollmentIds: student.enrollments.map(e => e.id)
+      };
+    });
+  }
+
   function updateStudentKPIs() {
-    const total = studentsCache.length;
+    const uniqueStudents = getUniqueStudents(studentsCache);
+    const total = uniqueStudents.length;
     if (tabStudentsCount) tabStudentsCount.textContent = total;
     if (kpiTotalStudents) kpiTotalStudents.textContent = total;
 
-    const uniqueCourses = new Set(studentsCache.map(s => s.course_id || s.course_title)).size;
+    const uniqueCourses = new Set(studentsCache.map(s => s.course_id || s.course_title).filter(Boolean)).size;
     if (kpiActiveEnrolledCourses) kpiActiveEnrolledCourses.textContent = uniqueCourses;
 
     const totalDoubts = studentsCache.reduce((sum, s) => sum + (parseInt(s.doubts_asked) || 0), 0);
@@ -342,10 +409,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (total === 0) {
         kpiAvgProgress.textContent = "0%";
       } else {
-        const totalProgress = studentsCache.reduce((sum, s) => {
-          const val = parseInt(s.progress) || 0;
-          return sum + val;
-        }, 0);
+        const totalProgress = uniqueStudents.reduce((sum, s) => sum + s.avgProgress, 0);
         kpiAvgProgress.textContent = Math.round(totalProgress / total) + "%";
       }
     }
@@ -383,14 +447,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const searchTerm = (studentSearchInput?.value || "").toLowerCase().trim();
     const filterCourse = studentCourseFilter?.value || "all";
 
-    const filtered = studentsCache.filter(std => {
+    const uniqueStudents = getUniqueStudents(studentsCache);
+
+    const filtered = uniqueStudents.filter(std => {
+      const matchesCourse = filterCourse === "all" ||
+        std.enrollments.some(e => e.course_id === filterCourse);
+
       const matchesSearch = !searchTerm ||
         (std.name && std.name.toLowerCase().includes(searchTerm)) ||
         (std.email && std.email.toLowerCase().includes(searchTerm)) ||
-        (std.course_title && std.course_title.toLowerCase().includes(searchTerm));
+        std.enrollments.some(e => e.course_title && e.course_title.toLowerCase().includes(searchTerm));
 
-      const matchesCourse = filterCourse === "all" || std.course_id === filterCourse;
-      return matchesSearch && matchesCourse;
+      return matchesCourse && matchesSearch;
     });
 
     if (filtered.length === 0) {
@@ -407,7 +475,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     studentsTableBody.innerHTML = filtered.map(std => {
       const initials = std.name ? std.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) : "ST";
-      const progressNum = parseInt(std.progress) || 0;
       const avatarHtml = std.avatar_url
         ? `<img src="${escapeHtml(std.avatar_url)}" alt="${escapeHtml(std.name)}" onerror="this.remove();">`
         : initials;
@@ -424,36 +491,46 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
           </td>
           <td>
-            <span class="student-course-badge" title="${escapeHtml(std.course_title || '')}">
-              🎓 ${escapeHtml(std.course_title || 'General Course')}
-            </span>
+            <div class="student-courses-cell">
+              <span class="student-courses-count-pill">
+                📚 ${std.coursesCount} ${std.coursesCount === 1 ? 'Course' : 'Courses'}
+              </span>
+              <div class="student-courses-chips">
+                ${std.enrollments.map(e => `
+                  <span class="student-course-badge" title="${escapeHtml(e.course_title)}">
+                    🎓 ${escapeHtml(e.course_title)}
+                    ${std.coursesCount > 1 ? `<button type="button" class="btn-remove-course-enr" data-enr-id="${e.id}" data-student-name="${escapeHtml(std.name)}" data-course-title="${escapeHtml(e.course_title)}" title="Unenroll from ${escapeHtml(e.course_title)}">×</button>` : ''}
+                  </span>
+                `).join("")}
+              </div>
+            </div>
           </td>
           <td style="color: var(--text-muted); font-size: 0.82rem; white-space: nowrap;">
-            ${escapeHtml(std.enrolled_date || '2026-10-18')}
+            ${escapeHtml(std.enrolledDate)}
           </td>
           <td>
             <div class="student-progress-wrap">
               <div class="progress-info">
-                <span>Progress</span>
-                <span>${progressNum}%</span>
+                <span>Avg Progress</span>
+                <span>${std.avgProgress}%</span>
               </div>
               <div class="progress-track">
-                <div class="progress-fill" style="width: ${progressNum}%;"></div>
+                <div class="progress-fill" style="width: ${std.avgProgress}%;"></div>
               </div>
             </div>
           </td>
           <td>
             <span class="student-doubts-pill">
-              🤖 ${std.doubts_asked || 0} doubts
+              🤖 ${std.totalDoubts} doubts
             </span>
           </td>
           <td>
             <span class="student-status-pill active">
-              <span class="dot"></span> ${escapeHtml(std.status || 'Active')}
+              <span class="dot"></span> ${escapeHtml(std.status)}
             </span>
           </td>
           <td style="text-align: right;">
-            <button class="btn-student-delete" data-student-id="${std.id}" title="Unenroll Student">
+            <button class="btn-student-delete" data-student-key="${std.key}" title="Unenroll Student from all courses">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"></polyline>
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -464,21 +541,50 @@ document.addEventListener("DOMContentLoaded", () => {
         </tr>`;
     }).join("");
 
+    // Unenroll student from all courses
     studentsTableBody.querySelectorAll(".btn-student-delete").forEach(btn => {
       btn.addEventListener("click", async () => {
-        const studentId = btn.dataset.studentId;
-        const targetStd = studentsCache.find(s => s.id === studentId);
+        const studentKey = btn.dataset.studentKey;
+        const currentUnique = getUniqueStudents(studentsCache);
+        const targetStd = currentUnique.find(s => s.key === studentKey);
         const stdName = targetStd ? targetStd.name : "this student";
-        
-        if (!confirm(`Are you sure you want to unenroll ${stdName}?`)) return;
+        const numCourses = targetStd ? targetStd.coursesCount : 1;
 
+        if (!confirm(`Are you sure you want to unenroll ${stdName} from ${numCourses > 1 ? `all ${numCourses} courses` : 'the course'}?`)) return;
+
+        btn.disabled = true;
+        btn.textContent = "Unenrolling...";
+
+        const idsToDelete = targetStd ? targetStd.enrollmentIds : [];
         try {
-          await fetch(`/api/students/${studentId}`, { method: "DELETE" });
+          await Promise.all(idsToDelete.map(id => fetch(`/api/students/${id}`, { method: "DELETE" })));
         } catch (e) {
           console.warn("Delete API call failed, removing locally:", e);
         }
 
-        studentsCache = studentsCache.filter(s => s.id !== studentId);
+        studentsCache = studentsCache.filter(s => !idsToDelete.includes(s.id));
+        updateStudentKPIs();
+        renderStudentsTable();
+      });
+    });
+
+    // Unenroll from a single specific course
+    studentsTableBody.querySelectorAll(".btn-remove-course-enr").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const enrId = btn.dataset.enrId;
+        const stdName = btn.dataset.studentName || "Student";
+        const courseTitle = btn.dataset.courseTitle || "course";
+
+        if (!confirm(`Unenroll ${stdName} from "${courseTitle}"?`)) return;
+
+        try {
+          await fetch(`/api/students/${enrId}`, { method: "DELETE" });
+        } catch (err) {
+          console.warn("Delete single course enrollment error:", err);
+        }
+
+        studentsCache = studentsCache.filter(s => s.id !== enrId);
         updateStudentKPIs();
         renderStudentsTable();
       });
@@ -768,23 +874,45 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Toggle Create Course Form
+  // Toggle Create Course Modal
+  function openCreateCourseModal() {
+    if (createCoursePanel) {
+      createCoursePanel.style.display = "flex";
+      document.body.style.overflow = "hidden";
+      const titleInput = document.getElementById("new-course-title");
+      if (titleInput) setTimeout(() => titleInput.focus(), 80);
+    }
+  }
+  function closeCreateCourseModal() {
+    if (createCoursePanel) {
+      createCoursePanel.style.display = "none";
+      document.body.style.overflow = "";
+    }
+  }
+
   if (btnShowCreateCourse && createCoursePanel) {
-    btnShowCreateCourse.addEventListener("click", () => {
-      createCoursePanel.style.display = "block";
-      createCoursePanel.scrollIntoView({ behavior: "smooth" });
-    });
+    btnShowCreateCourse.addEventListener("click", openCreateCourseModal);
   }
   if (btnHideCreateCourse && createCoursePanel) {
-    btnHideCreateCourse.addEventListener("click", () => {
-      createCoursePanel.style.display = "none";
-    });
+    btnHideCreateCourse.addEventListener("click", closeCreateCourseModal);
   }
   if (btnCancelCreateCourse && createCoursePanel) {
-    btnCancelCreateCourse.addEventListener("click", () => {
-      createCoursePanel.style.display = "none";
+    btnCancelCreateCourse.addEventListener("click", closeCreateCourseModal);
+  }
+
+  // Backdrop click to close
+  if (createCoursePanel) {
+    createCoursePanel.addEventListener("click", (e) => {
+      if (e.target === createCoursePanel) closeCreateCourseModal();
     });
   }
+
+  // ESC key to close
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && createCoursePanel && createCoursePanel.style.display === "flex") {
+      closeCreateCourseModal();
+    }
+  });
 
   // Submit Create Course Form
   if (createCourseForm) {
@@ -834,7 +962,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         setTimeout(() => {
           createCourseFeedback.innerHTML = "";
-          createCoursePanel.style.display = "none";
+          closeCreateCourseModal();
         }, 1200);
 
         await loadCourses();

@@ -270,24 +270,27 @@ class DBAdapter:
         title: str,
         duration_seconds: int,
         video_url: str,
-        raw_transcript: str,
-        utterances: List[Dict[str, Any]],
+        raw_transcript: str = "",
+        utterances: Optional[List[Dict[str, Any]]] = None,
         structured_notes: Optional[Dict[str, Any]] = None,
-        chapters: Optional[List[Dict[str, Any]]] = None
+        chapters: Optional[List[Dict[str, Any]]] = None,
+        processing_status: str = "ready"
     ):
         """Saves lecture metadata and utterances to local store and Supabase."""
         store = self._read_local_store()
+        existing_lesson = store.get("lessons", {}).get(lesson_id, {})
+
         lesson_record = {
             "id": lesson_id,
             "course_id": course_id,
             "title": title,
-            "duration_seconds": duration_seconds,
-            "video_url": video_url,
-            "raw_transcript": raw_transcript,
-            "utterances": utterances,
-            "structured_notes": structured_notes or {},
-            "chapters": chapters or [],
-            "processing_status": "ready"
+            "duration_seconds": duration_seconds or existing_lesson.get("duration_seconds", 0),
+            "video_url": video_url or existing_lesson.get("video_url", ""),
+            "raw_transcript": raw_transcript if raw_transcript is not None else existing_lesson.get("raw_transcript", ""),
+            "utterances": utterances if utterances is not None else existing_lesson.get("utterances", []),
+            "structured_notes": structured_notes or existing_lesson.get("structured_notes", {}),
+            "chapters": chapters or existing_lesson.get("chapters", []),
+            "processing_status": processing_status
         }
         store["lessons"][lesson_id] = lesson_record
         self._write_local_store(store)
@@ -302,18 +305,19 @@ class DBAdapter:
 
                 mins = duration_seconds // 60
                 secs = duration_seconds % 60
+                dur_label = f"{mins}m {secs}s" if duration_seconds > 0 else "Processing..."
                 payload = {
                     "id": lesson_id,
                     "course_id": course_id,
                     "module_id": module_id,
                     "title": title,
-                    "duration": f"{mins}m {secs}s",
+                    "duration": dur_label,
                     "duration_seconds": duration_seconds,
                     "video_url": video_url,
-                    "raw_transcript": raw_transcript[:25000],
+                    "raw_transcript": (raw_transcript or "")[:25000],
                     "structured_notes": structured_notes or {},
                     "chapters": chapters or [],
-                    "processing_status": "ready",
+                    "processing_status": processing_status,
                     "display_order": 1,
                     "is_free_preview": True
                 }
@@ -322,6 +326,19 @@ class DBAdapter:
                     print(f"[Supabase] course_lessons sync HTTP {res.status_code}: {res.text}")
             except Exception as e:
                 print(f"[Supabase] lesson sync warning: {e}")
+
+    def log_mentor_notification(self, notification_data: Dict[str, Any]):
+        """Logs dispatched mentor notification to local store for audit and history."""
+        import datetime
+        store = self._read_local_store()
+        if "mentor_notifications" not in store:
+            store["mentor_notifications"] = []
+        entry = {
+            **notification_data,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        store["mentor_notifications"].append(entry)
+        self._write_local_store(store)
 
     def save_chunks(self, lesson_id: str, course_id: str, chunks: List[Dict[str, Any]]):
         """Persists enriched chunks with embeddings to transcript_chunks_vector."""
@@ -733,7 +750,7 @@ class DBAdapter:
         return [r for r in resources if r.get("course_id") == course_id]
 
     def get_students(self, course_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Retrieves enrolled students directly from Supabase with local store caching."""
+        """Retrieves students from Supabase (profiles + course_enrollments) with local store caching."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
@@ -750,24 +767,85 @@ class DBAdapter:
                     crs_res = self.session.get(f"{self.supabase_url}/rest/v1/courses?select=id,title", headers=headers, timeout=6)
                     courses_map = {c["id"]: c.get("title") for c in crs_res.json()} if crs_res.ok else {}
 
-                    students = []
-                    for enr in enrollments:
-                        p = profiles_map.get(enr.get("user_id"), {})
-                        cid = enr.get("course_id")
-                        c_title = courses_map.get(cid) or "University Course"
-                        students.append({
-                            "id": str(enr.get("id")),
-                            "user_id": enr.get("user_id"),
-                            "name": p.get("full_name") or (p.get("email", "").split("@")[0].title()) or "Enrolled Student",
-                            "email": p.get("email") or "student@university.edu",
-                            "avatar_url": p.get("avatar_url"),
-                            "course_id": cid,
-                            "course_title": c_title,
-                            "enrolled_date": str(enr.get("enrolled_at", ""))[:10] or "2026-10-18",
-                            "progress": f"{enr.get('progress_percentage', 0)}%",
-                            "doubts_asked": 0,
-                            "status": "Completed" if enr.get("is_completed") else "Active"
-                        })
+                    if not course_id:
+                        # Group by unique student according to Supabase profile (user_id / email)
+                        students_map = {}
+                        for enr in enrollments:
+                            uid = enr.get("user_id")
+                            p = profiles_map.get(uid, {})
+                            cid = enr.get("course_id")
+                            c_title = courses_map.get(cid) or "University Course"
+                            enr_date = str(enr.get("enrolled_at", ""))[:10] or "2026-10-18"
+                            prog_val = int(enr.get("progress_percentage") or 0)
+                            enr_id = str(enr.get("id"))
+
+                            email = p.get("email") or "student@university.edu"
+                            key = str(uid) if uid else email.lower().strip()
+
+                            if key not in students_map:
+                                students_map[key] = {
+                                    "id": str(uid) if uid else enr_id,
+                                    "user_id": uid,
+                                    "name": p.get("full_name") or (email.split("@")[0].title()) or "Enrolled Student",
+                                    "email": email,
+                                    "avatar_url": p.get("avatar_url"),
+                                    "course_id": cid,
+                                    "course_title": c_title,
+                                    "courses_count": 0,
+                                    "enrolled_courses": [],
+                                    "courses": [],
+                                    "enrollment_ids": [],
+                                    "enrolled_date": enr_date,
+                                    "total_progress": 0,
+                                    "doubts_asked": 0,
+                                    "status": "Active"
+                                }
+
+                            std = students_map[key]
+                            std["courses_count"] += 1
+                            std["enrollment_ids"].append(enr_id)
+                            std["enrolled_courses"].append(c_title)
+                            std["courses"].append({
+                                "id": cid,
+                                "title": c_title,
+                                "enrollment_id": enr_id,
+                                "enrolled_date": enr_date,
+                                "progress": prog_val
+                            })
+                            std["total_progress"] += prog_val
+                            if enr_date < std["enrolled_date"]:
+                                std["enrolled_date"] = enr_date
+
+                        students = []
+                        for s in students_map.values():
+                            count = s["courses_count"]
+                            s["progress"] = f"{round(s['total_progress'] / max(1, count))}%"
+                            del s["total_progress"]
+                            students.append(s)
+                    else:
+                        students = []
+                        for enr in enrollments:
+                            p = profiles_map.get(enr.get("user_id"), {})
+                            cid = enr.get("course_id")
+                            c_title = courses_map.get(cid) or "University Course"
+                            enr_id = str(enr.get("id"))
+                            students.append({
+                                "id": enr_id,
+                                "user_id": enr.get("user_id"),
+                                "name": p.get("full_name") or (p.get("email", "").split("@")[0].title()) or "Enrolled Student",
+                                "email": p.get("email") or "student@university.edu",
+                                "avatar_url": p.get("avatar_url"),
+                                "course_id": cid,
+                                "course_title": c_title,
+                                "courses_count": 1,
+                                "enrolled_courses": [c_title],
+                                "courses": [{"id": cid, "title": c_title, "enrollment_id": enr_id}],
+                                "enrollment_ids": [enr_id],
+                                "enrolled_date": str(enr.get("enrolled_at", ""))[:10] or "2026-10-18",
+                                "progress": f"{enr.get('progress_percentage', 0)}%",
+                                "doubts_asked": 0,
+                                "status": "Completed" if enr.get("is_completed") else "Active"
+                            })
 
                     store = self._read_local_store()
                     store["students"] = students
@@ -779,7 +857,7 @@ class DBAdapter:
         store = self._read_local_store()
         students = store.get("students", [])
         if course_id:
-            students = [s for s in students if s.get("course_id") == course_id]
+            students = [s for s in students if s.get("course_id") == course_id or any(c.get("id") == course_id for c in s.get("courses", []))]
         return students
 
     def add_student(self, name: str, email: str, course_id: str) -> Dict[str, Any]:
@@ -846,21 +924,22 @@ class DBAdapter:
         return new_std
 
     def delete_student(self, student_id: str) -> bool:
-        """Removes a student enrollment from Supabase and local cache."""
+        """Removes a student enrollment or all student enrollments from Supabase and local cache."""
         deleted = False
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
-                res = self.session.delete(f"{self.supabase_url}/rest/v1/course_enrollments?id=eq.{student_id}", headers=headers, timeout=8)
-                if res.ok:
-                    deleted = True
+                # Delete by enrollment id or user_id
+                self.session.delete(f"{self.supabase_url}/rest/v1/course_enrollments?id=eq.{student_id}", headers=headers, timeout=8)
+                self.session.delete(f"{self.supabase_url}/rest/v1/course_enrollments?user_id=eq.{student_id}", headers=headers, timeout=8)
+                deleted = True
             except Exception as e:
                 print(f"[Supabase] delete_student warning: {e}")
 
         store = self._read_local_store()
         if "students" in store:
             init_len = len(store["students"])
-            store["students"] = [s for s in store["students"] if s.get("id") != student_id]
+            store["students"] = [s for s in store["students"] if s.get("id") != student_id and s.get("user_id") != student_id]
             if len(store["students"]) < init_len:
                 deleted = True
             self._write_local_store(store)

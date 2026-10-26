@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=20261026_unique_students">
   <!-- Enterprise Encrypted HLS Streaming Engine (Udemy/Hotstar grade) -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -182,74 +182,6 @@
           </div>
         </div>
 
-        <!-- Create Course Form -->
-        <div class="create-card glass-panel" id="create-course-panel" style="display: none;">
-          <div class="create-card-header">
-            <div class="card-title-group">
-              <span class="icon-sparkle">✨</span>
-              <h3>Create New Course</h3>
-            </div>
-            <button class="btn-close-panel" id="btn-hide-create-course">&times;</button>
-          </div>
-          <form id="create-course-form" class="standard-form">
-            <div class="form-grid-2">
-              <div class="form-group">
-                <label for="new-course-title">Course Title *</label>
-                <input type="text" id="new-course-title" class="form-input" placeholder="e.g. Distributed Systems & Microservices Architecture" required>
-              </div>
-              <div class="form-group">
-                <label for="new-course-category">Category *</label>
-                <select id="new-course-category" class="form-input styled-dropdown">
-                  <option value="Computer Science">Computer Science</option>
-                  <option value="Artificial Intelligence">Artificial Intelligence & ML</option>
-                  <option value="Full-Stack Web Dev">Full-Stack Web Dev</option>
-                  <option value="System Design & Architecture">System Design & Architecture</option>
-                  <option value="Cloud & DevOps">Cloud & DevOps</option>
-                  <option value="Data Science & Engineering">Data Science & Engineering</option>
-                  <option value="Cyber Security">Cyber Security</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="form-grid-3">
-              <div class="form-group">
-                <label for="new-course-level">Proficiency Level</label>
-                <select id="new-course-level" class="form-input styled-dropdown">
-                  <option value="All Levels">All Levels</option>
-                  <option value="Beginner">Beginner</option>
-                  <option value="Intermediate">Intermediate</option>
-                  <option value="Advanced">Advanced / Graduate</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="new-course-instructor">Instructor Name</label>
-                <input type="text" id="new-course-instructor" class="form-input" placeholder="e.g. Dr. Maya Chen">
-              </div>
-              <div class="form-group">
-                <label for="new-course-thumbnail">Thumbnail Image URL (Optional)</label>
-                <input type="url" id="new-course-thumbnail" class="form-input" placeholder="https://images.unsplash.com/...">
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label for="new-course-tagline">Course Tagline / Short Pitch</label>
-              <input type="text" id="new-course-tagline" class="form-input" placeholder="e.g. Master modern cloud systems, microservice scaling, and RAG architectures.">
-            </div>
-
-            <div class="form-group">
-              <label for="new-course-desc">Course Description</label>
-              <textarea id="new-course-desc" class="form-input form-textarea" rows="3" placeholder="Provide syllabus summary, student prerequisites, and core learning goals..."></textarea>
-            </div>
-
-            <div class="form-actions-bar">
-              <span id="create-course-feedback" class="feedback-msg"></span>
-              <div class="btn-group">
-                <button type="button" class="btn btn-secondary" id="btn-cancel-create-course">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="btn-submit-course">Create Course</button>
-              </div>
-            </div>
-          </form>
-        </div>
 
         <!-- Course Cards Catalog -->
         <div class="courses-catalog-section">
@@ -395,7 +327,7 @@
               <thead>
                 <tr>
                   <th>Student Name & Email</th>
-                  <th>Course Enrolled</th>
+                  <th>Courses Enrolled</th>
                   <th>Enrolled On</th>
                   <th>Progress</th>
                   <th>AI Doubts</th>
@@ -1236,6 +1168,343 @@
 
   </div>
 
-  <script src="app.js?v=20261024_theory_vs_coding"></script>
+  <script src="app.js?v=20261026_unique_students"></script>
+
+  <!-- ========== CREATE COURSE MODAL (POPUP DIALOG) ========== -->
+  <style id="cc-modal-critical-styles">
+    .cc-modal-overlay {
+      position: fixed !important;
+      inset: 0 !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 99999 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: rgba(4, 7, 18, 0.85) !important;
+      backdrop-filter: blur(8px) !important;
+      -webkit-backdrop-filter: blur(8px) !important;
+      padding: 20px !important;
+      box-sizing: border-box !important;
+      animation: ccFadeIn 0.2s ease-out;
+    }
+
+    @keyframes ccFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .cc-modal-box {
+      background: #0b1120 !important;
+      border: 1px solid rgba(99, 102, 241, 0.3) !important;
+      border-radius: 16px !important;
+      width: 100% !important;
+      max-width: 960px !important;
+      max-height: 92vh !important;
+      overflow-y: auto !important;
+      padding: 28px 34px !important;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.9), 0 0 40px rgba(99, 102, 241, 0.15) !important;
+      box-sizing: border-box !important;
+      animation: ccSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      scrollbar-width: thin;
+      scrollbar-color: rgba(99, 102, 241, 0.3) transparent;
+    }
+
+    @keyframes ccSlideUp {
+      from { opacity: 0; transform: translateY(16px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .cc-modal-header {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      margin-bottom: 24px !important;
+      padding-bottom: 0 !important;
+      border-bottom: none !important;
+    }
+
+    .cc-modal-title-group {
+      display: flex !important;
+      align-items: center !important;
+      gap: 10px !important;
+    }
+
+    .cc-modal-title-group .cc-sparkle-icon {
+      font-size: 1.35rem !important;
+      line-height: 1 !important;
+      filter: drop-shadow(0 0 6px #f59e0b);
+    }
+
+    .cc-modal-title {
+      font-size: 1.35rem !important;
+      font-weight: 700 !important;
+      color: #ffffff !important;
+      margin: 0 !important;
+      letter-spacing: -0.01em !important;
+      font-family: inherit !important;
+    }
+
+    .cc-close-btn {
+      background: transparent !important;
+      border: none !important;
+      color: #94a3b8 !important;
+      cursor: pointer !important;
+      padding: 6px !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      border-radius: 6px !important;
+      transition: all 0.15s ease !important;
+      line-height: 1 !important;
+    }
+
+    .cc-close-btn:hover {
+      color: #ffffff !important;
+      background: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    .cc-modal-form {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 20px !important;
+    }
+
+    .cc-form-row {
+      display: flex !important;
+      gap: 20px !important;
+      width: 100% !important;
+    }
+
+    .cc-row-1 .cc-flex-title {
+      flex: 1.4 !important;
+    }
+
+    .cc-row-1 .cc-flex-cat {
+      flex: 1 !important;
+    }
+
+    .cc-row-2 > .cc-field {
+      flex: 1 !important;
+    }
+
+    .cc-field {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 8px !important;
+      width: 100% !important;
+    }
+
+    .cc-label {
+      font-size: 0.82rem !important;
+      font-weight: 600 !important;
+      color: #cbd5e1 !important;
+      letter-spacing: 0.01em !important;
+      margin: 0 !important;
+    }
+
+    .cc-req {
+      color: #a5b4fc !important;
+      margin-left: 2px !important;
+    }
+
+    .cc-opt {
+      color: #64748b !important;
+      font-weight: 400 !important;
+    }
+
+    .cc-input {
+      background: #070b16 !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      border-radius: 8px !important;
+      color: #f1f5f9 !important;
+      font-size: 0.88rem !important;
+      font-family: inherit !important;
+      padding: 12px 14px !important;
+      outline: none !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+      transition: border-color 0.15s, box-shadow 0.15s !important;
+    }
+
+    .cc-input::placeholder {
+      color: #475569 !important;
+    }
+
+    .cc-input:focus {
+      border-color: #6366f1 !important;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25) !important;
+      background: #090e1c !important;
+    }
+
+    .cc-select {
+      appearance: none !important;
+      -webkit-appearance: none !important;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+      background-repeat: no-repeat !important;
+      background-position: right 14px center !important;
+      padding-right: 38px !important;
+      cursor: pointer !important;
+    }
+
+    .cc-select option {
+      background: #0b1120 !important;
+      color: #f1f5f9 !important;
+    }
+
+    .cc-textarea {
+      min-height: 88px !important;
+      resize: vertical !important;
+      line-height: 1.5 !important;
+    }
+
+    .cc-modal-footer {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      margin-top: 10px !important;
+      padding-top: 12px !important;
+    }
+
+    .cc-feedback {
+      font-size: 0.84rem !important;
+      font-weight: 500 !important;
+    }
+
+    .cc-footer-actions {
+      display: flex !important;
+      align-items: center !important;
+      gap: 12px !important;
+      margin-left: auto !important;
+    }
+
+    .cc-btn-cancel {
+      background: rgba(255, 255, 255, 0.06) !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      color: #cbd5e1 !important;
+      padding: 10px 22px !important;
+      border-radius: 8px !important;
+      font-size: 0.88rem !important;
+      font-weight: 600 !important;
+      cursor: pointer !important;
+      transition: all 0.15s ease !important;
+    }
+
+    .cc-btn-cancel:hover {
+      background: rgba(255, 255, 255, 0.1) !important;
+      color: #ffffff !important;
+    }
+
+    .cc-submit-btn {
+      background: #4f46e5 !important;
+      border: 1px solid rgba(99, 102, 241, 0.5) !important;
+      color: #ffffff !important;
+      padding: 10px 24px !important;
+      border-radius: 8px !important;
+      font-size: 0.88rem !important;
+      font-weight: 600 !important;
+      cursor: pointer !important;
+      box-shadow: 0 0 20px rgba(79, 70, 229, 0.45) !important;
+      transition: all 0.15s ease !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+    }
+
+    .cc-submit-btn:hover {
+      background: #4338ca !important;
+      box-shadow: 0 0 26px rgba(79, 70, 229, 0.65) !important;
+    }
+
+    @media (max-width: 768px) {
+      .cc-form-row {
+        flex-direction: column !important;
+        gap: 16px !important;
+      }
+    }
+  </style>
+
+  <div class="cc-modal-overlay" id="create-course-panel" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cc-modal-title">
+    <div class="cc-modal-box" id="cc-modal-box">
+      <!-- Header -->
+      <div class="cc-modal-header">
+        <div class="cc-modal-title-group">
+          <span class="cc-sparkle-icon">✨</span>
+          <h2 class="cc-modal-title" id="cc-modal-title">Create New Course</h2>
+        </div>
+        <button type="button" class="cc-close-btn" id="btn-hide-create-course" aria-label="Close modal">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <!-- Form -->
+      <form id="create-course-form" class="cc-modal-form">
+        <!-- Row 1: Title + Category -->
+        <div class="cc-form-row cc-row-1">
+          <div class="cc-field cc-flex-title">
+            <label class="cc-label" for="new-course-title">Course Title <span class="cc-req">*</span></label>
+            <input type="text" id="new-course-title" class="cc-input" placeholder="e.g. Distributed Systems &amp; Microservices Architecture" required>
+          </div>
+          <div class="cc-field cc-flex-cat">
+            <label class="cc-label" for="new-course-category">Category <span class="cc-req">*</span></label>
+            <select id="new-course-category" class="cc-input cc-select">
+              <option value="Computer Science">Computer Science</option>
+              <option value="Artificial Intelligence">Artificial Intelligence &amp; ML</option>
+              <option value="Full-Stack Web Dev">Full-Stack Web Dev</option>
+              <option value="System Design &amp; Architecture">System Design &amp; Architecture</option>
+              <option value="Cloud &amp; DevOps">Cloud &amp; DevOps</option>
+              <option value="Data Science &amp; Engineering">Data Science &amp; Engineering</option>
+              <option value="Cyber Security">Cyber Security</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row 2: Level + Instructor + Thumbnail -->
+        <div class="cc-form-row cc-row-2">
+          <div class="cc-field">
+            <label class="cc-label" for="new-course-level">Proficiency Level</label>
+            <select id="new-course-level" class="cc-input cc-select">
+              <option value="All Levels">All Levels</option>
+              <option value="Beginner">Beginner</option>
+              <option value="Intermediate">Intermediate</option>
+              <option value="Advanced">Advanced / Graduate</option>
+            </select>
+          </div>
+          <div class="cc-field">
+            <label class="cc-label" for="new-course-instructor">Instructor Name</label>
+            <input type="text" id="new-course-instructor" class="cc-input" placeholder="e.g. Dr. Maya Chen">
+          </div>
+          <div class="cc-field">
+            <label class="cc-label" for="new-course-thumbnail">Thumbnail Image URL <span class="cc-opt">(Optional)</span></label>
+            <input type="url" id="new-course-thumbnail" class="cc-input" placeholder="https://images.unsplash.com/...">
+          </div>
+        </div>
+
+        <!-- Row 3: Tagline -->
+        <div class="cc-field">
+          <label class="cc-label" for="new-course-tagline">Course Tagline / Short Pitch</label>
+          <input type="text" id="new-course-tagline" class="cc-input" placeholder="e.g. Master modern cloud systems, microservice scaling, and RAG architectures.">
+        </div>
+
+        <!-- Row 4: Description -->
+        <div class="cc-field">
+          <label class="cc-label" for="new-course-desc">Course Description</label>
+          <textarea id="new-course-desc" class="cc-input cc-textarea" rows="3" placeholder="Provide syllabus summary, student prerequisites, and core learning goals..."></textarea>
+        </div>
+
+        <!-- Footer -->
+        <div class="cc-modal-footer">
+          <span id="create-course-feedback" class="cc-feedback"></span>
+          <div class="cc-footer-actions">
+            <button type="button" class="cc-btn-cancel" id="btn-cancel-create-course">Cancel</button>
+            <button type="submit" class="cc-submit-btn" id="btn-submit-course">Create Course</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
 </body>
 </html>

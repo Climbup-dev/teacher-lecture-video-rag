@@ -62,7 +62,15 @@ export function initStudioTab() {
     utterancesContainer.innerHTML = "";
 
     if (!utterances || utterances.length === 0) {
-      utterancesContainer.innerHTML = `<div class="empty-state">No spoken utterances found for this lecture.</div>`;
+      utterancesContainer.innerHTML = `
+        <div class="empty-state" style="padding: 32px 16px; text-align: center;">
+          <div style="font-size: 1.4rem; margin-bottom: 8px;">⏳</div>
+          <div style="font-weight: 600; color: #fff; margin-bottom: 4px;">AI Pipeline Indexing in Background</div>
+          <div style="font-size: 0.8rem; color: var(--text-dim); line-height: 1.4;">
+            Video streaming is live and fully accessible. Deepgram transcription & Gemini concept chunking will update here automatically upon completion.
+          </div>
+        </div>
+      `;
       return;
     }
 
@@ -93,7 +101,15 @@ export function initStudioTab() {
     chunksContainer.innerHTML = "";
 
     if (!chunks || chunks.length === 0) {
-      chunksContainer.innerHTML = `<div class="empty-state">No semantic chunks indexed for this lecture.</div>`;
+      chunksContainer.innerHTML = `
+        <div class="empty-state" style="padding: 32px 16px; text-align: center;">
+          <div style="font-size: 1.4rem; margin-bottom: 8px;">🧠</div>
+          <div style="font-weight: 600; color: #fff; margin-bottom: 4px;">Concept Boundaries Indexing</div>
+          <div style="font-size: 0.8rem; color: var(--text-dim); line-height: 1.4;">
+            Gemini semantic concept boundaries and 768-dim embeddings are processing in the background.
+          </div>
+        </div>
+      `;
       return;
     }
 

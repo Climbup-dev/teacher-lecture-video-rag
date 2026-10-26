@@ -267,6 +267,12 @@ class RAGEngine:
             all_chunks = self.db.search_similar_chunks(query_embedding=query_emb, lesson_id=lesson_id, top_k=6)
 
         if not all_chunks:
+            if lesson and lesson.get("processing_status") in ("indexing", "processing"):
+                return {
+                    "answer": "⏳ **AI Copilot is currently indexing this lecture in the background!**\n\nThe video playback is completely live and available for you to watch. AI timestamped doubts, conceptual notes, and practice quizzes will unlock automatically in 1–2 minutes as soon as the background processing finishes.",
+                    "retrieved_evidence": [],
+                    "video_timestamps": []
+                }
             return {
                 "answer": "No lecture content has been indexed for this lesson yet. Please process the video first.",
                 "retrieved_evidence": [],
@@ -354,17 +360,35 @@ class RAGEngine:
             if groq_analysis:
                 # 1. OUT OF SCOPE / IRRELEVANT QUERY WITH HELPFUL DIRECT ANSWER
                 if groq_analysis.get("is_lecture_related") is False:
+                    intent = (groq_analysis.get("intent") or "").lower()
                     direct_ans = (groq_analysis.get("out_of_scope_direct_answer") or "").strip()
+                    
+                    # Detect greetings, compliments, acknowledgments (e.g. "THAT GREATE", "thanks", "hello", "hi")
+                    lower_q = safe_query.lower()
+                    is_pleasantry = (
+                        intent == "greeting" or
+                        any(w in lower_q for w in ["great", "thanks", "thank you", "hello", "hi", "namaste", "awesome", "perfect", "good", "ok", "understood"])
+                    )
+
+                    if is_pleasantry:
+                        answer_text = direct_ans or f"You're very welcome! I'm here to help you master **{lesson_title}**. Let me know whenever you have any conceptual questions or need any topic explained."
+                        return {
+                            "answer": answer_text,
+                            "retrieved_evidence": [],
+                            "video_timestamps": []
+                        }
+
                     if direct_ans:
                         warning_msg = (
-                            "> ⚠️ **Note:** Yeh sawaal is lecture video ke topics se sambandhit nahi hai. Kripya video lecture aur uske concepts se jude doubts poochein!\n\n"
-                            "---\n\n"
-                            f"### 💡 Answer:\n{direct_ans}"
+                            f"> ℹ️ **General Concept Note:**\n"
+                            f"> {direct_ans}\n\n"
+                            f"*Tip: This lecture focuses on **{lesson_title}**. Feel free to ask any specific doubt, code example, or timestamp question from this video!*"
                         )
                     else:
                         warning_msg = (
-                            f"⚠️ **Topic Not Discussed:** Yeh sawaal is lecture video ke topics se direct sambandhit nahi hai.\n\n"
-                            f"Yeh lecture **{lesson_title}** par focused hai. Kripya video lecture aur uske concepts se jude doubts poochein!"
+                            f"> ℹ️ **Lecture Focus Reminder:**\n"
+                            f"> This doubt is outside the topics covered in **{lesson_title}**.\n\n"
+                            f"Please ask any question related to the lecture concepts, code, or theory covered in this video."
                         )
                     return {
                         "answer": warning_msg,

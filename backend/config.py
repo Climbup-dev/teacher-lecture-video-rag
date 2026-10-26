@@ -47,6 +47,14 @@ class Config:
     MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "2500"))
     MAX_RESOURCE_SIZE_MB = int(os.getenv("MAX_RESOURCE_SIZE_MB", "100"))
 
+    # pracTQ Mentor Studio Email Notification Config
+    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM = os.getenv("SMTP_FROM", "pracTQ Mentor Studio <notifications@practq.com>")
+    MENTOR_EMAILS = [e.strip() for e in os.getenv("MENTOR_EMAILS", "amirshaikh320340@gmail.com").split(",") if e.strip()]
+
     # Networking
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", "8000"))
@@ -83,6 +91,14 @@ def reload_config():
     Config.CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
     Config.MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
     Config.MAX_RESOURCE_SIZE_MB = int(os.getenv("MAX_RESOURCE_SIZE_MB", "50"))
+    
+    # pracTQ Mentor Studio Email Notification Config
+    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM = os.getenv("SMTP_FROM", "pracTQ Mentor Studio <notifications@practq.com>")
+    MENTOR_EMAILS = [e.strip() for e in os.getenv("MENTOR_EMAILS", "amirshaikh320340@gmail.com").split(",") if e.strip()]
     if not Config.GOOGLE_CREDENTIALS_JSON and (Config.BASE_DIR / "service_account.json").exists():
         try:
             Config.GOOGLE_CREDENTIALS_JSON = (Config.BASE_DIR / "service_account.json").read_text(encoding="utf-8")

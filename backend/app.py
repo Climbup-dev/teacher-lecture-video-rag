@@ -1675,7 +1675,19 @@ async def process_video(
         else:
             raise HTTPException(status_code=400, detail="Please upload a video file or provide a video/Drive URL.")
 
-        # Dispatch to IngestionJobManager
+        # Instantly register lesson in DB so students/users can access and stream it immediately
+        db.save_lesson(
+            lesson_id=lesson_id,
+            course_id=clean_course_id,
+            title=clean_title,
+            duration_seconds=0,
+            video_url=video_url,
+            raw_transcript="",
+            utterances=[],
+            processing_status="indexing"
+        )
+
+        # Dispatch to IngestionJobManager for background AI processing
         job_mgr = get_job_manager()
         job = job_mgr.submit_job(
             course_id=clean_course_id,
@@ -1716,14 +1728,28 @@ async def ingest_from_drive(req: DriveIngestRequest):
     meta = gdm.get_file_metadata(req.file_id)
     title = req.title or (meta.get("name") if meta else "Drive Lecture")
     course_id = req.course_id or "course-applied-ai-rag"
+    drive_lesson_id = f"lesson_{uuid.uuid4().hex[:8]}"
 
     db.ensure_course_exists(course_id, title=req.course_name or title)
+
+    # Instantly register lesson in DB so students/users can access and stream it immediately
+    db.save_lesson(
+        lesson_id=drive_lesson_id,
+        course_id=course_id,
+        title=title,
+        duration_seconds=0,
+        video_url=f"https://drive.google.com/file/d/{req.file_id}/preview",
+        raw_transcript="",
+        utterances=[],
+        processing_status="indexing"
+    )
 
     job_mgr = get_job_manager()
     job = job_mgr.submit_job(
         course_id=course_id,
         title=title,
-        file_id=req.file_id
+        file_id=req.file_id,
+        lesson_id=drive_lesson_id
     )
 
     return JSONResponse(

@@ -384,7 +384,7 @@ class IngestionJobManager:
                 stage_message="Persisting lecture metadata & vectors to Supabase and local store..."
             )
 
-            # Save lesson metadata
+            # Save lesson metadata with full transcript, chunks, and mark processing_status="ready"
             self.db.save_lesson(
                 lesson_id=lesson_id,
                 course_id=course_id,
@@ -392,7 +392,8 @@ class IngestionJobManager:
                 duration_seconds=duration_seconds,
                 video_url=video_url,
                 raw_transcript=raw_transcript,
-                utterances=utterances
+                utterances=utterances,
+                processing_status="ready"
             )
 
             # Save chunks and vectors
@@ -427,6 +428,28 @@ class IngestionJobManager:
                 stage_message=f"Lecture '{title}' indexed successfully with {len(enriched_chunks)} concept chunks."
             )
             logger.info(f"Job {job_id} for lecture '{title}' COMPLETED successfully in background!")
+
+            # Trigger pracTQ Mentor Studio Email Notification to all mentors
+            try:
+                from backend.email_notifier import EmailNotifier
+                course_name = "Course"
+                if hasattr(self.db, "list_courses"):
+                    all_crs = self.db.list_courses()
+                    matching = next((c.get("title") for c in all_crs if c.get("id") == course_id), None)
+                    if matching:
+                        course_name = matching
+
+                EmailNotifier.notify_mentors_async(
+                    db=self.db,
+                    lesson_id=lesson_id,
+                    title=title,
+                    course_name=course_name,
+                    duration_seconds=duration_seconds,
+                    total_chunks=len(enriched_chunks)
+                )
+                logger.info(f"[pracTQ Mentor Studio] Mentor completion notification triggered for '{title}'.")
+            except Exception as notify_err:
+                logger.warning(f"[pracTQ Mentor Studio] Could not dispatch mentor notification: {notify_err}")
 
         except Exception as e:
             logger.exception(f"Job {job_id} failed during execution: {e}")

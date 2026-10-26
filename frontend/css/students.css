@@ -104,6 +104,37 @@
   color: var(--text-muted);
 }
 
+/* Unique Student Courses Display */
+.student-courses-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: flex-start;
+  max-width: 380px;
+}
+
+.student-courses-count-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.74rem;
+  font-weight: 700;
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+  letter-spacing: 0.02em;
+}
+
+.student-courses-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
 /* Course Badge */
 .student-course-badge {
   display: inline-flex;
@@ -116,10 +147,37 @@
   background: rgba(99, 102, 241, 0.12);
   color: #c7d2fe;
   border: 1px solid rgba(99, 102, 241, 0.28);
-  max-width: 220px;
+  max-width: 260px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: all var(--transition-fast);
+}
+
+.student-course-badge:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.btn-remove-course-enr {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.88rem;
+  line-height: 1;
+  padding: 0 3px;
+  margin-left: 2px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.btn-remove-course-enr:hover {
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.25);
 }
 
 /* Progress Bar in Table */
