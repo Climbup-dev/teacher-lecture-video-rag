@@ -25,11 +25,8 @@ let modalSelectedVideoFile = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   // Auto-detect Backend API Host (supports port 8000, 8080, Live Server 5500, and Cloud Run)
-  const API_BASE = (window.location.port === "8000" || window.location.port === "8080")
-    ? ""
-    : (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.protocol === "file:")
-      ? "http://127.0.0.1:8000"
-      : "https://teacher-lecture-video-rag-28929614461.asia-south1.run.app";
+  const isLocalDevPort = (window.location.port === "5500" || window.location.port === "3000" || window.location.protocol === "file:");
+  const API_BASE = isLocalDevPort ? "http://127.0.0.1:8000" : "";
   
   const originalFetch = window.fetch;
   window.fetch = function(url, options) {
