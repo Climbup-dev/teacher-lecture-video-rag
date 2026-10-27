@@ -39,6 +39,13 @@ class Config:
     GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "") or os.getenv("GOOGLE_ADMIN_CLIENT_ID", "")
     GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "") or os.getenv("GOOGLE_ADMIN_CLIENT_SECRET", "")
     
+    # Cloudflare R2 Object Storage (High-Speed Video Streaming CDN)
+    CLOUDFLARE_R2_ACCOUNT_ID = os.getenv("CLOUDFLARE_R2_ACCOUNT_ID", "7b1ddf3b605590309b8c2cd35bbe506f")
+    CLOUDFLARE_R2_ACCESS_KEY_ID = os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID", "9f5daeaaacf537f35f6057ef818d3792")
+    CLOUDFLARE_R2_SECRET_ACCESS_KEY = os.getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "4d0120bd3841ed8d0188a800f5e02e98d4e858521d4b2f8a4a304d40104f58ec")
+    CLOUDFLARE_R2_BUCKET_NAME = os.getenv("CLOUDFLARE_R2_BUCKET_NAME", "practq45")
+    CLOUDFLARE_R2_ENDPOINT = os.getenv("CLOUDFLARE_R2_ENDPOINT", "https://7b1ddf3b605590309b8c2cd35bbe506f.r2.cloudflarestorage.com")
+
     # Production & Security Controls
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
@@ -85,6 +92,11 @@ def reload_config():
     Config.GOOGLE_OAUTH_REFRESH_TOKEN = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN", "") or os.getenv("GOOGLE_ADMIN_REFRESH_TOKEN", "")
     Config.GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "") or os.getenv("GOOGLE_ADMIN_CLIENT_ID", "")
     Config.GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "") or os.getenv("GOOGLE_ADMIN_CLIENT_SECRET", "")
+    Config.CLOUDFLARE_R2_ACCOUNT_ID = os.getenv("CLOUDFLARE_R2_ACCOUNT_ID", "7b1ddf3b605590309b8c2cd35bbe506f")
+    Config.CLOUDFLARE_R2_ACCESS_KEY_ID = os.getenv("CLOUDFLARE_R2_ACCESS_KEY_ID", "9f5daeaaacf537f35f6057ef818d3792")
+    Config.CLOUDFLARE_R2_SECRET_ACCESS_KEY = os.getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "4d0120bd3841ed8d0188a800f5e02e98d4e858521d4b2f8a4a304d40104f58ec")
+    Config.CLOUDFLARE_R2_BUCKET_NAME = os.getenv("CLOUDFLARE_R2_BUCKET_NAME", "practq45")
+    Config.CLOUDFLARE_R2_ENDPOINT = os.getenv("CLOUDFLARE_R2_ENDPOINT", "https://7b1ddf3b605590309b8c2cd35bbe506f.r2.cloudflarestorage.com")
     Config.ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
     Config.ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
     Config.READONLY_CONFIG = os.getenv("READONLY_CONFIG", "false").lower() in ("true", "1", "yes")

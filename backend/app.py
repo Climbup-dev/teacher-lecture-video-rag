@@ -138,6 +138,17 @@ def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, A
     if playlist_file.exists():
         return True
 
+    # 1. Ultra-Fast R2 Check: If already packaged in Cloudflare R2, avoid Google Drive download!
+    from backend.r2_storage import get_r2_storage
+    r2 = get_r2_storage()
+    if r2.is_configured() and r2.has_hls_package(lesson_id):
+        # Pull master playlist into local cache
+        master_bytes = r2.get_hls_file_bytes(lesson_id, "master.m3u8")
+        if master_bytes:
+            hls_dir.mkdir(parents=True, exist_ok=True)
+            playlist_file.write_bytes(master_bytes)
+            return True
+
     with _packaging_lock:
         if lesson_id in _packaging_in_progress:
             is_active = True
@@ -183,7 +194,12 @@ def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, A
                 output_hls_dir=hls_dir,
                 segment_duration=6
             )
-            return bool(res and playlist_file.exists())
+            if res and playlist_file.exists():
+                # Asynchronously sync package to Cloudflare R2 and run LRU eviction check
+                if r2.is_configured():
+                    threading.Thread(target=r2.upload_hls_package, args=(lesson_id, hls_dir), daemon=True).start()
+                    threading.Thread(target=r2.evict_oldest_lessons_if_needed, daemon=True).start()
+                return True
         return False
     except Exception as e:
         logger.warning(f"[HLS Packaging] Notice during packaging for {lesson_id}: {e}")
@@ -995,6 +1011,15 @@ async def get_lesson_hls_key(
 
     key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
     if not key_file.exists():
+        from backend.r2_storage import get_r2_storage
+        r2 = get_r2_storage()
+        if r2.is_configured():
+            r2_key_bytes = r2.get_hls_file_bytes(lesson_id, "enc.key")
+            if r2_key_bytes:
+                key_file.parent.mkdir(parents=True, exist_ok=True)
+                key_file.write_bytes(r2_key_bytes)
+
+    if not key_file.exists():
         raise HTTPException(status_code=404, detail="Encryption key not found.")
 
     key_bytes = key_file.read_bytes()
@@ -1086,6 +1111,26 @@ async def get_lesson_hls_segment(
         )
 
     if not seg_file.exists():
+        from backend.r2_storage import get_r2_storage
+        r2 = get_r2_storage()
+        if r2.is_configured():
+            r2_bytes = r2.get_hls_file_bytes(lesson_id, clean_seg)
+            if r2_bytes:
+                # Cache locally in background so next hit on this container instance is instantaneous
+                try:
+                    seg_file.parent.mkdir(parents=True, exist_ok=True)
+                    seg_file.write_bytes(r2_bytes)
+                except Exception:
+                    pass
+                return Response(
+                    content=r2_bytes,
+                    media_type="video/mp2t",
+                    headers={
+                        "Cache-Control": "public, max-age=86400, s-maxage=604800, immutable",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "X-Climbup-Player, Range, Authorization",
+                    }
+                )
         raise HTTPException(status_code=404, detail="Segment not found.")
 
     return FileResponse(

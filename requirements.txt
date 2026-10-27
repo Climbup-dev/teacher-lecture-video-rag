@@ -7,3 +7,4 @@ imageio-ffmpeg>=0.5.1
 python-multipart>=0.0.6
 google-auth>=2.20.0
 google-api-python-client>=2.100.0
+boto3>=1.34.0

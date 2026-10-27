@@ -235,6 +235,16 @@ class IngestionJobManager:
                             segment_duration=6
                         )
                         hls_packaged = bool(res and res.get("total_segments", 0) > 0)
+                        if hls_packaged:
+                            try:
+                                from backend.r2_storage import get_r2_storage
+                                r2 = get_r2_storage()
+                                if r2.is_configured():
+                                    import threading
+                                    threading.Thread(target=r2.upload_hls_package, args=(lesson_id, hls_output_dir), daemon=True).start()
+                                    threading.Thread(target=r2.evict_oldest_lessons_if_needed, daemon=True).start()
+                            except Exception as r2_e:
+                                logger.warning(f"[HLS Ingestion] Notice on R2 sync: {r2_e}")
                 except Exception as hls_err:
                     logger.warning(f"[HLS Ingestion] Notice on HLS packaging: {hls_err}")
 
