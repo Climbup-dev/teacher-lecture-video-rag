@@ -46,6 +46,10 @@ class Config:
     CLOUDFLARE_R2_BUCKET_NAME = os.getenv("CLOUDFLARE_R2_BUCKET_NAME", "practq45")
     CLOUDFLARE_R2_ENDPOINT = os.getenv("CLOUDFLARE_R2_ENDPOINT", "https://7b1ddf3b605590309b8c2cd35bbe506f.r2.cloudflarestorage.com")
 
+    # Agora Live Streaming Configuration
+    AGORA_APP_ID = os.getenv("AGORA_APP_ID", "")
+    AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "")
+
     # Production & Security Controls
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
@@ -97,6 +101,8 @@ def reload_config():
     Config.CLOUDFLARE_R2_SECRET_ACCESS_KEY = os.getenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "4d0120bd3841ed8d0188a800f5e02e98d4e858521d4b2f8a4a304d40104f58ec")
     Config.CLOUDFLARE_R2_BUCKET_NAME = os.getenv("CLOUDFLARE_R2_BUCKET_NAME", "practq45")
     Config.CLOUDFLARE_R2_ENDPOINT = os.getenv("CLOUDFLARE_R2_ENDPOINT", "https://7b1ddf3b605590309b8c2cd35bbe506f.r2.cloudflarestorage.com")
+    Config.AGORA_APP_ID = os.getenv("AGORA_APP_ID", "")
+    Config.AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "")
     Config.ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
     Config.ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
     Config.READONLY_CONFIG = os.getenv("READONLY_CONFIG", "false").lower() in ("true", "1", "yes")

@@ -8,7 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261026_unique_students">
+  <link rel="stylesheet" href="style.css?v=20261027_bg_video_worker_pill">
+  <link rel="stylesheet" href="css/admin-auth.css?v=20261027_bg_video_worker_pill">
   <!-- Enterprise Encrypted HLS Streaming Engine (Udemy/Hotstar grade) -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -401,22 +402,6 @@
         <!-- SUBVIEW 1: Course Videos Section -->
         <div class="cd-subview-panel active" id="cd-view-videos">
           <div class="course-lectures-section">
-            <div class="section-title-bar" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
-              <div>
-                <h3 style="font-size: 1.35rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 10px;">
-                  <span>🎬 Course Lectures</span>
-                  <span class="badge-mini" id="cd-lectures-badge">0 Videos</span>
-                </h3>
-                <p style="font-size: 0.84rem; color: var(--text-muted); margin: 4px 0 0 0;">
-                  Lecture videos processed with AI transcripts, concept segmentation, and interactive studio playback.
-                </p>
-              </div>
-              <button class="btn btn-primary" id="btn-section-upload-video">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
-                + Upload Video
-              </button>
-            </div>
-
             <!-- Video lectures grid -->
             <div class="course-lectures-container" id="cd-lectures-grid">
               <div class="empty-state">Loading videos...</div>
@@ -937,146 +922,126 @@
     <!-- MODAL: DUAL-AI ASSIGNMENT STUDIO & EDITABLE PUBLISHER       -->
     <!-- ============================================================ -->
     <div class="modal" id="modal-ai-assignment-editor" style="display: none;">
-      <div class="modal-dialog ai-assignment-modal-dialog">
-        <!-- Modal Top Bar -->
-        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 14px;">
-          <div>
-            <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 800; color: #38d399; text-transform: uppercase; background: rgba(56, 211, 153, 0.12); padding: 3px 10px; border-radius: 999px; margin-bottom: 6px;">
-              <span>✦</span> Admin Assignment Studio
+      <div class="modal-dialog glass-panel" style="max-width: 780px; max-height: 90vh; overflow-y: auto;">
+        
+        <!-- Header -->
+        <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 1.6rem;">📊</span>
+            <div>
+              <h2 style="font-size: 1.25rem; margin: 0; color: #fff; display: flex; align-items: center; gap: 8px;">
+                Direct Assignment Upload (JSON / CSV)
+              </h2>
+              <p style="font-size: 0.8rem; color: #94a3b8; margin: 3px 0 0 0;" id="ai-assign-target-lecture-info">
+                Directly upload your questions file for this lecture. No manual form typing required.
+              </p>
             </div>
-            <h2 style="font-size: 1.35rem; font-weight: 800; color: #fff; margin: 0;">
-              Lecture Mission & Assignment Studio
-            </h2>
-            <p style="font-size: 0.82rem; color: var(--text-muted); margin: 3px 0 0 0;">
-              Synthesize, review, and publish real-world practical missions grounded in actual lecture content.
-            </p>
           </div>
-          <button type="button" class="btn btn-icon" id="btn-close-ai-assign-modal" style="font-size: 1.3rem;">&times;</button>
+          <button type="button" class="btn-close" id="btn-close-ai-assign-modal" style="font-size: 1.4rem; color: #94a3b8; background: transparent; border: none; cursor: pointer;">&times;</button>
         </div>
 
-        <!-- Top Action Bar: Lecture Selection & Synthesize Button -->
-        <div class="studio-top-bar" style="background: rgba(18, 30, 52, 0.7); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
-          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1;">
-            <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8;">TARGET LECTURE:</label>
-            <select id="ai-assign-lecture-select" class="styled-dropdown-mini" style="background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.35); color: #fff; border-radius: 8px; padding: 7px 12px; font-size: 0.88rem; outline: none; min-width: 260px; max-width: 100%;"></select>
-          </div>
-          <button type="button" class="btn btn-primary" id="btn-trigger-ai-synthesis" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800; padding: 8px 18px; font-size: 0.88rem; box-shadow: 0 4px 14px rgba(56, 211, 153, 0.35);">
-            ⚡ Synthesize Assignment with AI
-          </button>
-        </div>
-
-        <!-- Synthesis Status Banner -->
-        <div id="ai-assign-status-banner" style="display: none; padding: 10px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.86rem;"></div>
-
-        <!-- EMPTY STATE (Before Assignment Exists or Loaded) -->
-        <div id="ai-assign-empty-state" style="display: none; text-align: center; padding: 40px 20px; background: rgba(18, 30, 52, 0.4); border: 1px dashed rgba(255, 255, 255, 0.12); border-radius: 12px; margin-bottom: 20px;">
-          <div style="font-size: 2rem; margin-bottom: 10px;">📋</div>
-          <h3 style="font-size: 1.1rem; color: #fff; margin: 0 0 6px 0;">No Assignment Generated Yet</h3>
-          <p style="font-size: 0.85rem; color: #94a3b8; max-width: 480px; margin: 0 auto 16px auto;">
-            Select a lecture above and click <strong>"⚡ Synthesize Assignment with AI"</strong> to automatically extract high-signal concepts, detect domain requirements, and create a quality-verified mission.
-          </p>
-        </div>
-
-        <!-- GENERATED ASSIGNMENT WORKSPACE (Loaded or Generated) -->
-        <div id="ai-assign-workspace" style="display: none;">
-          <!-- Top Quality & Navigation Bar -->
-          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 10px 14px; background: rgba(10, 16, 30, 0.6); border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06);">
-            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-              <span id="ai-assign-status-pill" style="font-size: 0.75rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; text-transform: uppercase;"></span>
-              <span id="ai-assign-archetype-pill" class="assignment-type-pill" style="display: none;"></span>
-              <span id="ai-assign-quality-pill" style="font-size: 0.75rem; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: rgba(56, 211, 153, 0.12); color: #38d399; border: 1px solid rgba(56, 211, 153, 0.3);">
-                🛡️ Quality Gate: 100/100 Verified
-              </span>
-              <span id="ai-assign-domain-pill" style="font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: rgba(99, 102, 241, 0.12); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3);"></span>
+        <div class="modal-body">
+          <!-- Target Lecture Selector -->
+          <div style="margin-bottom: 14px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 12px 14px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <label for="ai-assign-lecture-select" style="font-size: 0.82rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
+                🎯 Target Course & Lecture *
+              </label>
+              <span style="font-size: 0.75rem; color: #94a3b8;">Select where students will find this assignment</span>
             </div>
+            <select id="ai-assign-lecture-select" style="width: 100%; box-sizing: border-box; background: #090d16; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 10px 12px; font-size: 0.88rem; font-weight: 600; color: #f8fafc; outline: none; cursor: pointer;"></select>
+          </div>
 
-            <!-- Mode Switcher Tabs -->
-            <div style="display: flex; gap: 6px; background: rgba(18, 30, 52, 0.8); padding: 3px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08);">
-              <button type="button" id="tab-btn-edit-mode" class="studio-tab-btn active" style="background: rgba(56, 211, 153, 0.18); color: #38d399; border: none; padding: 5px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer;">
-                ✏️ Review & Edit
-              </button>
-              <button type="button" id="tab-btn-preview-mode" class="studio-tab-btn" style="background: transparent; color: #94a3b8; border: none; padding: 5px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer;">
-                👁️ Student Preview
-              </button>
+          <!-- Quick Assignment Settings -->
+          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 18px;">
+            <div>
+              <label style="font-size: 0.8rem; font-weight: 700; color: #cbd5e1; display: block; margin-bottom: 6px;">Assignment Title *</label>
+              <input type="text" id="ai-edit-title" class="form-input" placeholder="e.g. Milestone 1: Python Core Foundations" value="Lecture Milestone Mission" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 10px 14px; font-size: 0.92rem; color: #fff;">
+            </div>
+            <div>
+              <label style="font-size: 0.8rem; font-weight: 700; color: #cbd5e1; display: block; margin-bottom: 6px;">Due Date</label>
+              <input type="text" id="ai-edit-due" class="form-input" value="Next Sunday, 11:59 PM" placeholder="e.g. Next Sunday, 11:59 PM" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 10px 14px; font-size: 0.92rem; color: #fff;">
             </div>
           </div>
 
-          <!-- TAB PANE 1: EDIT FORM -->
-          <form id="ai-assign-edit-form">
-            <!-- Title & Overview Card -->
-            <div style="background: rgba(18, 30, 52, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;">
-              <div style="margin-bottom: 12px;">
-                <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase;">
-                  Mission Title:
-                </label>
-                <input type="text" id="ai-edit-title" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 8px; padding: 9px 12px; color: #fff; font-size: 0.95rem; font-weight: 700;">
-              </div>
-              <div>
-                <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #38d399; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em;">
-                  🌐 Real-World Mission Scenario:
-                </label>
-                <textarea id="ai-edit-scenario" rows="2" class="form-input" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 8px; padding: 8px 12px; color: #cbd5e1; font-size: 0.84rem; line-height: 1.45; resize: vertical;"></textarea>
-              </div>
+          <!-- Direct Drop Zone for JSON / CSV -->
+          <div class="drop-zone" id="ai-assign-direct-dropzone" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px 20px; border: 2px dashed rgba(56, 189, 248, 0.4); border-radius: 12px; background: rgba(14, 23, 42, 0.6); cursor: pointer; text-align: center; margin-bottom: 16px; transition: all 0.2s ease;">
+            <input type="file" id="ai-assign-direct-file-input" accept=".json,.csv" style="display: none;">
+            <div style="font-size: 2.6rem; margin-bottom: 10px;">📁</div>
+            <div style="font-size: 1.05rem; font-weight: 700; color: #fff; margin-bottom: 4px;">
+              Click to browse or drag & drop your <strong>.JSON</strong> or <strong>.CSV</strong> file
             </div>
-
-            <!-- Problem Cards List -->
-            <div style="margin-bottom: 18px;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-size: 0.78rem; font-weight: 800; color: #38d399; text-transform: uppercase; letter-spacing: 0.05em;">
-                  ⚡ Progressive Challenge Problems (100 Marks Total):
-                </span>
-                <span id="ai-edit-total-marks-badge" style="font-size: 0.75rem; color: #94a3b8;">Sum: 100 pts</span>
-              </div>
-              <div id="ai-edit-challenges-list"></div>
+            <div style="font-size: 0.82rem; color: #94a3b8; max-width: 480px;" id="ai-assign-file-subtext">
+              Directly parses all MCQs, Coding problems, options, answers, and tests in one click.
             </div>
+          </div>
 
-            <!-- Collapsible: Advanced Options & Starter Boilerplate -->
-            <details id="ai-edit-advanced-details" style="background: rgba(10, 16, 30, 0.5); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 16px; margin-bottom: 20px;">
-              <summary style="font-size: 0.82rem; font-weight: 700; color: #94a3b8; cursor: pointer; user-select: none;">
-                ⚙️ Advanced Options, Boilerplate & Quality Breakdown (Click to expand)
-              </summary>
-              <div style="margin-top: 14px; display: grid; gap: 14px;">
-                <!-- Row: Due Date & Max Score -->
-                <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
-                  <div>
-                    <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">Due Date Label:</label>
-                    <input type="text" id="ai-edit-due" class="form-input" value="Next Sunday, 11:59 PM" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem;">
-                  </div>
-                  <div>
-                    <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">Max Score:</label>
-                    <input type="number" id="ai-edit-maxscore" class="form-input" value="100" style="width: 100%; box-sizing: border-box; background: rgba(18, 30, 52, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.84rem;">
-                  </div>
-                </div>
-
-                <!-- Starter Code -->
-                <div>
-                  <label style="display: block; font-size: 0.75rem; font-weight: 700; color: #94a3b8; margin-bottom: 4px;">Starter Boilerplate Template:</label>
-                  <textarea id="ai-edit-starter" rows="5" class="form-input" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 8px; padding: 10px 12px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45;"></textarea>
-                </div>
-
-                <!-- Quality Gate Checks List -->
-                <div id="ai-quality-checks-breakdown" style="font-size: 0.8rem; color: #94a3b8; background: rgba(18, 30, 52, 0.5); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(56, 211, 153, 0.15);"></div>
-              </div>
-            </details>
-
-            <!-- Action Buttons Bar -->
-            <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 16px; flex-wrap: wrap; gap: 12px;">
-              <button type="button" class="btn btn-secondary" id="btn-view-submissions-modal" style="font-size: 0.84rem;">
-                📋 View Cohort Submissions & AI Grades
+          <!-- Template Download Helpers -->
+          <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 10px 16px; border-radius: 8px; margin-bottom: 18px; flex-wrap: wrap; gap: 10px;">
+            <span style="font-size: 0.82rem; color: #cbd5e1; font-weight: 600;">📥 Download Ready-to-Use Templates:</span>
+            <div style="display: flex; gap: 10px;">
+              <button type="button" class="btn btn-sm btn-secondary" id="btn-download-json-tpl" style="font-size: 0.78rem; padding: 6px 14px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; font-weight: 700;">
+                📄 Download JSON Template
               </button>
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <button type="button" class="btn btn-secondary" id="btn-save-draft-assignment" style="border: 1px solid rgba(255, 255, 255, 0.25); font-weight: 700; font-size: 0.85rem;">
-                  💾 Save as Draft
-                </button>
-                <button type="submit" class="btn btn-primary" id="btn-confirm-publish-assignment" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800; padding: 10px 22px; font-size: 0.9rem; box-shadow: 0 4px 16px rgba(56, 211, 153, 0.4);">
-                  🚀 Confirm & Publish to Students
-                </button>
-              </div>
+              <button type="button" class="btn btn-sm btn-secondary" id="btn-download-csv-tpl" style="font-size: 0.78rem; padding: 6px 14px; background: rgba(56, 211, 153, 0.12); border: 1px solid rgba(56, 211, 153, 0.35); color: #38d399; font-weight: 700;">
+                📊 Download CSV Template
+              </button>
             </div>
-          </form>
+          </div>
 
-          <!-- TAB PANE 2: STUDENT VIEW PREVIEW -->
-          <div id="ai-assign-student-preview-pane" style="display: none; padding-bottom: 10px;">
+          <!-- File Uploaded Summary / Live Questions Preview -->
+          <div id="ai-assign-preview-summary-card" style="display: none; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 211, 153, 0.3); border-radius: 10px; padding: 14px 18px; margin-bottom: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="color: #38d399; font-weight: 800; font-size: 1.1rem;">✓</span>
+                <span id="ai-assign-preview-headline" style="color: #fff; font-weight: 700; font-size: 0.95rem;">Questions Loaded</span>
+              </div>
+              <span id="ai-assign-preview-marks-tally" style="font-size: 0.76rem; background: rgba(56, 211, 153, 0.15); color: #38d399; border: 1px solid rgba(56, 211, 153, 0.3); padding: 3px 10px; border-radius: 6px; font-weight: 800;">100 pts</span>
+            </div>
+            <div id="ai-assign-preview-table-container" style="max-height: 240px; overflow-y: auto;"></div>
+          </div>
+
+          <!-- Bottom Action Buttons -->
+          <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.1); flex-wrap: wrap; gap: 12px;">
+            <div id="ai-assign-upload-feedback" style="font-size: 0.82rem; color: #94a3b8;"></div>
+            <div style="display: flex; gap: 10px; margin-left: auto;">
+              <button type="button" class="btn btn-secondary" id="btn-studio-save-draft" style="padding: 10px 18px; font-weight: 700;">
+                💾 Save as Draft
+              </button>
+              <button type="button" class="btn btn-primary" id="btn-studio-next-step" style="padding: 10px 24px; font-weight: 800; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #021526; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);">
+                🚀 Confirm & Publish Assignment
+              </button>
+            </div>
+          </div>
+
+          <!-- Hidden compatibility elements to ensure existing selectors never fail -->
+          <div style="display: none !important;">
+            <input type="number" id="ai-edit-maxscore" value="100">
+            <textarea id="ai-edit-scenario"></textarea>
+            <textarea id="ai-edit-starter"></textarea>
+            <div id="ai-edit-challenges-list"></div>
+            <button type="button" id="btn-studio-prev-step"></button>
+            <button type="button" id="btn-save-draft-assignment"></button>
+            <button type="submit" id="btn-confirm-publish-assignment"></button>
+            <form id="ai-assign-edit-form" novalidate></form>
+            <div id="ai-assign-workspace"></div>
+            <div id="ai-assign-empty-state"></div>
+            <div id="ai-assign-status-banner"></div>
+            <span id="ai-assign-status-pill"></span>
+            <span id="ai-assign-archetype-pill"></span>
+            <span id="ai-assign-quality-pill"></span>
+            <span id="ai-assign-domain-pill"></span>
+            <div id="ai-test-report-panel"><button id="btn-close-test-report"></button></div>
+            <button id="btn-run-ai-quality-tests"></button>
+            <button id="btn-trigger-ai-synthesis"></button>
+            <button id="btn-auto-balance-marks"></button>
+            <button id="tab-btn-edit-mode"></button>
+            <button id="tab-btn-preview-mode"></button>
+            <div id="ai-edit-total-marks-badge"></div>
+            <button id="btn-add-question-menu"></button>
+            <div id="add-question-dropdown"></div>
+            <div id="question-stepper-pills"></div>
+            <span id="question-counter-label"></span>
             <div id="student-preview-content"></div>
           </div>
         </div>
@@ -1155,9 +1120,31 @@
             <label style="font-size: 0.75rem; font-weight: 700; color: #94a3b8;">TARGET LECTURE:</label>
             <select id="mcq-lecture-select" class="styled-dropdown-mini" style="background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.35); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 0.88rem; outline: none;"></select>
           </div>
-          <button type="button" class="btn btn-primary" id="btn-fetch-mcqs" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800;">
-            ⚡ Load / Synthesize MCQs
-          </button>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-secondary" id="btn-toggle-insert-mcq" style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; font-weight: 700;">
+              ➕ Insert Custom Question
+            </button>
+            <button type="button" class="btn btn-primary" id="btn-fetch-mcqs" style="background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; font-weight: 800;">
+              ⚡ Load / Synthesize MCQs
+            </button>
+          </div>
+        </div>
+
+        <!-- Instructor Quick-Insert Drawer -->
+        <div id="mcq-insert-drawer" style="display: none; background: rgba(14, 23, 42, 0.95); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+          <div style="font-size: 0.85rem; font-weight: 800; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+            <span>✨ Instructor Question Insert (Zero-Error AI Auto-Calibration)</span>
+            <button type="button" id="btn-cancel-insert-mcq" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 1.1rem; padding: 0 4px;">✕</button>
+          </div>
+          <p style="font-size: 0.78rem; color: #94a3b8; margin: 0 0 10px 0;">
+            Type only the question prompt. AI will automatically generate 4 verified options, select the single 100% indisputable correct answer, and generate an explanation & hint grounded in the lecture.
+          </p>
+          <textarea id="mcq-insert-prompt" class="form-input" rows="2" placeholder="Type question prompt here (e.g. What is the time complexity of searching a binary search tree in the worst case?)..." style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.9); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; color: #fff; margin-bottom: 10px;"></textarea>
+          <div style="display: flex; justify-content: flex-end; gap: 10px;">
+            <button type="button" class="btn btn-primary" id="btn-submit-insert-mcq" style="background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%); color: #021526; font-weight: 800; font-size: 0.82rem; padding: 8px 18px;">
+              ⚡ Auto-Generate Options & Add
+            </button>
+          </div>
         </div>
 
         <div id="mcq-questions-container" style="max-height: 480px; overflow-y: auto; display: grid; gap: 14px;">
@@ -1168,7 +1155,7 @@
 
   </div>
 
-  <script src="app.js?v=20261026_unique_students"></script>
+  <script src="app.js?v=20261027_mcq_zero_error_calibrator"></script>
 
   <!-- ========== CREATE COURSE MODAL (POPUP DIALOG) ========== -->
   <style id="cc-modal-critical-styles">

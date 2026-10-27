@@ -24,6 +24,7 @@ data/uploads/*.mp3
 data/uploads/*.m4a
 data/uploads/*.tmp
 *.tmp
+cloudrun_deploy.sh
 !data/uploads/.gitkeep
 
 # Operating System & IDE
@@ -51,3 +52,12 @@ tests/fix_classroom_user.py
 tests/test_rag_baseline.py
 tests/generate_live_qa_samples.py
 scratch/
+
+# Temporary & Diagnostic scripts
+check_*.py
+find_*.py
+read_*.py
+patch_*.py
+inspect_*.py
+link_assignments.py
+cloud_computing_real_world_assignment.json

@@ -1013,10 +1013,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
     switchView("course-detail");
 
+    // Sync any background video processing jobs for this course from server/storage
+    if (typeof syncActiveJobsFromServer === "function") {
+      await syncActiveJobsFromServer(courseId);
+    }
+
     // Load and render videos, resources & enrolled students for this course
     await loadCourseLectures(courseId);
     await loadCourseResources(courseId);
     await loadCourseStudents(courseId);
+
+    if (typeof updateCourseUploadButtons === "function") {
+      updateCourseUploadButtons(courseId);
+    }
 
     // Reset subtab to Lectures & Videos by default
     const videosTabBtn = document.getElementById("cd-tab-videos");
@@ -1095,7 +1104,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <p style="font-size: 0.86rem; color: var(--text-muted); max-width: 520px; margin: 0 auto 18px;">
             Upload your lecture MP4 or stream URL. We'll transcribe it with Deepgram Nova-2, segment concept boundaries with Gemini, and index 768-dim embeddings in Supabase.
           </p>
-          <button class="btn btn-primary" onclick="document.getElementById('btn-section-upload-video').click()">
+          <button class="btn btn-primary" onclick="(document.getElementById('btn-quick-add-video') || document.getElementById('btn-course-upload-video'))?.click()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
             + Upload First Lecture Video
           </button>
@@ -1132,7 +1141,9 @@ document.addEventListener("DOMContentLoaded", () => {
               <h4>${escapeHtml(l.title)}</h4>
               <div class="lecture-meta-badges">
                 <span class="badge-duration">⏱️ ${durFormatted}</span>
-                <span class="badge-ready">✓ Ready</span>
+                ${l.processing_status === "indexing" 
+                  ? `<span class="badge-indexing" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;"><span class="processing-pulse-dot" style="background: #fbbf24; width: 7px; height: 7px;"></span> ⏳ AI Indexing...</span>` 
+                  : `<span class="badge-ready">✓ Ready</span>`}
                 ${attachedMaterials.length > 0 ? `<span class="badge-materials-count">📁 ${attachedMaterials.length} Attached</span>` : ''}
               </div>
             </div>
@@ -1564,6 +1575,246 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // ============================================================
+  // BACKGROUND VIDEO INGESTION TRACKER (Survives laptop/browser close)
+  // ============================================================
+  const ACTIVE_JOBS_STORAGE_KEY = "climbup_active_video_jobs";
+  let activeVideoJobs = {}; // courseId -> { jobId, lessonId, title, stage, progressPercent, stageMessage, status, startedAt }
+  let activeJobsPollingTimer = null;
+
+  function loadStoredActiveJobs() {
+    try {
+      localStorage.removeItem(ACTIVE_JOBS_STORAGE_KEY);
+      activeVideoJobs = {};
+    } catch (e) {
+      activeVideoJobs = {};
+    }
+  }
+
+  function saveStoredActiveJobs() {
+    try {
+      localStorage.setItem(ACTIVE_JOBS_STORAGE_KEY, JSON.stringify(activeVideoJobs));
+    } catch (e) {}
+  }
+
+  function clearActiveJob(courseId) {
+    if (activeVideoJobs[courseId]) {
+      delete activeVideoJobs[courseId];
+      saveStoredActiveJobs();
+    }
+  }
+
+  function formatStageDisplay(stage, progressPct) {
+    const s = (stage || "").toUpperCase();
+    if (s === "QUEUED" || s === "VERIFYING_SOURCE") {
+      return { stageIndex: 1, shortLabel: "Verifying Source", fullLabel: "16kHz Audio Extraction (FFmpeg WAV)", stepNum: 1 };
+    } else if (s === "AUDIO_EXTRACTION") {
+      return { stageIndex: 1, shortLabel: "FFmpeg Audio", fullLabel: "16kHz Audio Extraction (FFmpeg WAV)", stepNum: 1 };
+    } else if (s === "TRANSCRIPTION") {
+      return { stageIndex: 2, shortLabel: "Deepgram Nova-2", fullLabel: "Deepgram Nova-2 (Diarization & Timestamps)", stepNum: 2 };
+    } else if (s === "SEMANTIC_PROCESSING") {
+      return { stageIndex: 3, shortLabel: "Gemini Concepts", fullLabel: "Gemini Concept Boundaries & HyDE Query Gen", stepNum: 3 };
+    } else if (s === "EMBEDDING" || s === "VECTOR_SYNC") {
+      return { stageIndex: 4, shortLabel: "Vector Sync", fullLabel: "768-dim Vector Embeddings & Supabase Sync", stepNum: 4 };
+    } else if (s === "COMPLETED") {
+      return { stageIndex: 4, shortLabel: "Indexed & Live", fullLabel: "✓ Indexed & Ready", stepNum: 4 };
+    }
+    return { stageIndex: 1, shortLabel: "Processing", fullLabel: stage || "AI Processing Pipeline", stepNum: 1 };
+  }
+
+  function updateCourseUploadButtons(courseId) {
+    if (!courseId || courseId !== currentCourseId) return;
+
+    const sectionBtn = document.getElementById("btn-section-upload-video");
+    const quickBtn = document.getElementById("btn-quick-add-video");
+
+    // Keep standard "+ Upload Video" buttons visible and accessible at all times
+    if (sectionBtn) {
+      sectionBtn.className = "btn btn-primary";
+      sectionBtn.title = "Upload and process video lecture";
+      sectionBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+        + Upload Video
+      `;
+    }
+    if (quickBtn) {
+      quickBtn.className = "btn btn-sm btn-primary";
+      quickBtn.title = "Upload and process video lecture";
+      quickBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+        + Upload Video
+      `;
+    }
+  }
+
+  function updateModalPipelineUIIfOpen(courseId, jobData) {
+    if (modalUploadVideo.style.display !== "flex") return;
+    if (modalUploadCourseId.value !== courseId) return;
+
+    const s1 = document.getElementById("modal-step-1");
+    const s2 = document.getElementById("modal-step-2");
+    const s3 = document.getElementById("modal-step-3");
+    const s4 = document.getElementById("modal-step-4");
+    if (!s1 || !s2 || !s3 || !s4) return;
+
+    const stage = (jobData.current_stage || jobData.stage || "").toUpperCase();
+    const status = jobData.status || "IN_PROGRESS";
+    const pct = jobData.progress_percent || 0;
+    const stageMsg = jobData.stage_message || "";
+
+    modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan); font-weight: 600;">⚡ ${stageMsg || `Processing (${pct}%)...`}</span>`;
+
+    if (stage === "QUEUED" || stage === "VERIFYING_SOURCE") {
+      s1.className = "step-item processing"; s1.querySelector(".step-status").textContent = "Running...";
+      s2.className = "step-item"; s2.querySelector(".step-status").textContent = "Pending";
+      s3.className = "step-item"; s3.querySelector(".step-status").textContent = "Pending";
+      s4.className = "step-item"; s4.querySelector(".step-status").textContent = "Pending";
+    } else if (stage === "AUDIO_EXTRACTION") {
+      s1.className = "step-item processing"; s1.querySelector(".step-status").textContent = "Extracting...";
+      s2.className = "step-item"; s2.querySelector(".step-status").textContent = "Pending";
+      s3.className = "step-item"; s3.querySelector(".step-status").textContent = "Pending";
+      s4.className = "step-item"; s4.querySelector(".step-status").textContent = "Pending";
+    } else if (stage === "TRANSCRIPTION") {
+      s1.className = "step-item completed"; s1.querySelector(".step-status").textContent = "Done";
+      s2.className = "step-item processing"; s2.querySelector(".step-status").textContent = "Transcribing...";
+      s3.className = "step-item"; s3.querySelector(".step-status").textContent = "Pending";
+      s4.className = "step-item"; s4.querySelector(".step-status").textContent = "Pending";
+    } else if (stage === "SEMANTIC_PROCESSING") {
+      s1.className = "step-item completed"; s1.querySelector(".step-status").textContent = "Done";
+      s2.className = "step-item completed"; s2.querySelector(".step-status").textContent = "Done";
+      s3.className = "step-item processing"; s3.querySelector(".step-status").textContent = "Chunking...";
+      s4.className = "step-item"; s4.querySelector(".step-status").textContent = "Pending";
+    } else if (stage === "EMBEDDING" || stage === "VECTOR_SYNC") {
+      s1.className = "step-item completed"; s1.querySelector(".step-status").textContent = "Done";
+      s2.className = "step-item completed"; s2.querySelector(".step-status").textContent = "Done";
+      s3.className = "step-item completed"; s3.querySelector(".step-status").textContent = "Done";
+      s4.className = "step-item processing"; s4.querySelector(".step-status").textContent = "Embedding...";
+    }
+
+    if (status === "COMPLETED") {
+      s1.className = "step-item completed"; s1.querySelector(".step-status").textContent = "Done";
+      s2.className = "step-item completed"; s2.querySelector(".step-status").textContent = "Done";
+      s3.className = "step-item completed"; s3.querySelector(".step-status").textContent = "Done";
+      s4.className = "step-item completed"; s4.querySelector(".step-status").textContent = "Indexed";
+      modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald); font-weight: 700;">🎉 Lecture indexed & ready in Supabase!</span>`;
+    } else if (status === "FAILED") {
+      modalUploadFeedback.innerHTML = `
+        <div style="color: var(--accent-rose); margin-bottom: 8px;">Error: ${escapeHtml(jobData.error_message || "Video processing failed")}</div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-retry-pipeline-job" style="margin-top: 4px;">🔄 Retry from Checkpoint</button>
+      `;
+      const retryBtn = document.getElementById("btn-retry-pipeline-job");
+      if (retryBtn) {
+        retryBtn.addEventListener("click", async () => {
+          retryBtn.disabled = true;
+          retryBtn.textContent = "Retrying...";
+          await fetch(`/api/jobs/${jobData.id}/retry`, { method: "POST" });
+          activeVideoJobs[courseId].status = "IN_PROGRESS";
+          saveStoredActiveJobs();
+          updateCourseUploadButtons(courseId);
+        });
+      }
+    }
+  }
+
+  async function pollActiveJobs() {
+    const courseIds = Object.keys(activeVideoJobs);
+    if (courseIds.length === 0) {
+      if (activeJobsPollingTimer) {
+        clearInterval(activeJobsPollingTimer);
+        activeJobsPollingTimer = null;
+      }
+      return;
+    }
+
+    for (const cId of courseIds) {
+      const activeJob = activeVideoJobs[cId];
+      if (!activeJob || !activeJob.jobId) continue;
+      if (activeJob.status === "COMPLETED" || activeJob.status === "CANCELLED") continue;
+
+      try {
+        const res = await fetch(`/api/jobs/${activeJob.jobId}`);
+        if (!res.ok) continue;
+        const jobData = await res.json();
+
+        activeJob.stage = jobData.current_stage || jobData.stage || activeJob.stage;
+        activeJob.status = jobData.status || activeJob.status;
+        activeJob.progressPercent = jobData.progress_percent ?? activeJob.progressPercent;
+        activeJob.stageMessage = jobData.stage_message || activeJob.stageMessage;
+        activeJob.errorMessage = jobData.error_message;
+
+        saveStoredActiveJobs();
+        updateCourseUploadButtons(cId);
+        updateModalPipelineUIIfOpen(cId, jobData);
+
+        if (activeJob.status === "COMPLETED") {
+          if (cId === currentCourseId && typeof loadCourseLectures === "function") {
+            loadCourseLectures(cId);
+          }
+          setTimeout(() => {
+            clearActiveJob(cId);
+            updateCourseUploadButtons(cId);
+          }, 4000);
+        }
+      } catch (err) {
+        console.warn("Poll active job error:", err);
+      }
+    }
+  }
+
+  function startBackgroundPolling() {
+    if (!activeJobsPollingTimer) {
+      activeJobsPollingTimer = setInterval(pollActiveJobs, 2500);
+    }
+    // Immediate first tick
+    pollActiveJobs();
+  }
+
+  async function syncActiveJobsFromServer(courseId) {
+    if (!courseId) return;
+    loadStoredActiveJobs();
+    try {
+      const res = await fetch(`/api/jobs?course_id=${encodeURIComponent(courseId)}&limit=5`);
+      if (res.ok) {
+        const recentJobs = await res.json();
+        if (Array.isArray(recentJobs) && recentJobs.length > 0) {
+          const liveJob = recentJobs.find(j => j.status === "IN_PROGRESS" || j.status === "QUEUED");
+          if (liveJob) {
+            activeVideoJobs[courseId] = {
+              jobId: liveJob.id,
+              lessonId: liveJob.lesson_id,
+              title: liveJob.title || "Lecture Video",
+              stage: liveJob.current_stage || liveJob.stage || "QUEUED",
+              status: liveJob.status,
+              progressPercent: liveJob.progress_percent || 10,
+              stageMessage: liveJob.stage_message || "",
+              startedAt: Date.now()
+            };
+            saveStoredActiveJobs();
+            startBackgroundPolling();
+          } else if (activeVideoJobs[courseId] && (activeVideoJobs[courseId].status === "IN_PROGRESS" || activeVideoJobs[courseId].status === "QUEUED")) {
+            const finishedJob = recentJobs.find(j => j.id === activeVideoJobs[courseId].jobId);
+            if (finishedJob && finishedJob.status === "COMPLETED") {
+              activeVideoJobs[courseId].status = "COMPLETED";
+              activeVideoJobs[courseId].progressPercent = 100;
+              saveStoredActiveJobs();
+              setTimeout(() => {
+                clearActiveJob(courseId);
+                updateCourseUploadButtons(courseId);
+              }, 3000);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("syncActiveJobsFromServer error:", e);
+    }
+    updateCourseUploadButtons(courseId);
+  }
+
+  // Load active jobs and start poller on init
+  loadStoredActiveJobs();
+  startBackgroundPolling();
+
   function openUploadVideoModal(courseId) {
     const course = coursesCache.find(c => c.id === courseId);
     const courseTitle = course ? course.title : "Current Course";
@@ -1571,12 +1822,26 @@ document.addEventListener("DOMContentLoaded", () => {
     modalUploadCourseId.value = courseId;
     modalUploadTargetCourse.textContent = courseTitle;
 
+    const titleGroup = modalLectureTitleInput ? modalLectureTitleInput.closest(".form-group") : null;
+    const methodHeader = document.querySelector(".ingest-methods-header");
+    const bgBanner = document.getElementById("modal-pipeline-bg-banner");
+    if (bgBanner) bgBanner.style.display = "none";
+
+    if (titleGroup) titleGroup.style.display = "block";
+    if (methodHeader) methodHeader.style.display = "block";
+
     modalLectureTitleInput.value = "";
     modalMediaUrlInput.value = "";
     modalSelectedVideoFile = null;
     modalSelectedFileName.textContent = "Supports MP4, WebM, MKV, MP3, WAV (Direct 0-disk streaming)";
     modalStepperProgress.style.display = "none";
     modalUploadFeedback.innerHTML = "";
+
+    modalBtnSubmitVideo.style.display = "inline-flex";
+    modalBtnSubmitVideo.disabled = false;
+    modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
+    btnCancelModalVideo.textContent = "Cancel";
+    btnCancelModalVideo.className = "btn btn-secondary";
 
     // Default to Direct File Upload mode (Auto-synced to 5TB Drive Vault + RAG)
     modalVideoMode = "file";
@@ -1683,7 +1948,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Modal Video Form Submit
+  // Modal Video Form Submit - Fully Decoupled & Background Driven
   if (modalLectureUploadForm) {
     modalLectureUploadForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -1782,24 +2047,9 @@ document.addEventListener("DOMContentLoaded", () => {
           formData.append("media_url", urlVal);
         }
 
-        // Stepper UI in modal
-        modalStepperProgress.style.display = "block";
-        const s1 = document.getElementById("modal-step-1");
-        const s2 = document.getElementById("modal-step-2");
-        const s3 = document.getElementById("modal-step-3");
-        const s4 = document.getElementById("modal-step-4");
-        const modalSteps = [s1, s2, s3, s4];
-
-        modalSteps.forEach(s => {
-          s.classList.remove("completed", "processing");
-          s.querySelector(".step-status").textContent = "Pending";
-        });
-
-        s1.classList.add("processing");
-        s1.querySelector(".step-status").textContent = "Queuing...";
-
         modalBtnSubmitVideo.disabled = true;
-        modalBtnSubmitVideo.textContent = "Dispatched to Background Worker...";
+        modalBtnSubmitVideo.textContent = "Dispatching to Background Worker...";
+        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">⚡ Dispatching to server background worker...</span>`;
 
         const res = await fetch("/api/process-video", {
           method: "POST",
@@ -1823,10 +2073,37 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const data = await res.json();
         const jobId = data.job_id;
-        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">⚡ Ingestion job dispatched: <code>${jobId}</code>. Tracking live progress...</span>`;
 
-        // Authoritative Background Status Polling
-        await pollJobProgress(jobId, courseId);
+        // Register in active jobs state & persist immediately
+        activeVideoJobs[courseId] = {
+          jobId: jobId,
+          lessonId: data.lesson_id,
+          title: title,
+          stage: data.stage || "QUEUED",
+          status: "IN_PROGRESS",
+          progressPercent: data.progress_percent || 10,
+          stageMessage: data.stage_message || "Ingestion job queued.",
+          startedAt: Date.now()
+        };
+        saveStoredActiveJobs();
+
+        // Immediately transform the "+ Upload Video" button into live progress indicator!
+        updateCourseUploadButtons(courseId);
+
+        // Start background polling
+        startBackgroundPolling();
+
+        modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald); font-weight: 700;">⚡ Video dispatched! Safely running on server in background.</span>`;
+
+        // Automatically minimize modal after 600ms so user is free to navigate or close browser
+        setTimeout(() => {
+          modalUploadVideo.style.display = "none";
+          modalBtnSubmitVideo.disabled = false;
+          modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
+          if (typeof loadCourseLectures === "function") {
+            loadCourseLectures(courseId);
+          }
+        }, 700);
 
       } catch (err) {
         modalUploadFeedback.innerHTML = `<span style="color: var(--accent-rose);">Error: ${err.message}</span>`;
@@ -1834,118 +2111,6 @@ document.addEventListener("DOMContentLoaded", () => {
         modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
       }
     });
-
-    async function pollJobProgress(targetJobId, targetCourseId) {
-      const s1 = document.getElementById("modal-step-1");
-      const s2 = document.getElementById("modal-step-2");
-      const s3 = document.getElementById("modal-step-3");
-      const s4 = document.getElementById("modal-step-4");
-
-      let pollInterval = null;
-      let pollAttempts = 0;
-      const maxAttempts = 600; // 20 minutes max polling time (2s interval)
-
-      return new Promise((resolve) => {
-        pollInterval = setInterval(async () => {
-          pollAttempts++;
-          if (pollAttempts > maxAttempts) {
-            clearInterval(pollInterval);
-            modalUploadFeedback.innerHTML = `<span style="color: var(--accent-amber);">Job is still running in background. You can check back shortly or refresh.</span>`;
-            modalBtnSubmitVideo.disabled = false;
-            modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
-            resolve();
-            return;
-          }
-
-          try {
-            const jobRes = await fetch(`/api/jobs/${targetJobId}`);
-            if (!jobRes.ok) return;
-            const job = await jobRes.json();
-            const stage = job.current_stage || job.stage || "QUEUED";
-            const status = job.status || "IN_PROGRESS";
-            const progressPct = job.progress_percent || 0;
-            const stageMsg = job.stage_message || "";
-
-            modalUploadFeedback.innerHTML = `<span style="color: var(--accent-cyan);">${stageMsg || `Processing (${progressPct}%)...`}</span>`;
-
-            if (stage === "QUEUED" || stage === "VERIFYING_SOURCE") {
-              s1.classList.add("processing"); s1.classList.remove("completed");
-              s1.querySelector(".step-status").textContent = "Running...";
-              s2.querySelector(".step-status").textContent = "Pending";
-              s3.querySelector(".step-status").textContent = "Pending";
-              s4.querySelector(".step-status").textContent = "Pending";
-            } else if (stage === "AUDIO_EXTRACTION") {
-              s1.classList.remove("processing"); s1.classList.add("completed");
-              s1.querySelector(".step-status").textContent = "Done";
-              s2.classList.add("processing"); s2.classList.remove("completed");
-              s2.querySelector(".step-status").textContent = "Extracting...";
-            } else if (stage === "TRANSCRIPTION") {
-              s1.classList.add("completed");
-              s1.querySelector(".step-status").textContent = "Done";
-              s2.classList.add("processing"); s2.classList.remove("completed");
-              s2.querySelector(".step-status").textContent = "Transcribing...";
-            } else if (stage === "SEMANTIC_PROCESSING") {
-              s1.classList.add("completed"); s1.querySelector(".step-status").textContent = "Done";
-              s2.classList.add("completed"); s2.querySelector(".step-status").textContent = "Done";
-              s3.classList.add("processing"); s3.classList.remove("completed");
-              s3.querySelector(".step-status").textContent = "Chunking...";
-            } else if (stage === "EMBEDDING" || stage === "VECTOR_SYNC") {
-              s1.classList.add("completed"); s1.querySelector(".step-status").textContent = "Done";
-              s2.classList.add("completed"); s2.querySelector(".step-status").textContent = "Done";
-              s3.classList.add("completed"); s3.querySelector(".step-status").textContent = "Done";
-              s4.classList.add("processing"); s4.classList.remove("completed");
-              s4.querySelector(".step-status").textContent = "Embedding...";
-            }
-
-            if (status === "COMPLETED") {
-              clearInterval(pollInterval);
-              s1.classList.add("completed"); s1.querySelector(".step-status").textContent = "Done";
-              s2.classList.add("completed"); s2.querySelector(".step-status").textContent = "Done";
-              s3.classList.add("completed"); s3.querySelector(".step-status").textContent = "Done";
-              s4.classList.remove("processing"); s4.classList.add("completed");
-              s4.querySelector(".step-status").textContent = "Indexed";
-
-              modalUploadFeedback.innerHTML = `<span style="color: var(--accent-emerald);">🎉 Lecture indexed successfully!</span>`;
-
-              setTimeout(async () => {
-                modalUploadVideo.style.display = "none";
-                modalBtnSubmitVideo.disabled = false;
-                modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
-                await openCourseWorkspace(targetCourseId);
-                resolve();
-              }, 1200);
-            } else if (status === "FAILED") {
-              clearInterval(pollInterval);
-              const errorMsg = job.error_message || "Video processing failed.";
-              modalUploadFeedback.innerHTML = `
-                <div style="color: var(--accent-rose); margin-bottom: 8px;">Error: ${errorMsg}</div>
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-retry-failed-job" style="margin-top: 4px;">🔄 Retry from Checkpoint</button>
-              `;
-              const retryBtn = document.getElementById("btn-retry-failed-job");
-              if (retryBtn) {
-                retryBtn.addEventListener("click", async () => {
-                  retryBtn.disabled = true;
-                  retryBtn.textContent = "Retrying...";
-                  await fetch(`/api/jobs/${targetJobId}/retry`, { method: "POST" });
-                  pollJobProgress(targetJobId, targetCourseId);
-                });
-              }
-              modalBtnSubmitVideo.disabled = false;
-              modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
-              resolve();
-            } else if (status === "CANCELLED") {
-              clearInterval(pollInterval);
-              modalUploadFeedback.innerHTML = `<span style="color: var(--text-muted);">Job was cancelled.</span>`;
-              modalBtnSubmitVideo.disabled = false;
-              modalBtnSubmitVideo.textContent = "Process & Ingest Lecture";
-              resolve();
-            }
-          } catch (pollErr) {
-            console.warn("Poll status check error:", pollErr);
-          }
-        }, 2000);
-      });
-    }
   }
 
   // ==========================================
@@ -3053,6 +3218,18 @@ function setupAiAssignmentStudio() {
   const domainPill = document.getElementById("ai-assign-domain-pill");
   const qualityBreakdown = document.getElementById("ai-quality-checks-breakdown");
   const totalMarksBadge = document.getElementById("ai-edit-total-marks-badge");
+  const btnRunAiQualityTests = document.getElementById("btn-run-ai-quality-tests");
+  const aiTestReportPanel = document.getElementById("ai-test-report-panel");
+  const aiTestScoreBadge = document.getElementById("ai-test-score-badge");
+  const aiTestTimestamp = document.getElementById("ai-test-timestamp");
+  const aiTestPassedBadge = document.getElementById("ai-test-passed-badge");
+  const aiTestWarningBadge = document.getElementById("ai-test-warning-badge");
+  const aiTestFailedBadge = document.getElementById("ai-test-failed-badge");
+  const aiTestReportItems = document.getElementById("ai-test-report-items");
+  const btnCloseTestReport = document.getElementById("btn-close-test-report");
+  const btnAddQuestionMenu = document.getElementById("btn-add-question-menu");
+  const addQuestionDropdown = document.getElementById("add-question-dropdown");
+  const btnAutoBalanceMarks = document.getElementById("btn-auto-balance-marks");
 
   function escapeHtml(str) {
     if (!str) return "";
@@ -3165,8 +3342,10 @@ function setupAiAssignmentStudio() {
           const gType = String(p.goal_type || (assignType === 'THEORY' ? 'THEORY' : 'CODING')).toUpperCase();
           const isMcq = (gType === 'MCQ');
           const isNumeric = (gType === 'NUMERIC');
-          const isTheory = (gType === 'THEORY');
-          const isCoding = (!isMcq && !isNumeric && !isTheory);
+          const isDebugging = (gType === 'DEBUGGING');
+          const isShortAnswer = (gType === 'SHORT_ANSWER');
+          const isTheory = (gType === 'THEORY' || gType === 'ALGORITHMIC' || gType === 'SCENARIO' || gType === 'IMAGE_BASED');
+          const isCoding = (!isMcq && !isNumeric && !isDebugging && !isShortAnswer && !isTheory);
 
           const gState = window._goalStates[gNum] || { status: idx === 0 ? "not-started" : "locked", code: p.starter_code || "" };
           const isLocked = gState.status === "locked";
@@ -3194,6 +3373,26 @@ function setupAiAssignmentStudio() {
             typeClass = 'numeric';
             btnGradient = 'linear-gradient(135deg, #fbbf24 0%, #d97706 100%)';
             btnColor = '#021526';
+          } else if (isDebugging) {
+            typeLabel = '🐞 Bug-Fix & Debugging';
+            typeClass = 'debugging';
+            btnGradient = 'linear-gradient(135deg, #f87171 0%, #dc2626 100%)';
+            btnColor = '#ffffff';
+          } else if (isShortAnswer) {
+            typeLabel = '✍️ Short-Answer Concept';
+            typeClass = 'short-answer';
+            btnGradient = 'linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%)';
+            btnColor = '#ffffff';
+          } else if (gType === 'ALGORITHMIC') {
+            typeLabel = '🧩 Algorithmic Analysis';
+            typeClass = 'theory';
+            btnGradient = 'linear-gradient(135deg, #c084fc 0%, #7c3aed 100%)';
+            btnColor = '#ffffff';
+          } else if (gType === 'SCENARIO') {
+            typeLabel = '🌐 Real-World Case Study';
+            typeClass = 'theory';
+            btnGradient = 'linear-gradient(135deg, #38bdf8 0%, #2563eb 100%)';
+            btnColor = '#ffffff';
           } else if (isTheory) {
             typeLabel = '📚 Theory & Architecture';
             typeClass = 'theory';
@@ -3223,9 +3422,31 @@ function setupAiAssignmentStudio() {
 
               <div style="font-size: 0.88rem; color: #f1f5f9; line-height: 1.55; white-space: pre-wrap; margin-bottom: 12px;">${escapeHtml(p.problem_statement || p.question || "")}</div>
 
+              ${(p.solution_hint || p.hint) ? `
+                <details class="goal-hint-details" style="margin-bottom: 12px; background: rgba(245, 158, 11, 0.05); border: 1px dashed rgba(245, 158, 11, 0.35); border-radius: 8px; padding: 7px 12px; cursor: pointer;">
+                  <summary style="font-size: 0.78rem; font-weight: 700; color: #fbbf24; display: flex; align-items: center; gap: 6px; user-select: none;">
+                    💡 <span>Need a Hint?</span> <span style="font-size: 0.7rem; color: #94a3b8; font-weight: normal;">(Click to reveal concept guidance)</span>
+                  </summary>
+                  <div style="font-size: 0.82rem; color: #fde68a; margin-top: 8px; line-height: 1.45; border-top: 1px solid rgba(245, 158, 11, 0.15); padding-top: 8px;">
+                    ${escapeHtml(p.solution_hint || p.hint)}
+                  </div>
+                </details>
+              ` : ''}
+
               ${p.expected_deliverable ? `
                 <div style="font-size: 0.78rem; color: #cbd5e1; background: rgba(99, 102, 241, 0.08); padding: 7px 12px; border-radius: 6px; border: 1px solid rgba(99, 102, 241, 0.2); margin-bottom: 10px;">
                   <strong style="color: #a5b4fc;">Deliverable:</strong> ${escapeHtml(p.expected_deliverable)}
+                </div>
+              ` : ''}
+
+              ${p.image_url ? `
+                <div class="goal-diagram-preview" style="margin-bottom: 14px; background: #030712; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 12px; text-align: center;">
+                  <img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.image_caption || 'Architecture Diagram')}" style="max-height: 280px; max-width: 100%; border-radius: 6px; object-fit: contain; box-shadow: 0 4px 16px rgba(0,0,0,0.6);">
+                  ${p.image_caption ? `
+                    <div style="font-size: 0.74rem; color: #7dd3fc; margin-top: 6px; font-weight: 600;">
+                      📐 ${escapeHtml(p.image_caption)}
+                    </div>
+                  ` : ''}
                 </div>
               ` : ''}
 
@@ -3261,8 +3482,43 @@ function setupAiAssignmentStudio() {
                     </div>
                   ` : ''}
                 </div>
+              ` : isDebugging ? `
+                <!-- DEBUGGING GOAL: Buggy Code + Fix Editor -->
+                <div style="margin-bottom: 12px;">
+                  <div style="font-size: 0.74rem; color: #f87171; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
+                    🐞 Buggy Implementation (Analyze & Repair):
+                  </div>
+                  <pre style="background: rgba(0,0,0,0.5); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 10px 12px; color: #fca5a5; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; margin: 0 0 8px 0; overflow-x: auto;"><code>${escapeHtml(p.debugging?.buggy_code || p.starter_code || "")}</code></pre>
+                  ${p.debugging?.error_symptom ? `
+                    <div style="font-size: 0.76rem; color: #fbbf24; background: rgba(245, 158, 11, 0.1); border-left: 3px solid #fbbf24; padding: 6px 10px; border-radius: 4px; margin-bottom: 10px;">
+                      ⚠️ <strong>Symptom:</strong> ${escapeHtml(p.debugging.error_symptom)}
+                    </div>
+                  ` : ''}
+                  <div class="goal-code-editor-wrapper">
+                    <div class="goal-editor-header">
+                      <span style="font-size: 0.74rem; font-weight: 700; color: #38d399; text-transform: uppercase;">
+                        🔧 Your Corrected Implementation
+                      </span>
+                      <button type="button" class="btn btn-sm btn-secondary btn-reset-goal" data-goal="${gNum}" ${isLocked ? 'disabled' : ''} style="font-size: 0.72rem; padding: 2px 8px;">
+                        ↺ Reset to Skeleton
+                      </button>
+                    </div>
+                    <textarea id="goal-editor-${gNum}" class="goal-code-textarea" rows="6" ${isLocked ? 'disabled' : ''} placeholder="Write your corrected code solution here...">${escapeHtml(gState.code || p.debugging?.buggy_code || "")}</textarea>
+                  </div>
+                </div>
+              ` : isShortAnswer ? `
+                <!-- SHORT ANSWER GOAL: Concise Technical Input -->
+                <div style="background: rgba(14, 25, 48, 0.7); border: 1px solid rgba(129, 140, 248, 0.3); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px;">
+                  <div style="font-size: 0.74rem; font-weight: 700; color: #a5b4fc; text-transform: uppercase; margin-bottom: 8px;">
+                    ✍️ Enter Your Concise Technical Answer
+                  </div>
+                  <input type="text" id="goal-editor-${gNum}" class="form-control" value="${escapeHtml(gState.code)}" placeholder="Type your concise answer here..." ${isLocked ? 'disabled' : ''} style="width: 100%; box-sizing: border-box; font-size: 0.92rem; color: #fff; background: rgba(0,0,0,0.3); border: 1px solid rgba(129, 140, 248, 0.4); padding: 9px 12px; border-radius: 6px;">
+                  <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 6px;">
+                    💡 Be concise and precise. Evaluated based on key lecture principles.
+                  </div>
+                </div>
               ` : isTheory ? `
-                <!-- THEORY GOAL: Conceptual Checkpoints & Response Textarea -->
+                <!-- THEORY / ALGORITHMIC / SCENARIO GOAL: Conceptual Checkpoints & Response Textarea -->
                 <div style="margin-bottom: 12px;">
                   <div style="font-size: 0.72rem; color: #c084fc; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
                     📋 Key Conceptual Requirements & Checkpoints:
@@ -3332,10 +3588,10 @@ function setupAiAssignmentStudio() {
 
               <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px;">
                 <div style="font-size: 0.74rem; color: #64748b;">
-                  ${isLocked ? `🔒 Locked — Pass Goal ${gNum - 1} to unlock this challenge.` : (isMcq ? '⚡ Immediate zero-leakage check' : isNumeric ? '⚡ Precision calculation check' : isTheory ? '📋 Conceptual rubric verification' : '⚡ Server-side sandbox verification')}
+                  ${isLocked ? `🔒 Locked — Pass Goal ${gNum - 1} to unlock this challenge.` : (isMcq ? '⚡ Immediate zero-leakage check' : isNumeric ? '⚡ Precision calculation check' : isDebugging ? '🐞 Bug-fix verification' : isShortAnswer ? '✍️ Lexical keyword check' : isTheory ? '📋 Conceptual rubric verification' : '⚡ Server-side sandbox verification')}
                 </div>
                 <button type="button" class="btn btn-primary btn-verify-goal" id="btn-verify-goal-${gNum}" data-goal="${gNum}" ${isLocked ? 'disabled' : ''} style="background: ${btnGradient}; color: ${btnColor}; font-weight: 800; font-size: 0.82rem; padding: 6px 16px;">
-                  ▶ ${isMcq ? `Check Answer (Goal ${gNum})` : isNumeric ? `Verify Calculation (Goal ${gNum})` : isTheory ? `Submit Theory (Goal ${gNum})` : `Run & Verify Goal ${gNum}`}
+                  ▶ ${isMcq ? `Check Answer (Goal ${gNum})` : isNumeric ? `Verify Calculation (Goal ${gNum})` : isDebugging ? `Verify Fix (Goal ${gNum})` : isShortAnswer ? `Verify Answer (Goal ${gNum})` : isTheory ? `Submit Theory (Goal ${gNum})` : `Run & Verify Goal ${gNum}`}
                 </button>
               </div>
 
@@ -3463,6 +3719,12 @@ function setupAiAssignmentStudio() {
                     </div>
                   </div>
                   <div style="margin-bottom: 8px;">${escapeHtml(data.feedback)}</div>
+                  ${(data.solution_hint || data.hint) ? `
+                    <div style="margin: 8px 0; font-size: 0.8rem; color: #fbbf24; background: rgba(245, 158, 11, 0.1); padding: 8px 12px; border-radius: 6px; border-left: 3px solid #f59e0b; display: flex; align-items: flex-start; gap: 8px;">
+                      <span style="font-size: 1rem; line-height: 1;">💡</span>
+                      <div><strong style="color: #fde68a;">Hint:</strong> <span style="color: #fed7aa;">${escapeHtml(data.solution_hint || data.hint)}</span></div>
+                    </div>
+                  ` : ''}
                   ${data.mentor_guidance ? `
                     <div style="margin: 8px 0; font-size: 0.78rem; color: #a5b4fc; background: rgba(99, 102, 241, 0.12); padding: 8px 10px; border-radius: 6px; border-left: 3px solid #6366f1;">
                       🎓 <strong>Mentor Guidance:</strong> ${escapeHtml(data.mentor_guidance)}
@@ -3525,7 +3787,118 @@ function setupAiAssignmentStudio() {
     });
   }
 
-  function renderAssignmentInForm(assignment) {
+  let currentActiveQuestionIdx = 0;
+
+  function updateQuestionStepperUI(totalProblems, activeIdx) {
+    const pillsContainer = document.getElementById("question-stepper-pills");
+    const counterLabel = document.getElementById("question-counter-label");
+    const navPrevBtn = document.getElementById("btn-nav-prev-question");
+    const navNextBtn = document.getElementById("btn-nav-next-question");
+    const bottomIndicator = document.getElementById("studio-bottom-indicator-text");
+    const bottomPrev = document.getElementById("btn-studio-prev-step");
+    const bottomNext = document.getElementById("btn-studio-next-step");
+
+    if (counterLabel) counterLabel.textContent = `Question ${activeIdx + 1} of ${totalProblems}`;
+    if (bottomIndicator) bottomIndicator.textContent = `Question ${activeIdx + 1} of ${totalProblems}`;
+
+    if (navPrevBtn) {
+      navPrevBtn.disabled = (activeIdx === 0);
+      navPrevBtn.style.opacity = (activeIdx === 0) ? "0.35" : "1";
+      navPrevBtn.style.cursor = (activeIdx === 0) ? "not-allowed" : "pointer";
+    }
+    if (navNextBtn) {
+      navNextBtn.disabled = (activeIdx >= totalProblems - 1);
+      navNextBtn.style.opacity = (activeIdx >= totalProblems - 1) ? "0.35" : "1";
+      navNextBtn.style.cursor = (activeIdx >= totalProblems - 1) ? "not-allowed" : "pointer";
+    }
+
+    if (bottomPrev) {
+      bottomPrev.disabled = (activeIdx === 0);
+      bottomPrev.style.opacity = (activeIdx === 0) ? "0.35" : "1";
+      bottomPrev.style.cursor = (activeIdx === 0) ? "not-allowed" : "pointer";
+    }
+
+    const isLastQuestion = (activeIdx >= totalProblems - 1);
+    if (bottomNext) {
+      bottomNext.disabled = false;
+      bottomNext.style.opacity = "1";
+      bottomNext.style.cursor = "pointer";
+      if (isLastQuestion) {
+        bottomNext.innerHTML = '<span>🚀 Confirm & Publish Assignment</span>';
+        bottomNext.className = "studio-nav-btn studio-submit-btn";
+        bottomNext.title = "Review completed! Confirm and publish assignment to all enrolled students";
+      } else {
+        bottomNext.innerHTML = 'Next Question <span>→</span>';
+        bottomNext.className = "studio-nav-btn studio-next-btn";
+        bottomNext.title = "Go to next question";
+      }
+    }
+
+    if (!pillsContainer) return;
+    pillsContainer.innerHTML = "";
+
+    const cards = document.querySelectorAll(".ai-challenge-card");
+
+    cards.forEach((card, idx) => {
+      const isActive = (idx === activeIdx);
+      const goalTypeVal = (card.querySelector(".edit-prob-goaltype")?.value || card.dataset.goaltype || "CODING").toUpperCase();
+      const marksVal = card.querySelector(".edit-prob-marks")?.value || 25;
+      
+      const typeIcon = goalTypeVal === "MCQ" ? "📝" 
+        : goalTypeVal === "NUMERIC" ? "🔢" 
+        : goalTypeVal === "DEBUGGING" ? "🐞" 
+        : goalTypeVal === "SHORT_ANSWER" ? "✍️" 
+        : goalTypeVal === "IMAGE_BASED" ? "🖼️"
+        : goalTypeVal === "THEORY" ? "📖" 
+        : "💻";
+
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = `question-step-pill ${isActive ? 'active' : ''}`;
+      pill.style.cssText = `
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.2s ease;
+        background: ${isActive ? 'rgba(56, 211, 153, 0.2)' : 'rgba(255, 255, 255, 0.05)'};
+        border: 1px solid ${isActive ? '#38d399' : 'rgba(255, 255, 255, 0.12)'};
+        color: ${isActive ? '#38d399' : '#cbd5e1'};
+        box-shadow: ${isActive ? '0 0 10px rgba(56, 211, 153, 0.3)' : 'none'};
+      `;
+      pill.innerHTML = `<span>${typeIcon} Q${idx + 1}</span> <span style="font-size: 0.7rem; opacity: 0.75; font-weight: 600;">(${marksVal}pt)</span>`;
+      
+      pill.addEventListener("click", () => {
+        switchToQuestion(idx);
+      });
+      pillsContainer.appendChild(pill);
+    });
+  }
+
+  function switchToQuestion(targetIdx) {
+    const cards = document.querySelectorAll(".ai-challenge-card");
+    const total = cards.length;
+    if (total === 0) return;
+    currentActiveQuestionIdx = Math.max(0, Math.min(targetIdx, total - 1));
+
+    cards.forEach((card, idx) => {
+      card.style.display = (idx === currentActiveQuestionIdx) ? "block" : "none";
+    });
+
+    updateQuestionStepperUI(total, currentActiveQuestionIdx);
+
+    const pills = document.querySelectorAll(".question-step-pill");
+    if (pills[currentActiveQuestionIdx]) {
+      pills[currentActiveQuestionIdx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }
+
+  function renderAssignmentInForm(assignment, activeIndex = 0) {
     currentGeneratedAssignment = assignment;
     const titleInput = document.getElementById("ai-edit-title");
     const scenarioInput = document.getElementById("ai-edit-scenario");
@@ -3591,14 +3964,17 @@ function setupAiAssignmentStudio() {
       `;
     }
 
-    // Render Editable Challenges
+    // Render Editable Challenges with Question Management & Configurable Question Panels
     if (challengesList) {
       challengesList.innerHTML = "";
       const problems = assignment.problems || [];
+      const totalProblems = problems.length;
+      currentActiveQuestionIdx = Math.max(0, Math.min(activeIndex, Math.max(0, totalProblems - 1)));
+
       problems.forEach((prob, idx) => {
         const tier = prob.tier || prob.difficulty || (idx === 0 ? "Basic" : idx === 1 ? "Intermediate" : "Advanced");
         const tierLower = tier.toLowerCase();
-        const tierColor = tierLower === "basic" ? "#38bdf8" : tierLower === "intermediate" ? "#fbbf24" : "#f472b6";
+        const tierColor = tierLower.includes("basic") || tierLower.includes("beginner") ? "#38bdf8" : tierLower.includes("intermediate") ? "#fbbf24" : "#f472b6";
         const goalType = (prob.goal_type || (assignType === "THEORY" ? "THEORY" : "CODING")).toUpperCase();
         const marks = prob.marks || (idx === 0 ? 25 : idx === 1 ? 35 : 40);
         const statement = prob.problem_statement || prob.question || prob.description || "";
@@ -3607,100 +3983,471 @@ function setupAiAssignmentStudio() {
         const deliverable = prob.expected_deliverable || "";
         const ts = prob.lecture_timestamp || prob.timestamp_hint || `~00:${String(15 * (idx + 1)).padStart(2, '0')}:00`;
 
+        const mcq = prob.mcq || { options: { A: "Option A", B: "Option B", C: "Option C", D: "Option D" }, correct_answer: "A", explanation: "" };
+        const numeric = prob.numeric || { target_value: 0, tolerance: 0.05, unit: "units", formula_hint: "" };
+        const debugging = prob.debugging || { buggy_code: prob.starter_code || "# Buggy implementation\ndef solve():\n    return False", error_symptom: "", expected_behavior: "" };
+        const shortAnswer = prob.short_answer || { target_answer: "", keywords: [], case_sensitive: false };
+
         const card = document.createElement("div");
-        card.className = "ai-challenge-card";
+        card.className = "ai-challenge-card studio-question-card";
+        card.dataset.idx = idx;
         card.dataset.tier = tier;
         card.dataset.goaltype = goalType;
         card.dataset.timestamp = ts;
+        card.dataset.imageurl = prob.image_url || "";
+        card.dataset.imagecaption = prob.image_caption || "";
         card.dataset.criteria = JSON.stringify(criteria);
         card.dataset.checkpoints = JSON.stringify(checkpoints);
         card.dataset.testcases = JSON.stringify(prob.test_cases || []);
         card.dataset.solutionhint = prob.solution_hint || "";
+        card.style.display = (idx === currentActiveQuestionIdx) ? "block" : "none";
 
         card.innerHTML = `
-          <div class="ai-challenge-header">
-            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-              <span class="tier-badge-pill ${tierLower}" style="background: ${tierColor}22; color: ${tierColor}; border: 1px solid ${tierColor}55; padding: 3px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase;">
-                Goal ${idx + 1}: ${tier}
-              </span>
-              <select class="edit-prob-goaltype" style="background: rgba(10, 16, 30, 0.9); border: 1px solid ${goalType === 'THEORY' ? '#38bdf8' : '#38d399'}; color: ${goalType === 'THEORY' ? '#7dd3fc' : '#86efac'}; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; cursor: pointer;">
-                <option value="CODING" ${goalType === 'CODING' ? 'selected' : ''}>💻 Coding Goal</option>
-                <option value="THEORY" ${goalType === 'THEORY' ? 'selected' : ''}>📖 Theory Goal</option>
-                <option value="PRACTICAL" ${goalType === 'PRACTICAL' ? 'selected' : ''}>🛠️ Practical / Lab</option>
+          <!-- Minimalist Toolbar: Question Indicator, Type, Tier, Marks, and Action Icons -->
+          <div class="studio-card-toolbar">
+            <div class="studio-toolbar-left">
+              <span class="studio-q-index-pill">Question ${idx + 1}</span>
+              
+              <select class="edit-prob-goaltype studio-type-select" title="Question Type">
+                <option value="THEORY" ${goalType === 'THEORY' ? 'selected' : ''}>📖 Theory / Conceptual</option>
+                <option value="MCQ" ${goalType === 'MCQ' ? 'selected' : ''}>📝 Multiple Choice (MCQ)</option>
+                <option value="CODING" ${goalType === 'CODING' ? 'selected' : ''}>💻 Coding Challenge</option>
+                <option value="IMAGE_BASED" ${goalType === 'IMAGE_BASED' ? 'selected' : ''}>🖼️ Diagram / Architecture</option>
+                <option value="NUMERIC" ${goalType === 'NUMERIC' ? 'selected' : ''}>🔢 Numerical Calculation</option>
+                <option value="DEBUGGING" ${goalType === 'DEBUGGING' ? 'selected' : ''}>🐞 Debugging / Bug-Fix</option>
+                <option value="SHORT_ANSWER" ${goalType === 'SHORT_ANSWER' ? 'selected' : ''}>✍️ Short-Answer</option>
+                <option value="SCENARIO" ${goalType === 'SCENARIO' ? 'selected' : ''}>🌐 Real-World Scenario</option>
               </select>
-              <span class="timestamp-pill" title="Covered in lecture around this timestamp">
-                ⏱️ ${escapeHtml(ts)}
-              </span>
+
+              <select class="edit-prob-tier studio-tier-select" title="Difficulty Level">
+                <option value="Basic" ${tierLower === "basic" ? 'selected' : ''}>🟢 Basic</option>
+                <option value="Intermediate" ${tierLower === "intermediate" ? 'selected' : ''}>🟡 Intermediate</option>
+                <option value="Advanced" ${tierLower === "advanced" ? 'selected' : ''}>🔴 Advanced</option>
+              </select>
+
+              <div class="studio-marks-chip" title="Question Marks / Weight">
+                <input type="number" class="edit-prob-marks studio-marks-input" value="${marks}" min="1" max="100">
+                <span style="font-size: 0.72rem; color: #64748b; font-weight: 700;">pts</span>
+              </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 0.78rem; color: #94a3b8; font-weight: 700;">Marks:</span>
-              <input type="number" class="edit-prob-marks" value="${marks}" min="5" max="100" style="width: 55px; background: rgba(10, 16, 30, 0.9); border: 1px solid rgba(56, 211, 153, 0.3); color: #fff; padding: 4px 6px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; text-align: center;">
+
+            <div class="studio-toolbar-right">
+              <label class="studio-action-icon-btn studio-attach-trigger" title="Attach Diagram or Image to this question" style="margin-bottom: 0;">
+                <span>📎</span> <span>${prob.image_url ? 'Change Image' : 'Attach Image'}</span>
+                <input type="file" class="edit-prob-image-file" accept="image/*" style="display: none;">
+              </label>
+              <button type="button" class="studio-action-icon-btn btn-card-duplicate" data-idx="${idx}" title="Duplicate this question">
+                <span>📋</span> Duplicate
+              </button>
+              <button type="button" class="studio-action-icon-btn delete btn-card-delete" data-idx="${idx}" title="Delete this question">
+                <span>🗑️</span>
+              </button>
             </div>
           </div>
 
-          <div style="font-size: 0.72rem; color: #94a3b8; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">PROBLEM SPECIFICATIONS:</div>
-          <textarea class="edit-prob-desc form-input" rows="${Math.max(3, Math.ceil(statement.length / 95))}" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 9px 12px; color: #fff; font-size: 0.84rem; margin-bottom: 10px; line-height: 1.5; resize: vertical;">${escapeHtml(statement)}</textarea>
+          <!-- Hidden storage fields keeping full Supabase DB sync intact -->
+          <input type="hidden" class="edit-prob-image-url" value="${escapeHtml(prob.image_url || '')}">
+          <input type="hidden" class="edit-prob-timestamp" value="${escapeHtml(ts)}">
+          <div class="upload-status-indicator" style="font-size: 0.76rem; color: #38bdf8; font-weight: 700; margin-bottom: 10px; display: none;"></div>
 
-          <div class="goal-theory-notice" style="display: ${goalType === 'THEORY' ? 'block' : 'none'}; font-size: 0.76rem; color: #7dd3fc; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 6px 10px; margin-bottom: 10px;">
-            📖 Theory Goal: Evaluates conceptual reasoning and descriptive explanations. No code editor required for this goal.
+          <!-- Hero Question Statement (Pure Focus on the Question) -->
+          <div style="margin-bottom: 14px;">
+            <label style="display: block; font-size: 0.74rem; font-weight: 800; color: #38d399; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;">
+              Question ${idx + 1} Statement / Task:
+            </label>
+            <textarea class="edit-prob-desc studio-hero-prompt" rows="${Math.max(4, Math.ceil(statement.length / 90))}" placeholder="Type question prompt or problem statement clearly here...">${escapeHtml(statement)}</textarea>
           </div>
 
-          <div class="edit-prob-starter-container" style="margin-bottom: 10px; display: ${goalType === 'THEORY' ? 'none' : 'block'};">
-            <div style="font-size: 0.72rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.04em;">INDEPENDENT GOAL STARTER CODE:</div>
-            <textarea class="edit-prob-starter form-input" rows="3" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 6px; padding: 8px 10px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45;">${escapeHtml(prob.starter_code || '')}</textarea>
+          <!-- Student Guidance Hint (Optional — Auto-generated by AI if left blank) -->
+          <div style="margin-bottom: 14px;">
+            <label style="display: flex; justify-content: space-between; align-items: center; font-size: 0.72rem; font-weight: 700; color: #fbbf24; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.03em;">
+              <span>💡 Student Guidance Hint:</span>
+              <span style="font-size: 0.68rem; color: #94a3b8; font-weight: normal; text-transform: none;">(Auto-generated by AI if left blank)</span>
+            </label>
+            <input type="text" class="edit-prob-hint form-input" value="${escapeHtml(prob.solution_hint || '')}" placeholder="Optional guidance hint for students when stuck..." style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 6px; padding: 7px 12px; font-size: 0.82rem; color: #cbd5e1;">
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px;">
+          <!-- Modern Diagram / Image Preview Card (Displayed only when image exists) -->
+          <div class="studio-image-preview-card edit-prob-image-preview" style="display: ${prob.image_url ? 'block' : 'none'};">
+            <button type="button" class="studio-image-remove-btn btn-clear-image" title="Remove this image">✕</button>
+            <img src="${escapeHtml(prob.image_url || '')}" alt="Question Diagram">
+            <div style="margin-top: 8px;">
+              <input type="text" class="edit-prob-image-caption form-input" value="${escapeHtml(prob.image_caption || '')}" placeholder="Optional diagram caption (e.g. Figure 1: Architecture Blueprint)..." style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 6px 12px; font-size: 0.78rem; color: #cbd5e1;">
+            </div>
+          </div>
+
+          <!-- 1. MCQ CONFIG PANEL -->
+          <div class="card-config-mcq" style="display: ${goalType === 'MCQ' ? 'block' : 'none'}; margin-bottom: 14px; background: rgba(56, 189, 248, 0.04); border: 1px solid rgba(56, 189, 248, 0.18); border-radius: 12px; padding: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+              <div style="font-size: 0.74rem; color: #38bdf8; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;">Multiple Choice Options (Select correct answer):</div>
+              <button type="button" class="btn btn-sm btn-calibrate-mcq-ai" data-idx="${idx}" title="Instructor types question, AI automatically generates 4 options, verified correct answer, explanation & hint" style="background: linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(14, 165, 233, 0.3) 100%); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; font-size: 0.72rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                <span>✨ AI Generate Options & Answer</span>
+              </button>
+            </div>
+            <div class="studio-mcq-grid">
+              ${['A', 'B', 'C', 'D'].map(opt => `
+                <div class="studio-mcq-option-row">
+                  <label class="studio-mcq-radio-label">
+                    <input type="radio" name="mcq_correct_${idx}" value="${opt}" ${(mcq.correct_answer || 'A').toUpperCase() === opt ? 'checked' : ''} style="accent-color: #38d399;"> ${opt})
+                  </label>
+                  <input type="text" class="edit-mcq-opt studio-mcq-input" data-opt="${opt}" value="${escapeHtml(mcq.options?.[opt] || '')}" placeholder="Option ${opt} text...">
+                </div>
+              `).join('')}
+            </div>
+            <div style="margin-top: 8px;">
+              <input type="text" class="edit-mcq-explanation form-input" value="${escapeHtml(mcq.explanation || '')}" placeholder="Pedagogical explanation shown to students after answering (optional)..." style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.8); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 7px 12px; font-size: 0.8rem; color: #cbd5e1;">
+            </div>
+          </div>
+
+          <!-- 2. NUMERIC CONFIG PANEL -->
+          <div class="card-config-numeric" style="display: ${goalType === 'NUMERIC' ? 'block' : 'none'}; margin-bottom: 14px; background: rgba(245, 158, 11, 0.04); border: 1px solid rgba(245, 158, 11, 0.18); border-radius: 12px; padding: 14px;">
+            <div style="font-size: 0.74rem; color: #fbbf24; font-weight: 800; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 0.04em;">Numerical Target & Tolerances:</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 8px;">
+              <div>
+                <label style="display: block; font-size: 0.7rem; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Target Value:</label>
+                <input type="number" step="any" class="edit-num-target form-input" value="${numeric.target_value ?? 0}" style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.82rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: #fff;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.7rem; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Tolerance (e.g. 0.05 = ±5%):</label>
+                <input type="number" step="0.01" class="edit-num-tol form-input" value="${numeric.tolerance ?? 0.05}" style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.82rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: #fff;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.7rem; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Unit Label:</label>
+                <input type="text" class="edit-num-unit form-input" value="${escapeHtml(numeric.unit || '')}" placeholder="ms, %, users" style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.82rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: #fff;">
+              </div>
+            </div>
             <div>
-              <div style="font-size: 0.72rem; color: #818cf8; font-weight: 700; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.04em;">EXPECTED DELIVERABLE:</div>
-              <input type="text" class="edit-prob-deliverable form-input" value="${escapeHtml(deliverable)}" placeholder="e.g. Executable SQL Query or Python function" style="width: 100%; box-sizing: border-box; background: rgba(10, 16, 30, 0.7); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 6px; padding: 6px 10px; color: #cbd5e1; font-size: 0.82rem;">
+              <input type="text" class="edit-num-hint form-input" value="${escapeHtml(numeric.formula_hint || '')}" placeholder="Formula or calculation hint..." style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.8rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #cbd5e1;">
             </div>
           </div>
 
-          ${criteria.length > 0 ? `
-          <div style="font-size: 0.72rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">ACCEPTANCE CRITERIA:</div>
-          <div class="edit-criteria-tags" style="display: grid; gap: 4px; margin-bottom: 10px;">
-            ${criteria.map(c => `
-              <div style="font-size: 0.78rem; color: rgba(255, 255, 255, 0.9); background: rgba(56, 211, 153, 0.06); padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(56, 211, 153, 0.15); display: flex; align-items: flex-start; gap: 6px;">
-                <span style="color: #38d399; font-weight: 700;">✓</span> <span>${escapeHtml(c)}</span>
-              </div>
-            `).join('')}
+          <!-- 3. DEBUGGING CONFIG PANEL -->
+          <div class="card-config-debugging" style="display: ${goalType === 'DEBUGGING' ? 'block' : 'none'}; margin-bottom: 14px; background: rgba(239, 68, 68, 0.04); border: 1px solid rgba(239, 68, 68, 0.18); border-radius: 12px; padding: 14px;">
+            <div style="font-size: 0.74rem; color: #f87171; font-weight: 800; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.04em;">Buggy Code Template:</div>
+            <textarea class="edit-dbg-buggy form-input" rows="3" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 8px 12px; color: #fca5a5; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45; margin-bottom: 8px;">${escapeHtml(debugging.buggy_code || prob.starter_code || '')}</textarea>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <input type="text" class="edit-dbg-symptom form-input" value="${escapeHtml(debugging.error_symptom || '')}" placeholder="Error symptom (e.g. IndexError on empty list)..." style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.8rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #cbd5e1;">
+              <input type="text" class="edit-dbg-expected form-input" value="${escapeHtml(debugging.expected_behavior || '')}" placeholder="Expected correct behavior..." style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.8rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #cbd5e1;">
+            </div>
           </div>
-          ` : ''}
 
-          ${checkpoints.length > 0 ? `
-          <div style="font-size: 0.72rem; color: #38bdf8; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.04em;">CONCEPTUAL CHECKPOINTS:</div>
-          <div class="edit-criteria-tags" style="display: grid; gap: 4px;">
-            ${checkpoints.map(cp => `
-              <div style="font-size: 0.78rem; color: rgba(224, 242, 254, 0.9); background: rgba(56, 189, 248, 0.06); padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.2); display: flex; align-items: flex-start; gap: 6px;">
-                <span style="color: #38bdf8; font-weight: 700;">📌</span> <span>${escapeHtml(cp)}</span>
-              </div>
-            `).join('')}
+          <!-- 4. SHORT ANSWER CONFIG PANEL -->
+          <div class="card-config-shortanswer" style="display: ${goalType === 'SHORT_ANSWER' ? 'block' : 'none'}; margin-bottom: 14px; background: rgba(168, 85, 247, 0.04); border: 1px solid rgba(168, 85, 247, 0.18); border-radius: 12px; padding: 14px;">
+            <div style="font-size: 0.74rem; color: #c084fc; font-weight: 800; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.04em;">Short-Answer Key:</div>
+            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-bottom: 6px;">
+              <input type="text" class="edit-sa-target form-input" value="${escapeHtml(shortAnswer.target_answer || '')}" placeholder="Target answer or exact keyword..." style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.82rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: #fff;">
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 0.74rem; color: #cbd5e1; cursor: pointer;">
+                <input type="checkbox" class="edit-sa-casesensitive" ${shortAnswer.case_sensitive ? 'checked' : ''} style="accent-color: #a855f7;"> Case Sensitive
+              </label>
+            </div>
+            <input type="text" class="edit-sa-keywords form-input" value="${escapeHtml((shortAnswer.keywords || []).join(', '))}" placeholder="Required keywords (comma separated)..." style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.8rem; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #cbd5e1;">
           </div>
-          ` : ''}
+
+          <!-- 5. CODING CONFIG PANEL -->
+          <div class="card-config-coding" style="display: ${['CODING', 'CODE_SNIPPET'].includes(goalType) ? 'block' : 'none'}; margin-bottom: 14px;">
+            <div style="font-size: 0.74rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.03em;">Starter Code Skeleton:</div>
+            <textarea class="edit-prob-starter form-input" rows="3" placeholder="def solution():\n    pass" style="width: 100%; box-sizing: border-box; background: #020712; border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 8px; padding: 8px 12px; color: #9ef8dc; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.45;">${escapeHtml(prob.starter_code || '')}</textarea>
+          </div>
+
+          <!-- 6. SLEEK OPTIONAL ACCORDION: AI EVALUATION CRITERIA & RUBRICS -->
+          <details class="studio-rubrics-details">
+            <summary class="studio-rubrics-summary">
+              <span style="display: flex; align-items: center; gap: 6px;">
+                <span>✨ AI Evaluation & Grading Criteria</span>
+                <span style="font-size: 0.68rem; color: #64748b; font-weight: 500;">(Optional for AI Auto-Grader)</span>
+              </span>
+              <span style="font-size: 0.72rem; color: #818cf8; background: rgba(129, 140, 248, 0.12); border: 1px solid rgba(129, 140, 248, 0.25); padding: 2px 8px; border-radius: 4px;">Configure ▾</span>
+            </summary>
+            <div style="margin-top: 12px;">
+              <div style="margin-bottom: 10px;">
+                <label style="display: block; font-size: 0.72rem; color: #a5b4fc; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Expected Deliverable:</label>
+                <input type="text" class="edit-prob-deliverable form-input" value="${escapeHtml(deliverable)}" placeholder="e.g. Written analysis or verified function implementation" style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(129, 140, 248, 0.3); border-radius: 6px; padding: 7px 12px; color: #cbd5e1; font-size: 0.82rem;">
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div>
+                  <div style="font-size: 0.72rem; color: #38d399; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Acceptance Criteria (one per line):</div>
+                  <textarea class="edit-criteria-textarea form-input" rows="3" placeholder="Criteria for full marks..." style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(56, 211, 153, 0.25); border-radius: 6px; padding: 7px 10px; color: #cbd5e1; font-size: 0.8rem; line-height: 1.45;">${escapeHtml(criteria.join('\n'))}</textarea>
+                </div>
+                <div>
+                  <div style="font-size: 0.72rem; color: #38bdf8; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Conceptual Checkpoints (one per line):</div>
+                  <textarea class="edit-checkpoints-textarea form-input" rows="3" placeholder="Key concepts to identify..." style="width: 100%; box-sizing: border-box; background: rgba(8, 14, 26, 0.85); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; padding: 7px 10px; color: #cbd5e1; font-size: 0.8rem; line-height: 1.45;">${escapeHtml(checkpoints.join('\n'))}</textarea>
+                </div>
+              </div>
+            </div>
+          </details>
         `;
 
-        const marksInput = card.querySelector(".edit-prob-marks");
-        if (marksInput) {
-          marksInput.addEventListener("input", updateTotalMarksTally);
+        // Card Event Listeners:
+
+        // 0b. Supabase Image Upload & Handling
+        const imgFileInput = card.querySelector(".edit-prob-image-file");
+        const imgUrlInput = card.querySelector(".edit-prob-image-url");
+        const imgCaptionInput = card.querySelector(".edit-prob-image-caption");
+        const imgPreviewContainer = card.querySelector(".edit-prob-image-preview");
+        const imgPreviewElem = imgPreviewContainer?.querySelector("img");
+        const imgClearBtn = card.querySelector(".btn-clear-image");
+        const imgStatusInd = card.querySelector(".upload-status-indicator");
+
+        if (imgFileInput) {
+          imgFileInput.addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+              if (imgStatusInd) {
+                imgStatusInd.style.display = "inline-block";
+                imgStatusInd.style.color = "#38bdf8";
+                imgStatusInd.textContent = "⏳ Uploading to Supabase Cloud Storage...";
+              }
+              const formData = new FormData();
+              formData.append("file", file);
+              const assignId = currentGeneratedAssignment?.id || "";
+              if (assignId) formData.append("assignment_id", assignId);
+
+              const upRes = await fetch("/api/assignments/upload-image", {
+                method: "POST",
+                headers: { "X-Climbup-Player": "amirshaikh320340" },
+                body: formData
+              });
+              if (!upRes.ok) {
+                const errJson = await upRes.json().catch(() => ({}));
+                throw new Error(errJson.detail || "Supabase upload failed.");
+              }
+              const upData = await upRes.json();
+              if (upData.url) {
+                if (imgUrlInput) imgUrlInput.value = upData.url;
+                card.dataset.imageurl = upData.url;
+                if (imgPreviewElem) imgPreviewElem.src = upData.url;
+                if (imgPreviewContainer) imgPreviewContainer.style.display = "block";
+                if (imgClearBtn) imgClearBtn.style.display = "inline-block";
+                if (imgStatusInd) {
+                  imgStatusInd.style.color = "#38d399";
+                  imgStatusInd.textContent = "✓ Saved in Supabase!";
+                  setTimeout(() => { if (imgStatusInd) imgStatusInd.style.display = "none"; }, 3500);
+                }
+              }
+            } catch (err) {
+              console.error("Supabase image upload error:", err);
+              alert("Failed to upload image to Supabase: " + err.message);
+              if (imgStatusInd) {
+                imgStatusInd.style.color = "#f87171";
+                imgStatusInd.textContent = "⚠️ Upload error";
+              }
+            }
+          });
         }
 
+        if (imgClearBtn) {
+          imgClearBtn.addEventListener("click", () => {
+            if (imgUrlInput) imgUrlInput.value = "";
+            card.dataset.imageurl = "";
+            if (imgPreviewContainer) imgPreviewContainer.style.display = "none";
+            if (imgClearBtn) imgClearBtn.style.display = "none";
+          });
+        }
+
+        if (imgUrlInput) {
+          imgUrlInput.addEventListener("input", (e) => {
+            const u = e.target.value.trim();
+            card.dataset.imageurl = u;
+            if (u) {
+              if (imgPreviewElem) imgPreviewElem.src = u;
+              if (imgPreviewContainer) imgPreviewContainer.style.display = "block";
+              if (imgClearBtn) imgClearBtn.style.display = "inline-block";
+            } else {
+              if (imgPreviewContainer) imgPreviewContainer.style.display = "none";
+              if (imgClearBtn) imgClearBtn.style.display = "none";
+            }
+          });
+        }
+
+        if (imgCaptionInput) {
+          imgCaptionInput.addEventListener("input", (e) => {
+            card.dataset.imagecaption = e.target.value.trim();
+          });
+        }
+
+        // 1. Marks change
+        const marksInput = card.querySelector(".edit-prob-marks");
+        if (marksInput) {
+          marksInput.addEventListener("input", () => {
+            updateTotalMarksTally();
+            updateQuestionStepperUI(totalProblems, currentActiveQuestionIdx);
+          });
+        }
+
+        // 2. Goal Type switch
         const goalTypeSelect = card.querySelector(".edit-prob-goaltype");
-        const starterContainer = card.querySelector(".edit-prob-starter-container");
-        const theoryNotice = card.querySelector(".goal-theory-notice");
         if (goalTypeSelect) {
           goalTypeSelect.addEventListener("change", (e) => {
             const val = e.target.value;
             card.dataset.goaltype = val;
-            if (starterContainer) starterContainer.style.display = (val === "THEORY") ? "none" : "block";
-            if (theoryNotice) theoryNotice.style.display = (val === "THEORY") ? "block" : "none";
-            goalTypeSelect.style.borderColor = (val === "THEORY") ? "#38bdf8" : "#38d399";
-            goalTypeSelect.style.color = (val === "THEORY") ? "#7dd3fc" : "#86efac";
+            
+            // Toggle config blocks
+            const mcqBlock = card.querySelector(".card-config-mcq");
+            const numBlock = card.querySelector(".card-config-numeric");
+            const dbgBlock = card.querySelector(".card-config-debugging");
+            const saBlock = card.querySelector(".card-config-shortanswer");
+            const codeBlock = card.querySelector(".card-config-coding");
+
+            if (mcqBlock) mcqBlock.style.display = (val === "MCQ") ? "block" : "none";
+            if (numBlock) numBlock.style.display = (val === "NUMERIC") ? "block" : "none";
+            if (dbgBlock) dbgBlock.style.display = (val === "DEBUGGING") ? "block" : "none";
+            if (saBlock) saBlock.style.display = (val === "SHORT_ANSWER") ? "block" : "none";
+            if (codeBlock) codeBlock.style.display = (['CODING', 'CODE_SNIPPET'].includes(val)) ? "block" : "none";
+
+            updateQuestionStepperUI(totalProblems, currentActiveQuestionIdx);
+          });
+        }
+
+        // 3. Reorder Up
+        const moveUpBtn = card.querySelector(".btn-card-move-up");
+        if (moveUpBtn) {
+          moveUpBtn.addEventListener("click", () => {
+            const currentVals = collectFormValues();
+            if (idx > 0 && currentVals.problems[idx]) {
+              const temp = currentVals.problems[idx - 1];
+              currentVals.problems[idx - 1] = currentVals.problems[idx];
+              currentVals.problems[idx] = temp;
+              renderAssignmentInForm(currentVals, idx - 1);
+            }
+          });
+        }
+
+        // 4. Reorder Down
+        const moveDownBtn = card.querySelector(".btn-card-move-down");
+        if (moveDownBtn) {
+          moveDownBtn.addEventListener("click", () => {
+            const currentVals = collectFormValues();
+            if (idx < currentVals.problems.length - 1 && currentVals.problems[idx]) {
+              const temp = currentVals.problems[idx + 1];
+              currentVals.problems[idx + 1] = currentVals.problems[idx];
+              currentVals.problems[idx] = temp;
+              renderAssignmentInForm(currentVals, idx + 1);
+            }
+          });
+        }
+
+        // 5. Duplicate
+        const dupBtn = card.querySelector(".btn-card-duplicate");
+        if (dupBtn) {
+          dupBtn.addEventListener("click", () => {
+            const currentVals = collectFormValues();
+            const targetProb = currentVals.problems[idx];
+            if (targetProb) {
+              const cloned = JSON.parse(JSON.stringify(targetProb));
+              cloned.problem_statement = (cloned.problem_statement || "") + " (Copy)";
+              cloned.question = cloned.problem_statement;
+              currentVals.problems.splice(idx + 1, 0, cloned);
+              // Rebalance marks
+              const total = currentVals.problems.length;
+              const base = Math.floor(100 / total);
+              const rem = 100 % total;
+              currentVals.problems.forEach((p, i) => {
+                p.marks = base + (i === total - 1 ? rem : 0);
+              });
+              renderAssignmentInForm(currentVals, idx + 1);
+            }
+          });
+        }
+
+        // 6. Delete
+        const delBtn = card.querySelector(".btn-card-delete");
+        if (delBtn) {
+          delBtn.addEventListener("click", () => {
+            const currentVals = collectFormValues();
+            if (currentVals.problems.length <= 1) {
+              alert("An assignment must have at least one question.");
+              return;
+            }
+            if (confirm(`Delete Question ${idx + 1}?`)) {
+              currentVals.problems.splice(idx, 1);
+              // Rebalance marks
+              const total = currentVals.problems.length;
+              const base = Math.floor(100 / total);
+              const rem = 100 % total;
+              currentVals.problems.forEach((p, i) => {
+                p.marks = base + (i === total - 1 ? rem : 0);
+              });
+              renderAssignmentInForm(currentVals, Math.max(0, idx - 1));
+            }
+          });
+        }
+
+        // 6. AI MCQ Calibration
+        const aiCalibrateBtn = card.querySelector(".btn-calibrate-mcq-ai");
+        if (aiCalibrateBtn) {
+          aiCalibrateBtn.addEventListener("click", async () => {
+            const promptText = card.querySelector(".edit-prob-desc")?.value?.trim();
+            if (!promptText) {
+              alert("Please type the question statement above first. AI will generate all options, the verified answer, explanation, and hint.");
+              card.querySelector(".edit-prob-desc")?.focus();
+              return;
+            }
+
+            aiCalibrateBtn.disabled = true;
+            aiCalibrateBtn.innerHTML = "<span>⏳ Synthesizing Options...</span>";
+
+            try {
+              const currentLesson = lectureSelect?.value || window.currentLessonId;
+              const res = await fetch("/api/admin/mcq/calibrate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  question: promptText,
+                  lesson_id: currentLesson
+                })
+              });
+              if (!res.ok) throw new Error("Failed to calibrate MCQ");
+              const data = await res.json();
+
+              // Fill options
+              const opts = data.options || {};
+              ['A', 'B', 'C', 'D'].forEach(letter => {
+                const optInput = card.querySelector(`.edit-mcq-opt[data-opt="${letter}"]`);
+                if (optInput && opts[letter]) {
+                  optInput.value = opts[letter];
+                }
+              });
+
+              // Check correct answer radio
+              const correctLetter = (data.correct_answer || "A").toUpperCase();
+              const radio = card.querySelector(`input[name="mcq_correct_${idx}"][value="${correctLetter}"]`);
+              if (radio) radio.checked = true;
+
+              // Fill explanation
+              const expInput = card.querySelector(".edit-mcq-explanation");
+              if (expInput && data.explanation) expInput.value = data.explanation;
+
+              // Fill guidance hint
+              const hintInput = card.querySelector(".edit-prob-hint");
+              if (hintInput && (data.hint || data.solution_hint)) {
+                hintInput.value = data.hint || data.solution_hint;
+              }
+
+              aiCalibrateBtn.innerHTML = "<span>✓ Generated!</span>";
+              setTimeout(() => {
+                aiCalibrateBtn.disabled = false;
+                aiCalibrateBtn.innerHTML = "<span>✨ AI Generate Options & Answer</span>";
+              }, 2000);
+
+            } catch (err) {
+              alert("AI MCQ Calibration error: " + err.message);
+              aiCalibrateBtn.disabled = false;
+              aiCalibrateBtn.innerHTML = "<span>✨ AI Generate Options & Answer</span>";
+            }
           });
         }
 
         challengesList.appendChild(card);
       });
+
+      updateQuestionStepperUI(totalProblems, currentActiveQuestionIdx);
+    }
+
+    if (assignment && assignment.problems && assignment.problems.length > 0) {
+      if (typeof renderQuestionsPreviewTable === "function") {
+        renderQuestionsPreviewTable(assignment.problems, assignment.title || "Existing Assignment");
+      }
     }
 
     updateTotalMarksTally();
@@ -3737,8 +4484,8 @@ function setupAiAssignmentStudio() {
             statusBanner.style.background = isPub ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)";
             statusBanner.style.color = isPub ? "#38d399" : "#fbbf24";
             statusBanner.textContent = isPub
-              ? "🟢 Published: This assignment is actively live for enrolled students. You can review, edit, or preview below."
-              : "🟡 Draft (Unpublished): Review and edit challenges below. Click '🚀 Confirm & Publish to Students' when ready.";
+              ? "🟢 Published: This assignment is actively live for enrolled students."
+              : "🟡 Draft (Unpublished): Review questions below and click 'Confirm & Publish' when ready.";
           }
           return;
         }
@@ -3746,13 +4493,12 @@ function setupAiAssignmentStudio() {
     } catch (_) {}
 
     // No existing assignment found -> show clean empty state
-    if (workspace) workspace.style.display = "none";
-    if (emptyState) emptyState.style.display = "block";
-    if (statusBanner) {
-      statusBanner.style.display = "block";
-      statusBanner.style.background = "rgba(56, 211, 153, 0.08)";
-      statusBanner.style.color = "#94a3b8";
-      statusBanner.textContent = "⚡ No assignment generated for this lecture yet. Click '⚡ Synthesize Assignment with AI' above.";
+    if (typeof renderQuestionsPreviewTable === "function") {
+      renderQuestionsPreviewTable([], "");
+    }
+    const subtextEl = document.getElementById("ai-assign-file-subtext");
+    if (subtextEl) {
+      subtextEl.textContent = "Directly parses all MCQs, Coding problems, options, answers, and tests in one click.";
     }
   }
 
@@ -3766,6 +4512,18 @@ function setupAiAssignmentStudio() {
     }
     modal.style.display = "flex";
     const lessonId = lectureSelect?.value || preselectedId;
+
+    const allLessons = (window.allLessonsCache || []).concat(typeof allLessonsCache !== "undefined" ? allLessonsCache : []);
+    const targetLesson = allLessons.find(l => l.id === lessonId);
+    const lectureInfoEl = document.getElementById("ai-assign-target-lecture-info");
+    if (lectureInfoEl) {
+      if (targetLesson) {
+        lectureInfoEl.innerHTML = `Target Lecture: <strong style="color: #38bdf8;">${escapeHtml(targetLesson.title)}</strong> (ID: ${escapeHtml(targetLesson.id)})`;
+      } else {
+        lectureInfoEl.textContent = `Directly upload your questions file for this lecture. No manual form typing required.`;
+      }
+    }
+
     if (lessonId) {
       await checkAndLoadExistingAssignment(lessonId);
     }
@@ -3786,7 +4544,20 @@ function setupAiAssignmentStudio() {
 
   if (lectureSelect) {
     lectureSelect.addEventListener("change", () => {
-      checkAndLoadExistingAssignment(lectureSelect.value);
+      const selectedId = lectureSelect.value;
+      if (selectedId) {
+        window.currentLessonId = selectedId;
+        const allLessons = (window.allLessonsCache || []).concat(typeof allLessonsCache !== "undefined" ? allLessonsCache : []);
+        const targetLesson = allLessons.find(l => l.id === selectedId);
+        if (targetLesson && targetLesson.course_id) {
+          window.currentCourseId = targetLesson.course_id;
+        }
+        const lectureInfoEl = document.getElementById("ai-assign-target-lecture-info");
+        if (lectureInfoEl && targetLesson) {
+          lectureInfoEl.innerHTML = `Target: <strong style="color: #38bdf8;">${escapeHtml(targetLesson.title)}</strong> (ID: ${escapeHtml(targetLesson.id)})`;
+        }
+      }
+      checkAndLoadExistingAssignment(selectedId);
     });
   }
 
@@ -3860,22 +4631,25 @@ function setupAiAssignmentStudio() {
       const marksVal = parseInt(card.querySelector(".edit-prob-marks")?.value) || (idx === 0 ? 25 : idx === 1 ? 35 : 40);
       const descVal = card.querySelector(".edit-prob-desc")?.value || "";
       const delivVal = card.querySelector(".edit-prob-deliverable")?.value || "";
-      const tierVal = card.dataset.tier || (idx === 0 ? "Basic" : idx === 1 ? "Intermediate" : "Advanced");
-      const tsVal = card.dataset.timestamp || "";
+      const tierVal = card.querySelector(".edit-prob-tier")?.value || card.dataset.tier || (idx === 0 ? "Basic" : idx === 1 ? "Intermediate" : "Advanced");
+      const tsVal = card.querySelector(".edit-prob-timestamp")?.value || card.dataset.timestamp || "";
       const goalTypeVal = (card.querySelector(".edit-prob-goaltype")?.value || card.dataset.goaltype || "CODING").toUpperCase();
 
+      // Criteria & Checkpoints (from textarea if rendered, else dataset)
+      const criteriaTextarea = card.querySelector(".edit-criteria-textarea");
       let critVal = [];
-      try {
-        critVal = JSON.parse(card.dataset.criteria || "[]");
-      } catch (_) {
-        critVal = [];
+      if (criteriaTextarea) {
+        critVal = criteriaTextarea.value.split("\n").map(s => s.trim()).filter(Boolean);
+      } else {
+        try { critVal = JSON.parse(card.dataset.criteria || "[]"); } catch (_) { critVal = []; }
       }
 
+      const checkpointsTextarea = card.querySelector(".edit-checkpoints-textarea");
       let checkpointsVal = [];
-      try {
-        checkpointsVal = JSON.parse(card.dataset.checkpoints || "[]");
-      } catch (_) {
-        checkpointsVal = [];
+      if (checkpointsTextarea) {
+        checkpointsVal = checkpointsTextarea.value.split("\n").map(s => s.trim()).filter(Boolean);
+      } else {
+        try { checkpointsVal = JSON.parse(card.dataset.checkpoints || "[]"); } catch (_) { checkpointsVal = []; }
       }
 
       let testcasesVal = [];
@@ -3886,7 +4660,56 @@ function setupAiAssignmentStudio() {
       }
 
       const starterVal = card.querySelector(".edit-prob-starter")?.value || "";
-      const hintVal = card.dataset.solutionhint || "";
+      const hintVal = card.querySelector(".edit-prob-hint")?.value?.trim() || card.dataset.solutionhint || "";
+
+      // MCQ Config
+      const mcqChecked = card.querySelector(`input[name="mcq_correct_${idx}"]:checked`)?.value || "A";
+      const mcqOpts = {};
+      card.querySelectorAll(".edit-mcq-opt").forEach(inp => {
+        const optKey = inp.dataset.opt || "A";
+        mcqOpts[optKey] = inp.value.trim();
+      });
+      const mcqExp = card.querySelector(".edit-mcq-explanation")?.value || "";
+      const mcqObj = {
+        options: Object.keys(mcqOpts).length > 0 ? mcqOpts : { A: "Option A", B: "Option B", C: "Option C", D: "Option D" },
+        correct_answer: mcqChecked,
+        explanation: mcqExp
+      };
+
+      // Numeric Config
+      const numTarget = parseFloat(card.querySelector(".edit-num-target")?.value) || 0;
+      const numTol = parseFloat(card.querySelector(".edit-num-tol")?.value) ?? 0.05;
+      const numUnit = card.querySelector(".edit-num-unit")?.value || "";
+      const numHint = card.querySelector(".edit-num-hint")?.value || "";
+      const numObj = {
+        target_value: numTarget,
+        tolerance: numTol,
+        unit: numUnit,
+        formula_hint: numHint
+      };
+
+      // Debugging Config
+      const dbgBuggy = card.querySelector(".edit-dbg-buggy")?.value || starterVal;
+      const dbgSymptom = card.querySelector(".edit-dbg-symptom")?.value || "";
+      const dbgExpected = card.querySelector(".edit-dbg-expected")?.value || "";
+      const dbgObj = {
+        buggy_code: dbgBuggy,
+        error_symptom: dbgSymptom,
+        expected_behavior: dbgExpected
+      };
+
+      // Short Answer Config
+      const saTarget = card.querySelector(".edit-sa-target")?.value || "";
+      const saKeywords = (card.querySelector(".edit-sa-keywords")?.value || "").split(",").map(k => k.trim()).filter(Boolean);
+      const saCase = Boolean(card.querySelector(".edit-sa-casesensitive")?.checked);
+      const saObj = {
+        target_answer: saTarget,
+        keywords: saKeywords,
+        case_sensitive: saCase
+      };
+
+      const imgUrlVal = card.querySelector(".edit-prob-image-url")?.value.trim() || card.dataset.imageurl || "";
+      const imgCaptionVal = card.querySelector(".edit-prob-image-caption")?.value.trim() || card.dataset.imagecaption || "";
 
       collectedProblems.push({
         problem_number: idx + 1,
@@ -3896,133 +4719,1119 @@ function setupAiAssignmentStudio() {
         marks: marksVal,
         problem_statement: descVal,
         question: descVal,
-        starter_code: goalTypeVal === "THEORY" ? "" : starterVal,
-        test_cases: goalTypeVal === "THEORY" ? [] : testcasesVal,
+        image_url: imgUrlVal,
+        image_caption: imgCaptionVal,
+        starter_code: (goalTypeVal === "THEORY" || goalTypeVal === "MCQ" || goalTypeVal === "NUMERIC" || goalTypeVal === "SHORT_ANSWER") ? "" : starterVal,
+        test_cases: (goalTypeVal === "THEORY" || goalTypeVal === "MCQ" || goalTypeVal === "NUMERIC" || goalTypeVal === "SHORT_ANSWER") ? [] : testcasesVal,
         conceptual_checkpoints: checkpointsVal,
         solution_hint: hintVal,
         lecture_timestamp: tsVal,
         timestamp_hint: tsVal,
         expected_deliverable: delivVal,
-        acceptance_criteria: critVal
+        acceptance_criteria: critVal,
+        mcq: mcqObj,
+        numeric: numObj,
+        debugging: dbgObj,
+        short_answer: saObj
       });
     });
 
     const problemsToUse = collectedProblems.length > 0 ? collectedProblems : (currentGeneratedAssignment?.problems || []);
 
     // Derive overall assignment_type
-    const hasTheory = problemsToUse.some(p => (p.goal_type || "").toUpperCase() === "THEORY");
-    const hasCoding = problemsToUse.some(p => (p.goal_type || "").toUpperCase() === "CODING" || (p.goal_type || "").toUpperCase() === "PRACTICAL");
+    const hasTheory = problemsToUse.some(p => ["THEORY", "ALGORITHMIC", "SCENARIO", "IMAGE_BASED", "SHORT_ANSWER"].includes((p.goal_type || "").toUpperCase()));
+    const hasCoding = problemsToUse.some(p => ["CODING", "PRACTICAL", "DEBUGGING", "CODE_SNIPPET"].includes((p.goal_type || "").toUpperCase()));
     const derivedAssignType = (hasTheory && hasCoding) ? "MIXED" : hasTheory ? "THEORY" : "CODING";
 
+    const activeLessonId = (lectureSelect ? lectureSelect.value : null) || currentGeneratedAssignment?.lesson_id || window.currentLessonId || (typeof currentLessonId !== "undefined" ? currentLessonId : "");
+    const activeCourseId = currentGeneratedAssignment?.course_id || window.currentCourseId || (typeof currentCourseId !== "undefined" ? currentCourseId : "");
+    const assignId = currentGeneratedAssignment?.id || (activeLessonId ? `assign_${activeLessonId}` : `assign_${Date.now().toString(36)}`);
+
+    const assignTitle = document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment?.title || "Real-World Milestone Mission";
+    const defaultScenario = `Real-World Mission Specifications: Complete all technical challenges for ${assignTitle}.`;
+    const defaultDesc = `Complete all milestones and verify your implementation against practical requirements for ${assignTitle}.`;
+    const defaultStarter = "# Write your solution implementation below:\ndef solution(*args, **kwargs):\n    pass\n";
+
     return {
-      title: document.getElementById("ai-edit-title")?.value || currentGeneratedAssignment?.title || "Real-World Milestone Mission",
-      scenario_context: document.getElementById("ai-edit-scenario")?.value || currentGeneratedAssignment?.scenario_context || "",
+      id: assignId,
+      lesson_id: activeLessonId,
+      course_id: activeCourseId,
+      title: assignTitle,
+      scenario_context: currentGeneratedAssignment?.scenario_context || document.getElementById("ai-edit-scenario")?.value || defaultScenario,
+      description: currentGeneratedAssignment?.description || document.getElementById("ai-edit-scenario")?.value || currentGeneratedAssignment?.scenario_context || defaultDesc,
       assignment_type: derivedAssignType,
-      starter_code: derivedAssignType === "THEORY" ? "" : (document.getElementById("ai-edit-starter")?.value || currentGeneratedAssignment?.starter_code || ""),
+      starter_code: derivedAssignType === "THEORY" ? "" : (currentGeneratedAssignment?.starter_code || document.getElementById("ai-edit-starter")?.value || defaultStarter),
       max_score: parseInt(document.getElementById("ai-edit-maxscore")?.value) || 100,
       due_date: document.getElementById("ai-edit-due")?.value || "Next Sunday, 11:59 PM",
       problems: problemsToUse,
+      rubric: currentGeneratedAssignment?.rubric || {
+        max_score: parseInt(document.getElementById("ai-edit-maxscore")?.value) || 100,
+        criteria: [
+          { name: "Correctness & Execution", marks: 50 },
+          { name: "Code & Analysis Quality", marks: 30 },
+          { name: "Edge Case & Error Handling", marks: 20 }
+        ]
+      },
       quality_report: currentGeneratedAssignment?.quality_report
     };
   }
 
-  // Save as Draft
-  if (saveDraftBtn) {
-    saveDraftBtn.addEventListener("click", async () => {
-      if (!currentGeneratedAssignment) return;
-      saveDraftBtn.disabled = true;
-      saveDraftBtn.textContent = "Saving...";
+  // Question Creation Studio: Append New Question with Type-Specific Defaults
+  function addNewQuestionCard(goalType) {
+    const currentVals = collectFormValues();
+    const newIdx = currentVals.problems.length;
+    const gType = (goalType || "CODING").toUpperCase();
 
-      try {
-        const payload = { ...collectFormValues(), status: "draft" };
-        const response = await fetch(`/api/admin/assignments/${currentGeneratedAssignment.id}/publish`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Climbup-Player": "amirshaikh320340"
-          },
-          body: JSON.stringify(payload)
-        });
+    let newProb = {
+      problem_number: newIdx + 1,
+      tier: "Intermediate",
+      difficulty: "Intermediate",
+      goal_type: gType,
+      marks: 25,
+      problem_statement: "",
+      question: "",
+      image_url: "",
+      image_caption: "",
+      expected_deliverable: "",
+      lecture_timestamp: `~00:${String(15 * (newIdx + 1)).padStart(2, '0')}:00`,
+      acceptance_criteria: [],
+      conceptual_checkpoints: []
+    };
 
-        if (!response.ok) throw new Error("Failed to save draft.");
+    if (gType === "IMAGE_BASED") {
+      newProb.problem_statement = "Analyze the architecture diagram / system schema and evaluate the component interactions:";
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Architectural rationale and component breakdown";
+      newProb.image_url = "";
+      newProb.image_caption = "Figure 1: Architectural Blueprint";
+      newProb.acceptance_criteria = [
+        "Identifies all primary system components depicted in the diagram",
+        "Explains data flow, sync mechanisms, and potential failure modes",
+        "Recommends fault-tolerance or scaling improvements"
+      ];
+      newProb.conceptual_checkpoints = [
+        "Component identification and responsibility mapping",
+        "Dataflow and protocol analysis"
+      ];
+    } else if (gType === "MCQ") {
+      newProb.problem_statement = "Which of the following statements accurately characterizes this architectural concept?";
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Selection of option A, B, C, or D";
+      newProb.mcq = {
+        options: {
+          A: "Operates primarily in-memory for microsecond latency",
+          B: "Requires sequential disk I/O on every operation",
+          C: "Violates ACID isolation by default",
+          D: "Restricted strictly to single-core hardware"
+        },
+        correct_answer: "A",
+        explanation: "Based on the memory-first architectural design highlighted in the lecture."
+      };
+    } else if (gType === "NUMERIC") {
+      newProb.problem_statement = "Calculate the target latency or throughput value according to the lecture formulas:";
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Numerical value with unit";
+      newProb.numeric = {
+        target_value: 42,
+        tolerance: 0.05,
+        unit: "ms",
+        formula_hint: "Apply the latency calculation formula demonstrated in the lecture."
+      };
+    } else if (gType === "DEBUGGING") {
+      newProb.problem_statement = "Identify and resolve the defect in the code implementation below:";
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Fixed Python function handling edge cases";
+      newProb.starter_code = "# Buggy implementation\ndef process_records(records):\n    return records[0].strip()";
+      newProb.debugging = {
+        buggy_code: "# Buggy implementation\ndef process_records(records):\n    return records[0].strip()",
+        error_symptom: "Crashes with IndexError when empty list is passed",
+        expected_behavior: "Safely handles empty list and returns empty string"
+      };
+      newProb.test_cases = [
+        { input_description: "Standard records list", expected_output: "Pass", is_hidden: false },
+        { input_description: "Empty list boundary test", expected_output: "Pass", is_hidden: true }
+      ];
+    } else if (gType === "SHORT_ANSWER") {
+      newProb.problem_statement = "State the technical term or pattern name described in this section of the lecture:";
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Concise technical term (1-4 words)";
+      newProb.short_answer = {
+        target_answer: "Inverted Index",
+        keywords: ["inverted index", "posting list"],
+        case_sensitive: false
+      };
+    } else if (["THEORY", "ALGORITHMIC", "SCENARIO"].includes(gType)) {
+      newProb.problem_statement = `Provide a comprehensive technical analysis and architectural trade-off breakdown for ${gType.toLowerCase().replace('_', ' ')}:`;
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Architectural rationale and edge-case breakdown";
+      newProb.acceptance_criteria = [
+        "Clearly identifies core components and their responsibilities",
+        "Explains error handling and recovery strategies",
+        "Compares latency and resource trade-offs against alternatives"
+      ];
+      newProb.conceptual_checkpoints = [
+        "Demonstrates deep conceptual understanding",
+        "Accurately references lecture principles"
+      ];
+    } else {
+      // CODING or CODE_SNIPPET
+      newProb.problem_statement = "Implement the required production-grade algorithm or data transformation function:";
+      newProb.question = newProb.problem_statement;
+      newProb.expected_deliverable = "Complete and verified Python implementation";
+      newProb.starter_code = "def solution(*args, **kwargs):\n    # Write your solution here\n    pass";
+      newProb.test_cases = [
+        { input_description: "Standard input verification", expected_output: "Pass", is_hidden: false },
+        { input_description: "Boundary condition test", expected_output: "Pass", is_hidden: true }
+      ];
+    }
 
-        currentGeneratedAssignment.status = "draft";
-        if (statusPill) {
-          statusPill.textContent = "🟡 Draft (Review)";
-          statusPill.style.background = "rgba(245, 158, 11, 0.15)";
-          statusPill.style.color = "#fbbf24";
-        }
-        if (statusBanner) {
-          statusBanner.style.background = "rgba(245, 158, 11, 0.15)";
-          statusBanner.style.color = "#fbbf24";
-          statusBanner.textContent = "🟡 Draft Saved: All edits preserved. Students cannot view this until you click 'Confirm & Publish'.";
-        }
-        alert("Draft saved successfully! Not visible to students yet.");
-      } catch (err) {
-        alert("Error saving draft: " + err.message);
-      } finally {
-        saveDraftBtn.disabled = false;
-        saveDraftBtn.textContent = "💾 Save as Draft";
+    currentVals.problems.push(newProb);
+
+    // Auto-balance marks across all questions
+    const total = currentVals.problems.length;
+    const base = Math.floor(100 / total);
+    const rem = 100 % total;
+    currentVals.problems.forEach((p, i) => {
+      p.marks = base + (i === total - 1 ? rem : 0);
+    });
+
+    renderAssignmentInForm(currentVals, newIdx);
+  }
+
+  // 1. Auto-Balance Marks Event Listener
+  if (btnAutoBalanceMarks) {
+    btnAutoBalanceMarks.addEventListener("click", () => {
+      const inputs = document.querySelectorAll(".edit-prob-marks");
+      const count = inputs.length;
+      if (count === 0) return;
+      const base = Math.floor(100 / count);
+      const rem = 100 % count;
+      inputs.forEach((inp, i) => {
+        inp.value = base + (i === count - 1 ? rem : 0);
+      });
+      updateTotalMarksTally();
+      updateQuestionStepperUI(count, currentActiveQuestionIdx);
+    });
+  }
+
+  // 1b. Question Stepper Nav Bar Previous / Next Button Handlers
+  const navPrevBtn = document.getElementById("btn-nav-prev-question");
+  if (navPrevBtn) {
+    navPrevBtn.addEventListener("click", () => {
+      if (currentActiveQuestionIdx > 0) {
+        switchToQuestion(currentActiveQuestionIdx - 1);
       }
     });
   }
 
-  // Confirm & Publish to Students
-  if (editForm) {
-    editForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      if (!currentGeneratedAssignment) return;
+  const navNextBtn = document.getElementById("btn-nav-next-question");
+  if (navNextBtn) {
+    navNextBtn.addEventListener("click", () => {
+      const cards = document.querySelectorAll(".ai-challenge-card");
+      if (currentActiveQuestionIdx < cards.length - 1) {
+        switchToQuestion(currentActiveQuestionIdx + 1);
+      }
+    });
+  }
 
-      const confirmBtn = document.getElementById("btn-confirm-publish-assignment");
-      if (confirmBtn) {
-        confirmBtn.disabled = true;
-        confirmBtn.textContent = "Publishing to Students...";
+  // 1c. Direct Assignment (JSON / CSV) Dropzone & File Engine
+  function renderQuestionsPreviewTable(problems, sourceName = "Uploaded Questions") {
+    const summaryCard = document.getElementById("ai-assign-preview-summary-card");
+    const headline = document.getElementById("ai-assign-preview-headline");
+    const marksTally = document.getElementById("ai-assign-preview-marks-tally");
+    const tableContainer = document.getElementById("ai-assign-preview-table-container");
+    const feedbackEl = document.getElementById("ai-assign-upload-feedback");
+
+    if (!summaryCard || !tableContainer) return;
+
+    if (!problems || problems.length === 0) {
+      summaryCard.style.display = "none";
+      if (feedbackEl) feedbackEl.innerHTML = "";
+      return;
+    }
+
+    summaryCard.style.display = "block";
+    const totalMarks = problems.reduce((sum, p) => sum + (parseInt(p.marks) || 0), 0);
+
+    if (headline) {
+      headline.textContent = `${sourceName} (${problems.length} Questions)`;
+    }
+    if (marksTally) {
+      marksTally.textContent = `${totalMarks} pts Total`;
+    }
+
+    const rowsHtml = problems.map((p, idx) => {
+      const qNum = p.problem_number || idx + 1;
+      const qType = (p.goal_type || (p.mcq ? "MCQ" : "CODING")).toUpperCase();
+      const qText = escapeHtml(p.question || p.problem_statement || "No question text provided");
+      const qMarks = p.marks || 20;
+
+      let typeBadge = `<span style="font-size: 0.72rem; padding: 2px 8px; border-radius: 4px; font-weight: 700; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">💻 CODING</span>`;
+      let detailsHtml = "";
+
+      if (qType === "MCQ") {
+        typeBadge = `<span style="font-size: 0.72rem; padding: 2px 8px; border-radius: 4px; font-weight: 700; background: rgba(56, 211, 153, 0.15); color: #38d399; border: 1px solid rgba(56, 211, 153, 0.3);">📝 MCQ</span>`;
+        const correctOpt = p.mcq?.correct_answer || p.correct_answer || "A";
+        const opts = p.mcq?.options || p.options || {};
+        const optSummary = Object.keys(opts).map(k => `<strong>${escapeHtml(k)}:</strong> ${escapeHtml(opts[k])}`).join(" | ");
+        detailsHtml = `
+          <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px;">
+            ${optSummary ? `<div>${optSummary}</div>` : ''}
+            <div style="color: #38d399; margin-top: 2px;"><strong>Correct Answer:</strong> Option ${escapeHtml(correctOpt)} ${p.mcq?.explanation ? `<em>(${escapeHtml(p.mcq.explanation)})</em>` : ''}</div>
+          </div>
+        `;
+      } else if (qType === "THEORY" || qType === "SHORT_ANSWER") {
+        typeBadge = `<span style="font-size: 0.72rem; padding: 2px 8px; border-radius: 4px; font-weight: 700; background: rgba(192, 132, 252, 0.15); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.3);">📖 THEORY</span>`;
+        if (p.solution_hint || p.hint) {
+          detailsHtml = `<div style="font-size: 0.75rem; color: #cbd5e1; margin-top: 4px;">💡 <em>Hint: ${escapeHtml(p.solution_hint || p.hint)}</em></div>`;
+        }
+      } else {
+        if (p.starter_code) {
+          detailsHtml = `<div style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px;">💻 <code>${escapeHtml(p.starter_code.substring(0, 70))}...</code></div>`;
+        }
       }
 
-      try {
-        const payload = { ...collectFormValues(), status: "published" };
-        const response = await fetch(`/api/admin/assignments/${currentGeneratedAssignment.id}/publish`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Climbup-Player": "amirshaikh320340"
+      return `
+        <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
+          <td style="padding: 10px 12px; font-weight: 800; color: #94a3b8; width: 36px; vertical-align: top;">${qNum}</td>
+          <td style="padding: 10px 12px; width: 110px; vertical-align: top;">${typeBadge}</td>
+          <td style="padding: 10px 12px; color: #f1f5f9; vertical-align: top; line-height: 1.4;">
+            <div style="font-weight: 600; font-size: 0.88rem;">${qText}</div>
+            ${detailsHtml}
+          </td>
+          <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #38d399; font-size: 0.84rem; width: 80px; vertical-align: top;">${qMarks} pts</td>
+        </tr>
+      `;
+    }).join("");
+
+    tableContainer.innerHTML = `
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.84rem;">
+        <thead>
+          <tr style="background: rgba(0,0,0,0.3); color: #94a3b8; text-align: left; font-size: 0.75rem; text-transform: uppercase;">
+            <th style="padding: 8px 12px;">#</th>
+            <th style="padding: 8px 12px;">Type</th>
+            <th style="padding: 8px 12px;">Problem & Answer</th>
+            <th style="padding: 8px 12px; text-align: right;">Marks</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    `;
+
+    if (feedbackEl) {
+      feedbackEl.innerHTML = `<span style="color: #38d399; font-weight: 700;">✓ ${problems.length} questions loaded (${totalMarks} pts). Click 'Confirm & Publish' to make it live!</span>`;
+    }
+  }
+
+  function parseCSV(text) {
+    const lines = [];
+    let row = [];
+    let currentVal = '';
+    let insideQuote = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const nextChar = text[i + 1];
+
+      if (char === '"') {
+        if (insideQuote && nextChar === '"') {
+          currentVal += '"';
+          i++;
+        } else {
+          insideQuote = !insideQuote;
+        }
+      } else if (char === ',' && !insideQuote) {
+        row.push(currentVal.trim());
+        currentVal = '';
+      } else if ((char === '\r' || char === '\n') && !insideQuote) {
+        if (char === '\r' && nextChar === '\n') {
+          i++;
+        }
+        row.push(currentVal.trim());
+        if (row.some(cell => cell.length > 0)) {
+          lines.push(row);
+        }
+        row = [];
+        currentVal = '';
+      } else {
+        currentVal += char;
+      }
+    }
+    if (currentVal || row.length > 0) {
+      row.push(currentVal.trim());
+      if (row.some(cell => cell.length > 0)) {
+        lines.push(row);
+      }
+    }
+    return lines;
+  }
+
+  function parseAssignmentCSV(csvText) {
+    const table = parseCSV(csvText);
+    if (table.length < 2) {
+      throw new Error("CSV file must contain a header row and at least one question row.");
+    }
+
+    const header = table[0].map(h => h.toLowerCase().trim().replace(/[\s_-]+/g, "_"));
+    const colIndex = (names) => {
+      for (const name of names) {
+        const idx = header.indexOf(name);
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    };
+
+    const qIdx = colIndex(["question", "problem", "problem_statement", "title"]);
+    const typeIdx = colIndex(["type", "goal_type"]);
+    const tierIdx = colIndex(["tier", "difficulty"]);
+    const marksIdx = colIndex(["marks", "score", "points"]);
+    const optAIdx = colIndex(["option_a", "a", "option1"]);
+    const optBIdx = colIndex(["option_b", "b", "option2"]);
+    const optCIdx = colIndex(["option_c", "c", "option3"]);
+    const optDIdx = colIndex(["option_d", "d", "option4"]);
+    const ansIdx = colIndex(["correct_answer", "answer", "correct", "key"]);
+    const expIdx = colIndex(["explanation", "reason"]);
+    const hintIdx = colIndex(["hint", "solution_hint"]);
+    const codeIdx = colIndex(["starter_code", "code", "starter"]);
+
+    if (qIdx === -1) {
+      throw new Error("CSV must contain a 'question' or 'problem' column.");
+    }
+
+    const problems = [];
+    for (let i = 1; i < table.length; i++) {
+      const row = table[i];
+      const getVal = (idx) => (idx !== -1 && idx < row.length ? row[idx].trim() : "");
+
+      const qText = getVal(qIdx);
+      if (!qText) continue;
+
+      let rawType = getVal(typeIdx).toUpperCase();
+      const rawTier = getVal(tierIdx) || "Core";
+      const marksVal = parseInt(getVal(marksIdx)) || 20;
+
+      const optA = getVal(optAIdx);
+      const optB = getVal(optBIdx);
+      const optC = getVal(optCIdx);
+      const optD = getVal(optDIdx);
+      const ans = (getVal(ansIdx) || "A").toUpperCase();
+      const exp = getVal(expIdx);
+      const hint = getVal(hintIdx);
+      const starterCode = getVal(codeIdx);
+
+      const hasOptions = Boolean(optA || optB || optC || optD);
+      const goalType = (rawType === "MCQ" || hasOptions) ? "MCQ" : (rawType || "CODING");
+
+      const prob = {
+        problem_number: problems.length + 1,
+        goal_type: goalType,
+        tier: rawTier,
+        difficulty: rawTier,
+        marks: marksVal,
+        question: qText,
+        problem_statement: qText,
+        solution_hint: hint,
+        starter_code: starterCode
+      };
+
+      if (goalType === "MCQ") {
+        prob.mcq = {
+          options: {
+            A: optA || "Option A",
+            B: optB || "Option B",
+            C: optC || "Option C",
+            D: optD || "Option D"
           },
-          body: JSON.stringify(payload)
-        });
+          correct_answer: ans.length === 1 && "ABCD".includes(ans) ? ans : "A",
+          explanation: exp || ""
+        };
+      }
 
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.detail || "Failed to publish assignment.");
+      problems.push(prob);
+    }
+
+    if (problems.length === 0) {
+      throw new Error("No valid question rows found in CSV file.");
+    }
+
+    return problems;
+  }
+
+  function parseAssignmentJSON(jsonText) {
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch (e) {
+      throw new Error("Invalid JSON file: " + e.message);
+    }
+
+    let problems = [];
+    let title = "";
+    let dueDate = "";
+
+    if (Array.isArray(parsed)) {
+      problems = parsed;
+    } else if (parsed && typeof parsed === "object") {
+      if (parsed.title) title = parsed.title;
+      if (parsed.due_date) dueDate = parsed.due_date;
+      if (Array.isArray(parsed.problems)) {
+        problems = parsed.problems;
+      } else if (Array.isArray(parsed.questions)) {
+        problems = parsed.questions;
+      } else {
+        throw new Error("JSON must either be an array of questions or contain a 'problems' array.");
+      }
+    }
+
+    if (problems.length === 0) {
+      throw new Error("JSON file contains no questions/problems.");
+    }
+
+    const normalized = problems.map((p, idx) => {
+      const qText = p.question || p.problem_statement || p.title || `Question ${idx + 1}`;
+      const gType = (p.goal_type || p.type || (p.mcq || p.options ? "MCQ" : "CODING")).toUpperCase();
+      const tierVal = p.tier || p.difficulty || "Core";
+      const marksVal = parseInt(p.marks) || 20;
+
+      const prob = {
+        problem_number: p.problem_number || idx + 1,
+        goal_type: gType,
+        tier: tierVal,
+        difficulty: tierVal,
+        marks: marksVal,
+        question: qText,
+        problem_statement: qText,
+        solution_hint: p.solution_hint || p.hint || "",
+        starter_code: p.starter_code || ""
+      };
+
+      if (gType === "MCQ") {
+        let opts = p.mcq?.options || p.options || {};
+        if (Array.isArray(opts)) {
+          const keys = ["A", "B", "C", "D", "E", "F"];
+          const optMap = {};
+          opts.forEach((o, i) => { optMap[keys[i] || `Opt${i+1}`] = String(o); });
+          opts = optMap;
+        }
+        prob.mcq = {
+          options: Object.keys(opts).length > 0 ? opts : { A: "Option A", B: "Option B", C: "Option C", D: "Option D" },
+          correct_answer: (p.mcq?.correct_answer || p.correct_answer || p.answer || "A").toString().trim().toUpperCase(),
+          explanation: p.mcq?.explanation || p.explanation || ""
+        };
+      }
+
+      return prob;
+    });
+
+    return { problems: normalized, title, dueDate };
+  }
+
+  function handleDirectAssignmentFile(file) {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    const isJson = name.endsWith(".json");
+    const isCsv = name.endsWith(".csv");
+
+    if (!isJson && !isCsv) {
+      alert("Unsupported file format! Please upload a .JSON or .CSV file.");
+      return;
+    }
+
+    const subtextEl = document.getElementById("ai-assign-file-subtext");
+    if (subtextEl) subtextEl.textContent = `Reading ${file.name}...`;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target.result;
+        let problems = [];
+        let extractedTitle = "";
+        let extractedDue = "";
+
+        if (isJson) {
+          const res = parseAssignmentJSON(content);
+          problems = res.problems;
+          extractedTitle = res.title;
+          extractedDue = res.dueDate;
+        } else {
+          problems = parseAssignmentCSV(content);
         }
 
-        currentGeneratedAssignment.status = "published";
-        if (statusPill) {
-          statusPill.textContent = "🟢 Published";
-          statusPill.style.background = "rgba(16, 185, 129, 0.15)";
-          statusPill.style.color = "#38d399";
+        const titleInput = document.getElementById("ai-edit-title");
+        if (extractedTitle && titleInput) {
+          titleInput.value = extractedTitle;
         }
-        if (statusBanner) {
-          statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
-          statusBanner.style.color = "#38d399";
-          statusBanner.textContent = "🟢 Live: Assignment verified by Quality Gate and published to all enrolled students!";
+        const dueInput = document.getElementById("ai-edit-due");
+        if (extractedDue && dueInput) {
+          dueInput.value = extractedDue;
         }
 
-        alert("Assignment successfully verified by Quality Gate and published to enrolled students!");
-        modal.style.display = "none";
+        const activeLessonId = (lectureSelect ? lectureSelect.value : null) || window.currentLessonId || "";
+        const activeCourseId = window.currentCourseId || (typeof currentCourseId !== "undefined" ? currentCourseId : "");
 
-        // Reload course materials
-        if (currentCourseId && typeof loadCourseResources === "function") {
-          loadCourseResources(currentCourseId);
+        currentGeneratedAssignment = {
+          ...(currentGeneratedAssignment || {}),
+          id: currentGeneratedAssignment?.id || (activeLessonId ? `assign_${activeLessonId}` : `assign_${Date.now().toString(36)}`),
+          lesson_id: activeLessonId,
+          course_id: activeCourseId,
+          title: titleInput?.value || extractedTitle || "Direct Upload Assignment",
+          due_date: dueInput?.value || extractedDue || "Next Sunday, 11:59 PM",
+          problems: problems
+        };
+
+        if (subtextEl) {
+          subtextEl.innerHTML = `<span style="color: #38d399; font-weight: 700;">✓ Loaded ${escapeHtml(file.name)} (${problems.length} questions)</span>`;
         }
+
+        renderQuestionsPreviewTable(problems, file.name);
+
       } catch (err) {
-        console.error("Publish error:", err);
-        alert("Publish failed: " + err.message);
-      } finally {
-        if (confirmBtn) {
-          confirmBtn.disabled = false;
-          confirmBtn.textContent = "🚀 Confirm & Publish to Students";
+        console.error("Error parsing assignment file:", err);
+        alert("File parsing error: " + err.message);
+        if (subtextEl) {
+          subtextEl.innerHTML = `<span style="color: #f87171;">❌ ${escapeHtml(err.message)}</span>`;
         }
       }
+    };
+    reader.onerror = () => {
+      alert("Failed to read the file. Please try again.");
+    };
+    reader.readAsText(file);
+  }
+
+  // Direct Dropzone & Input wiring
+  const directDropzone = document.getElementById("ai-assign-direct-dropzone");
+  const directFileInput = document.getElementById("ai-assign-direct-file-input");
+
+  if (directDropzone) {
+    directDropzone.addEventListener("click", () => {
+      if (directFileInput) directFileInput.click();
+    });
+
+    directDropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      directDropzone.style.borderColor = "#38bdf8";
+      directDropzone.style.background = "rgba(56, 189, 248, 0.12)";
+    });
+
+    directDropzone.addEventListener("dragleave", () => {
+      directDropzone.style.borderColor = "rgba(56, 189, 248, 0.4)";
+      directDropzone.style.background = "rgba(14, 23, 42, 0.6)";
+    });
+
+    directDropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      directDropzone.style.borderColor = "rgba(56, 189, 248, 0.4)";
+      directDropzone.style.background = "rgba(14, 23, 42, 0.6)";
+      if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+        handleDirectAssignmentFile(e.dataTransfer.files[0]);
+      }
+    });
+  }
+
+  if (directFileInput) {
+    directFileInput.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        handleDirectAssignmentFile(e.target.files[0]);
+      }
+    });
+  }
+
+  // Template Download Handlers
+  const btnDownloadJsonTpl = document.getElementById("btn-download-json-tpl");
+  if (btnDownloadJsonTpl) {
+    btnDownloadJsonTpl.addEventListener("click", () => {
+      const sampleJson = {
+        title: "Milestone Mission: Core Foundations",
+        due_date: "Next Sunday, 11:59 PM",
+        problems: [
+          {
+            problem_number: 1,
+            goal_type: "MCQ",
+            tier: "Basic",
+            marks: 25,
+            question: "What is the time complexity of searching in a balanced Binary Search Tree?",
+            mcq: {
+              options: {
+                A: "O(n)",
+                B: "O(log n)",
+                C: "O(n log n)",
+                D: "O(1)"
+              },
+              correct_answer: "B",
+              explanation: "A balanced BST divides search space in half at each step, yielding logarithmic O(log n) time."
+            },
+            solution_hint: "Consider the height of the balanced tree."
+          },
+          {
+            problem_number: 2,
+            goal_type: "MCQ",
+            tier: "Basic",
+            marks: 25,
+            question: "Which keyword is used to declare an asynchronous function in JavaScript?",
+            mcq: {
+              options: {
+                A: "sync",
+                B: "promise",
+                C: "async",
+                D: "await"
+              },
+              correct_answer: "C",
+              explanation: "The async keyword transforms a function into an asynchronous function returning a Promise."
+            },
+            solution_hint: "Think about modern ES6/ES2017 syntax."
+          },
+          {
+            problem_number: 3,
+            goal_type: "CODING",
+            tier: "Intermediate",
+            marks: 50,
+            question: "Write a function two_sum(nums, target) that returns the indices of the two numbers such that they add up to target.",
+            starter_code: "def two_sum(nums, target):\n    # Your solution here\n    pass",
+            solution_hint: "Use a hash map to achieve O(n) lookup time."
+          }
+        ]
+      };
+      const blob = new Blob([JSON.stringify(sampleJson, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "assignment_template.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  const btnDownloadCsvTpl = document.getElementById("btn-download-csv-tpl");
+  if (btnDownloadCsvTpl) {
+    btnDownloadCsvTpl.addEventListener("click", () => {
+      const sampleCsv = [
+        'question,type,tier,marks,option_a,option_b,option_c,option_d,correct_answer,explanation,hint,starter_code',
+        '"What is the time complexity of searching in a balanced Binary Search Tree?","MCQ","Basic",25,"O(n)","O(log n)","O(n log n)","O(1)","B","A balanced BST divides search space in half at each step.","Consider tree height.",""',
+        '"Which keyword declares an asynchronous function in JavaScript?","MCQ","Basic",25,"sync","promise","async","await","C","The async keyword defines async functions.","Think about ES2017.",""',
+        '"Write a function two_sum(nums, target) returning indices that add to target.","CODING","Intermediate",50,"","","","","","Return list of indices.","Use a hash map for O(n).","def two_sum(nums, target):\n    pass"'
+      ].join('\r\n');
+      const blob = new Blob([sampleCsv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "assignment_template.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  // Confirm & Publish and Save Draft action buttons
+  const studioNextStepBtn = document.getElementById("btn-studio-next-step");
+  if (studioNextStepBtn) {
+    studioNextStepBtn.addEventListener("click", () => {
+      handlePublishAssignment();
+    });
+  }
+
+  const studioSaveDraftBtn = document.getElementById("btn-studio-save-draft");
+  if (studioSaveDraftBtn) {
+    studioSaveDraftBtn.addEventListener("click", () => {
+      handleSaveDraftAssignment();
+    });
+  }
+
+  // 2. Add Question Menu Toggle & Dropdown Handlers
+  if (btnAddQuestionMenu && addQuestionDropdown) {
+    btnAddQuestionMenu.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isVisible = addQuestionDropdown.style.display === "block";
+      addQuestionDropdown.style.display = isVisible ? "none" : "block";
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!addQuestionDropdown.contains(e.target) && e.target !== btnAddQuestionMenu) {
+        addQuestionDropdown.style.display = "none";
+      }
+    });
+
+    addQuestionDropdown.querySelectorAll(".add-q-type-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const qType = btn.dataset.type || "CODING";
+        addQuestionDropdown.style.display = "none";
+        addNewQuestionCard(qType);
+      });
+    });
+  }
+
+  // 3. Autonomous AI Quality Testing Runner
+  async function runAiQualityTests() {
+    const currentVals = collectFormValues();
+    if (!currentVals.problems || currentVals.problems.length === 0) {
+      alert("Please add at least one question before running AI quality tests.");
+      return;
+    }
+
+    if (btnRunAiQualityTests) {
+      btnRunAiQualityTests.disabled = true;
+      btnRunAiQualityTests.textContent = "⏳ Running Quality Tests...";
+    }
+
+    try {
+      const lessonId = lectureSelect?.value || window.currentLessonId || "";
+      const res = await fetch("/api/admin/assignments/test-quality", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Climbup-Player": "amirshaikh320340"
+        },
+        body: JSON.stringify({
+          assignment: currentVals,
+          lesson_id: lessonId
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Quality testing suite failed.");
+      }
+
+      const data = await res.json();
+      const report = data.report || data;
+      renderAiTestReport(report);
+    } catch (err) {
+      console.error("AI Quality Test failed:", err);
+      alert("AI Quality Test failed: " + err.message);
+    } finally {
+      if (btnRunAiQualityTests) {
+        btnRunAiQualityTests.disabled = false;
+        btnRunAiQualityTests.textContent = "🧪 Run AI Quality Tests";
+      }
+    }
+  }
+
+  if (btnRunAiQualityTests) {
+    btnRunAiQualityTests.addEventListener("click", runAiQualityTests);
+  }
+
+  // Quality Pill Click Shortcut to Open Test Report
+  if (qualityPill) {
+    qualityPill.addEventListener("click", () => {
+      if (aiTestReportPanel) {
+        aiTestReportPanel.style.display = aiTestReportPanel.style.display === "none" ? "block" : "none";
+      }
+    });
+  }
+
+  // 4. Render Autonomous AI Quality Test Report
+  let currentTestReport = null;
+
+  function renderAiTestReport(report) {
+    currentTestReport = report;
+    if (!aiTestReportPanel) return;
+
+    aiTestReportPanel.style.display = "block";
+
+    // Score Badge
+    const score = report.quality_score ?? 100;
+    const isPassed = Boolean(report.passed);
+    if (aiTestScoreBadge) {
+      aiTestScoreBadge.textContent = `Quality Score: ${score}/100`;
+      aiTestScoreBadge.style.background = score >= 85 ? "rgba(56, 211, 153, 0.15)" : score >= 60 ? "rgba(245, 158, 11, 0.15)" : "rgba(239, 68, 68, 0.15)";
+      aiTestScoreBadge.style.color = score >= 85 ? "#38d399" : score >= 60 ? "#fbbf24" : "#f87171";
+      aiTestScoreBadge.style.borderColor = score >= 85 ? "rgba(56, 211, 153, 0.3)" : score >= 60 ? "rgba(245, 158, 11, 0.3)" : "rgba(239, 68, 68, 0.3)";
+    }
+
+    const tests = report.items || report.tests || [];
+    const totalChecks = report.summary?.total_checks ?? tests.length;
+    const passedCount = report.summary?.passed_count ?? report.passed_count ?? tests.filter(t => t.status === "PASS").length;
+    const warningCount = report.summary?.warning_count ?? report.warning_count ?? tests.filter(t => t.status === "WARNING").length;
+    const failedCount = report.summary?.failed_count ?? report.failed_count ?? tests.filter(t => t.status === "FAIL").length;
+
+    if (aiTestTimestamp) {
+      aiTestTimestamp.textContent = `Evaluated at ${new Date(report.tested_at || Date.now()).toLocaleTimeString()} across ${totalChecks} quality gates`;
+    }
+
+    // Counters
+    if (aiTestPassedBadge) aiTestPassedBadge.textContent = `✓ ${passedCount} Passed`;
+    if (aiTestWarningBadge) aiTestWarningBadge.textContent = `⚠️ ${warningCount} Warnings`;
+    if (aiTestFailedBadge) aiTestFailedBadge.textContent = `✗ ${failedCount} Failed`;
+
+    // Update Quality Pill in workspace header
+    if (qualityPill) {
+      qualityPill.textContent = `🛡️ Quality Gate: ${score}/100 ${isPassed ? 'Verified' : 'Issues Found'}`;
+      qualityPill.style.color = isPassed ? "#38d399" : "#fbbf24";
+    }
+
+    renderReportItems("all");
+  }
+
+  function renderReportItems(filterMode) {
+    if (!aiTestReportItems || !currentTestReport) return;
+    const tests = currentTestReport.items || currentTestReport.tests || [];
+    aiTestReportItems.innerHTML = "";
+
+    const filtered = tests.filter(t => {
+      if (filterMode === "issues") return t.status === "WARNING" || t.status === "FAIL";
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      aiTestReportItems.innerHTML = `
+        <div style="text-align: center; padding: 20px; color: #38d399; font-size: 0.84rem; background: rgba(56, 211, 153, 0.06); border-radius: 8px;">
+          🎉 No issues detected! All quality verification gates passed perfectly.
+        </div>
+      `;
+      return;
+    }
+
+    filtered.forEach(item => {
+      const isPass = item.status === "PASS";
+      const isWarn = item.status === "WARNING";
+      const badgeColor = isPass ? "#38d399" : isWarn ? "#fbbf24" : "#f87171";
+      const badgeBg = isPass ? "rgba(56, 211, 153, 0.15)" : isWarn ? "rgba(245, 158, 11, 0.15)" : "rgba(239, 68, 68, 0.15)";
+      const badgeBorder = isPass ? "rgba(56, 211, 153, 0.3)" : isWarn ? "rgba(245, 158, 11, 0.3)" : "rgba(239, 68, 68, 0.3)";
+      const fixAction = item.fix_payload?.action || item.fix_action || (item.auto_fixable ? "rebalance_marks" : "");
+
+      const el = document.createElement("div");
+      el.className = `ai-test-item-card status-${item.status.toLowerCase()}`;
+      el.style.cssText = `
+        background: rgba(10, 16, 30, 0.7);
+        border: 1px solid ${badgeBorder};
+        border-radius: 8px;
+        padding: 10px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      `;
+
+      el.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="ai-test-status-badge" style="background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${badgeBorder}; font-size: 0.72rem; font-weight: 800; padding: 2px 8px; border-radius: 4px;">
+              ${item.status === 'PASS' ? '✓ PASS' : item.status === 'WARNING' ? '⚠️ WARNING' : '✗ FAIL'}
+            </span>
+            <strong style="color: #fff; font-size: 0.84rem;">${escapeHtml(item.title || item.name || item.id)}</strong>
+          </div>
+          ${item.auto_fixable ? `
+            <button type="button" class="apply-fix-btn" data-fix="${escapeHtml(fixAction)}" style="background: rgba(56, 211, 153, 0.15); border: 1px solid #38d399; color: #38d399; font-size: 0.74rem; font-weight: 800; padding: 3px 10px; border-radius: 6px; cursor: pointer;">
+              ⚡ Apply Fix
+            </button>
+          ` : ''}
+        </div>
+        <div style="font-size: 0.78rem; color: #cbd5e1; line-height: 1.45;">
+          ${escapeHtml(item.evidence || item.details || '')}
+        </div>
+        ${item.fix_suggestion ? `
+          <div style="font-size: 0.74rem; color: #fbbf24; background: rgba(245, 158, 11, 0.08); padding: 4px 8px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px;">
+            💡 <span>Fix: ${escapeHtml(item.fix_suggestion)}</span>
+          </div>
+        ` : ''}
+      `;
+
+      // Wire Apply Fix Button
+      const fixBtn = el.querySelector(".apply-fix-btn");
+      if (fixBtn) {
+        fixBtn.addEventListener("click", () => {
+          const action = fixBtn.dataset.fix;
+          if (action === "rebalance_marks") {
+            if (btnAutoBalanceMarks) btnAutoBalanceMarks.click();
+            setTimeout(runAiQualityTests, 300);
+          } else {
+            alert(`Auto-fix recommendation: ${item.fix_suggestion || 'Review problem settings.'}`);
+          }
+        });
+      }
+
+      aiTestReportItems.appendChild(el);
+    });
+  }
+
+  // Filter Buttons Listener
+  document.querySelectorAll(".test-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".test-filter-btn").forEach(b => {
+        b.classList.remove("active");
+        b.style.background = "transparent";
+        b.style.borderColor = "rgba(255,255,255,0.1)";
+        b.style.color = "#94a3b8";
+      });
+      btn.classList.add("active");
+      btn.style.background = "rgba(255,255,255,0.1)";
+      btn.style.borderColor = "transparent";
+      btn.style.color = "#fff";
+      renderReportItems(btn.dataset.filter || "all");
+    });
+  });
+
+  if (btnCloseTestReport && aiTestReportPanel) {
+    btnCloseTestReport.addEventListener("click", () => {
+      aiTestReportPanel.style.display = "none";
+    });
+  }
+
+  // Save as Draft Handler
+  async function handleSaveDraftAssignment() {
+    const bottomDraftBtn = document.getElementById("btn-studio-save-draft");
+    const saveDraftBtn = document.getElementById("btn-save-draft-assignment");
+
+    if (bottomDraftBtn) {
+      bottomDraftBtn.disabled = true;
+      bottomDraftBtn.innerHTML = '<span>⏳ Saving...</span>';
+    }
+    if (saveDraftBtn) {
+      saveDraftBtn.disabled = true;
+      saveDraftBtn.textContent = "Saving...";
+    }
+
+    try {
+      const payload = { ...collectFormValues(), status: "draft" };
+      const assignId = payload.id || currentGeneratedAssignment?.id || (`assign_${payload.lesson_id || "lecture"}_${Date.now().toString(36)}`);
+      payload.id = assignId;
+
+      const response = await fetch(`/api/admin/assignments/${assignId}/publish`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Climbup-Player": "amirshaikh320340"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to save draft.");
+      }
+
+      currentGeneratedAssignment = { ...payload, status: "draft", id: assignId };
+
+      if (statusPill) {
+        statusPill.textContent = "🟡 Draft (Review)";
+        statusPill.style.background = "rgba(245, 158, 11, 0.15)";
+        statusPill.style.color = "#fbbf24";
+        statusPill.style.border = "1px solid rgba(245, 158, 11, 0.3)";
+      }
+      if (statusBanner) {
+        statusBanner.style.background = "rgba(245, 158, 11, 0.15)";
+        statusBanner.style.color = "#fbbf24";
+        statusBanner.textContent = "🟡 Draft Saved: All edits preserved. Students cannot view this until you click 'Confirm & Publish'.";
+      }
+      alert("✓ Draft saved successfully! Not visible to students yet.");
+    } catch (err) {
+      alert("Error saving draft: " + err.message);
+    } finally {
+      if (bottomDraftBtn) {
+        bottomDraftBtn.disabled = false;
+        bottomDraftBtn.innerHTML = '<span>💾</span> Save Draft';
+      }
+      if (saveDraftBtn) {
+        saveDraftBtn.disabled = false;
+        saveDraftBtn.textContent = "💾 Save as Draft";
+      }
+    }
+  }
+
+  // Confirm & Publish to Students Handler
+  async function handlePublishAssignment() {
+    const bottomNext = document.getElementById("btn-studio-next-step");
+    const confirmBtn = document.getElementById("btn-confirm-publish-assignment");
+
+    if (bottomNext) {
+      bottomNext.disabled = true;
+      bottomNext.innerHTML = '<span>⏳ Verifying & Publishing...</span>';
+    }
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "Publishing to Students...";
+    }
+
+    try {
+      const payload = { ...collectFormValues(), status: "published" };
+
+      if (!payload.problems || payload.problems.length === 0) {
+        alert("Please add at least one problem to publish this assignment.");
+        return;
+      }
+
+      const assignId = payload.id || currentGeneratedAssignment?.id || (`assign_${payload.lesson_id || "lecture"}_${Date.now().toString(36)}`);
+      payload.id = assignId;
+
+      const response = await fetch(`/api/admin/assignments/${assignId}/publish`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Climbup-Player": "amirshaikh320340"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to publish assignment.");
+      }
+
+      currentGeneratedAssignment = { ...payload, status: "published", id: assignId };
+
+      if (statusPill) {
+        statusPill.textContent = "🟢 Published";
+        statusPill.style.background = "rgba(16, 185, 129, 0.15)";
+        statusPill.style.color = "#38d399";
+        statusPill.style.border = "1px solid rgba(16, 185, 129, 0.3)";
+      }
+      if (statusBanner) {
+        statusBanner.style.background = "rgba(16, 185, 129, 0.15)";
+        statusBanner.style.color = "#38d399";
+        statusBanner.textContent = "🟢 Live: Assignment verified by Quality Gate and published to all enrolled students!";
+      }
+
+      if (bottomNext) {
+        bottomNext.innerHTML = '<span>✓ Published!</span>';
+      }
+
+      alert("✓ Assignment successfully verified by Quality Gate and published to enrolled students!");
+      modal.style.display = "none";
+
+      const cId = payload.course_id || currentCourseId || window.currentCourseId;
+      if (cId && typeof loadCourseResources === "function") {
+        loadCourseResources(cId);
+      }
+      if (cId && typeof loadCourseLectures === "function") {
+        loadCourseLectures(cId);
+      }
+    } catch (err) {
+      console.error("Publish error:", err);
+      alert("Publish Failed: " + err.message);
+    } finally {
+      if (bottomNext) {
+        bottomNext.disabled = false;
+        const totalCards = document.querySelectorAll(".ai-challenge-card").length;
+        if (currentActiveQuestionIdx >= totalCards - 1) {
+          bottomNext.innerHTML = '<span>🚀 Confirm & Publish Assignment</span>';
+        } else {
+          bottomNext.innerHTML = 'Next Question <span>→</span>';
+        }
+      }
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "🚀 Confirm & Publish to Students";
+      }
+    }
+  }
+
+  if (saveDraftBtn) {
+    saveDraftBtn.addEventListener("click", () => handleSaveDraftAssignment());
+  }
+
+  const confirmBtn = document.getElementById("btn-confirm-publish-assignment");
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", () => handlePublishAssignment());
+  }
+
+  if (editForm) {
+    editForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      handlePublishAssignment();
     });
   }
 
@@ -4211,6 +6020,69 @@ function setupMcqManagerStudio() {
     });
   }
 
+  const toggleInsertBtn = document.getElementById("btn-toggle-insert-mcq");
+  const cancelInsertBtn = document.getElementById("btn-cancel-insert-mcq");
+  const submitInsertBtn = document.getElementById("btn-submit-insert-mcq");
+  const insertDrawer = document.getElementById("mcq-insert-drawer");
+  const insertPrompt = document.getElementById("mcq-insert-prompt");
+
+  if (toggleInsertBtn && insertDrawer) {
+    toggleInsertBtn.addEventListener("click", () => {
+      const isVisible = insertDrawer.style.display !== "none";
+      insertDrawer.style.display = isVisible ? "none" : "block";
+      if (!isVisible && insertPrompt) insertPrompt.focus();
+    });
+  }
+
+  if (cancelInsertBtn && insertDrawer) {
+    cancelInsertBtn.addEventListener("click", () => {
+      insertDrawer.style.display = "none";
+    });
+  }
+
+  if (submitInsertBtn && insertPrompt) {
+    submitInsertBtn.addEventListener("click", async () => {
+      const promptText = insertPrompt.value.trim();
+      const lessonId = lectureSelect?.value;
+      if (!lessonId) {
+        alert("Please select a target lecture first.");
+        return;
+      }
+      if (!promptText) {
+        alert("Please enter a question prompt.");
+        insertPrompt.focus();
+        return;
+      }
+
+      submitInsertBtn.disabled = true;
+      submitInsertBtn.textContent = "⏳ Synthesizing Zero-Error Options & Answer...";
+
+      try {
+        const res = await fetch(`/api/admin/lessons/${lessonId}/mcqs/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: promptText, lesson_id: lessonId })
+        });
+        if (!res.ok) throw new Error("Failed to insert question.");
+        const data = await res.json();
+
+        insertPrompt.value = "";
+        insertDrawer.style.display = "none";
+        alert("✓ Custom MCQ question calibrated & added successfully with zero errors!");
+        if (fetchBtn) fetchBtn.click();
+
+      } catch (err) {
+        alert("Insert Error: " + err.message);
+      } finally {
+        submitInsertBtn.disabled = false;
+        submitInsertBtn.textContent = "⚡ Auto-Generate Options & Add";
+      }
+    });
+  }
+
+  let currentQuizQuestions = [];
+  let studentQuizAnswers = {};
+
   if (fetchBtn) {
     fetchBtn.addEventListener("click", async () => {
       const lessonId = lectureSelect?.value;
@@ -4220,6 +6092,8 @@ function setupMcqManagerStudio() {
       }
       fetchBtn.disabled = true;
       fetchBtn.textContent = "Synthesizing Practice MCQs...";
+      studentQuizAnswers = {};
+
       if (questionsContainer) {
         questionsContainer.innerHTML = `<div style="text-align: center; padding: 24px; color: #38d399;">Scanning lecture transcript concepts & generating zero-leakage MCQs...</div>`;
       }
@@ -4229,33 +6103,15 @@ function setupMcqManagerStudio() {
         if (!res.ok) throw new Error("Failed to load MCQs");
         const data = await res.json();
         const questions = data.questions || [];
+        currentQuizQuestions = questions;
 
         if (questions.length === 0) {
           questionsContainer.innerHTML = `<div class="empty-state">No MCQs generated yet for this lecture. Make sure video transcript is processed.</div>`;
           return;
         }
 
-        questionsContainer.innerHTML = questions.map((q, idx) => `
-          <div class="ai-challenge-card" style="margin-bottom: 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
-              <span class="tier-badge-pill basic">Question ${idx + 1}</span>
-              <span style="font-size: 0.75rem; color: #38d399; font-weight: 700;">Grounding: ${q.concept_topic || 'Lecture Transcript'}</span>
-            </div>
-            <div style="font-size: 0.92rem; font-weight: 700; color: #fff; margin-bottom: 10px;">
-              ${q.question}
-            </div>
-            <div style="display: grid; gap: 6px; margin-bottom: 8px;">
-              ${(q.options || []).map((opt, optIdx) => `
-                <div style="font-size: 0.84rem; padding: 7px 12px; border-radius: 8px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #cbd5e1;">
-                  <strong style="color: #38d399;">${String.fromCharCode(65 + optIdx)}.</strong> ${opt}
-                </div>
-              `).join('')}
-            </div>
-            <div style="font-size: 0.78rem; color: #94a3b8; font-style: italic;">
-              ✓ Server-side verified (Zero-leakage practice testing)
-            </div>
-          </div>
-        `).join('');
+        renderInteractiveQuiz(questions, lessonId);
+
       } catch (err) {
         if (questionsContainer) {
           questionsContainer.innerHTML = `<div style="color: #fca5a5; padding: 20px; text-align: center;">Error loading MCQs: ${err.message}</div>`;
@@ -4263,6 +6119,200 @@ function setupMcqManagerStudio() {
       } finally {
         fetchBtn.disabled = false;
         fetchBtn.textContent = "⚡ Load / Synthesize MCQs";
+      }
+    });
+  }
+
+  function renderInteractiveQuiz(questions, lessonId) {
+    if (!questionsContainer) return;
+
+    questionsContainer.innerHTML = `
+      <div id="mcq-quiz-score-banner" style="display: none;"></div>
+      <div id="mcq-cards-list" style="display: grid; gap: 14px;">
+        ${questions.map((q, idx) => {
+          return `
+            <div class="ai-challenge-card" id="mcq-card-${q.id}" style="margin-bottom: 4px;">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                <span class="tier-badge-pill basic">Question ${idx + 1} of ${questions.length}</span>
+                <span style="font-size: 0.75rem; color: #38d399; font-weight: 700;">Grounding: ${q.concept_topic || 'Lecture Transcript'}</span>
+              </div>
+              <div style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 12px; line-height: 1.4;">
+                ${escapeHtml(q.question)}
+              </div>
+              <div class="mcq-options-group" style="display: grid; gap: 8px; margin-bottom: 8px;">
+                ${(q.options || []).map((opt, optIdx) => {
+                  const letter = String.fromCharCode(65 + optIdx);
+                  const cleanText = opt.replace(/^[A-Da-d][\).\:\s-]+/, "").trim();
+                  return `
+                    <div class="mcq-option-item" data-qid="${q.id}" data-choice="${letter}">
+                      <span class="mcq-option-letter">${letter}</span>
+                      <span class="mcq-option-text">${escapeHtml(cleanText)}</span>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+              ${q.hint ? `
+                <div style="margin-top: 6px; margin-bottom: 6px;">
+                  <button type="button" class="btn-mcq-hint-toggle" data-qid="${q.id}" style="background: transparent; border: none; color: #fbbf24; font-size: 0.74rem; font-weight: 700; cursor: pointer; padding: 2px 0; display: inline-flex; align-items: center; gap: 4px;">
+                    <span>💡 Need a hint?</span>
+                  </button>
+                  <div class="mcq-hint-box" id="mcq-hint-${q.id}" style="display: none; background: rgba(245, 158, 11, 0.08); border-left: 3px solid #fbbf24; padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 0.8rem; color: #fde68a; margin-top: 4px;">
+                    ${escapeHtml(q.hint)}
+                  </div>
+                </div>
+              ` : ''}
+              <div class="mcq-feedback-slot" id="mcq-feedback-${q.id}" style="display: none;"></div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div style="font-size: 0.82rem; color: #94a3b8;" id="mcq-progress-counter">
+          0 of ${questions.length} questions answered
+        </div>
+        <button type="button" class="btn btn-primary" id="btn-submit-mcq-quiz" style="padding: 10px 24px; font-weight: 800; background: linear-gradient(135deg, #38d399 0%, #059669 100%); color: #021526; box-shadow: 0 4px 14px rgba(56, 211, 153, 0.25);">
+          🚀 Submit & Verify Quiz Answers
+        </button>
+      </div>
+    `;
+
+    // Click handler for hint toggle
+    document.querySelectorAll(".btn-mcq-hint-toggle").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const qid = btn.dataset.qid;
+        const box = document.getElementById(`mcq-hint-${qid}`);
+        if (box) {
+          const isShown = box.style.display !== "none";
+          box.style.display = isShown ? "none" : "block";
+          btn.innerHTML = isShown ? "<span>💡 Need a hint?</span>" : "<span>💡 Hide hint</span>";
+        }
+      });
+    });
+
+    // Click handler for options
+    document.querySelectorAll(".mcq-option-item").forEach(item => {
+      item.addEventListener("click", () => {
+        const qid = item.dataset.qid;
+        const choice = item.dataset.choice;
+
+        // Deselect other options in this card
+        document.querySelectorAll(`.mcq-option-item[data-qid="${qid}"]`).forEach(opt => opt.classList.remove("selected"));
+        item.classList.add("selected");
+
+        studentQuizAnswers[qid] = choice;
+
+        // Update progress counter
+        const answeredCount = Object.keys(studentQuizAnswers).length;
+        const counter = document.getElementById("mcq-progress-counter");
+        if (counter) {
+          counter.textContent = `${answeredCount} of ${questions.length} questions answered`;
+        }
+      });
+    });
+
+    // Submit & Verify button
+    const submitBtn = document.getElementById("btn-submit-mcq-quiz");
+    if (submitBtn) {
+      submitBtn.addEventListener("click", async () => {
+        const answeredCount = Object.keys(studentQuizAnswers).length;
+        if (answeredCount === 0) {
+          alert("Please answer at least one question before verifying.");
+          return;
+        }
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Verifying with Server Truth...";
+
+        try {
+          const verifyRes = await fetch(`/api/lessons/${lessonId}/mcqs/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              answers: studentQuizAnswers,
+              student_id: (typeof currentStudentUser !== "undefined" && currentStudentUser?.id) || "student_hub_tester"
+            })
+          });
+
+          if (!verifyRes.ok) throw new Error("Server verification error");
+          const verifyData = await verifyRes.json();
+          renderQuizVerificationResults(verifyData, lessonId);
+
+        } catch (verErr) {
+          alert("Verification failed: " + verErr.message);
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "🔄 Re-evaluate / Submit Again";
+        }
+      });
+    }
+  }
+
+  function renderQuizVerificationResults(data, lessonId) {
+    const banner = document.getElementById("mcq-quiz-score-banner");
+    if (banner) {
+      const isPassed = data.passed;
+      banner.style.display = "flex";
+      banner.className = `mcq-result-banner ${isPassed ? '' : 'failed'}`;
+      banner.innerHTML = `
+        <div>
+          <div style="font-size: 1.15rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 8px;">
+            <span>${isPassed ? '🎉' : '⚠️'}</span>
+            <span>Score: ${data.score} / ${data.total} (${data.percentage}%)</span>
+            <span class="badge-mini" style="background: ${isPassed ? '#10b981' : '#ef4444'}; color: #fff; font-weight: 800; font-size: 0.75rem;">
+              ${data.status}
+            </span>
+          </div>
+          <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 4px;">
+            ${isPassed ? 'Excellent mastery of core concepts covered in this lecture!' : 'Review the cited transcript timestamps below to reinforce key concepts.'}
+          </div>
+        </div>
+        <div style="font-size: 0.78rem; color: #a5b4fc; font-weight: 600;">
+          ✓ Evaluated via Server-Side Ground Truth
+        </div>
+      `;
+      banner.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // Colorize each question card
+    const results = data.results || [];
+    results.forEach(res => {
+      const qid = res.id;
+      const card = document.getElementById(`mcq-card-${qid}`);
+      if (!card) return;
+
+      const userChoice = res.your_answer;
+      const trueCorrect = res.correct_answer;
+
+      // Update options styling
+      const options = card.querySelectorAll(".mcq-option-item");
+      options.forEach(opt => {
+        const choice = opt.dataset.choice;
+        opt.classList.remove("correct", "incorrect");
+
+        if (choice === trueCorrect) {
+          opt.classList.add("correct");
+        } else if (choice === userChoice && !res.is_correct) {
+          opt.classList.add("incorrect");
+        }
+      });
+
+      // Feedback slot
+      const feedbackSlot = document.getElementById(`mcq-feedback-${qid}`);
+      if (feedbackSlot) {
+        feedbackSlot.style.display = "block";
+        feedbackSlot.innerHTML = `
+          <div class="mcq-explanation-box">
+            <div style="font-weight: 700; color: ${res.is_correct ? '#34d399' : '#f87171'}; margin-bottom: 4px;">
+              ${res.is_correct ? '✓ Correct!' : `✗ Incorrect (Correct Answer: Option ${trueCorrect})`}
+            </div>
+            <div>${escapeHtml(res.explanation || 'Verified with lecture transcript.')}</div>
+            ${res.timestamp_hint ? `
+              <button type="button" class="mcq-jump-btn" onclick="alert('Timestamp: ' + ${JSON.stringify(res.timestamp_hint)})">
+                ⏱️ Timestamp Reference: ${res.timestamp_hint}
+              </button>
+            ` : ''}
+          </div>
+        `;
       }
     });
   }

@@ -1,6 +1,7 @@
 import json
 import uuid
 import threading
+import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import requests
@@ -52,7 +53,8 @@ class DBAdapter:
                         "chunks": [],
                         "jobs": {},
                         "chat_sessions": {},
-                        "chat_messages": []
+                        "chat_messages": [],
+                        "live_sessions": {}
                     }
                 try:
                     self.storage_file.parent.mkdir(parents=True, exist_ok=True)
@@ -727,6 +729,70 @@ class DBAdapter:
         store["resources"].append(rec)
         self._write_local_store(store)
         return rec
+
+    def upload_assignment_asset(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str = "image/png",
+        assignment_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Uploads assignment diagrams, images, and schema assets directly to Supabase Storage ('course_resources').
+        Returns the permanent public URL and asset metadata.
+        """
+        import re
+        import time
+
+        clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        subfolder = f"assignments/{assignment_id}" if assignment_id else "assignments"
+        storage_path = f"{subfolder}/{int(time.time())}_{clean_name}"
+
+        download_url = f"{self.supabase_url}/storage/v1/object/public/course_resources/{storage_path}"
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                upload_endpoint = f"{self.supabase_url}/storage/v1/object/course_resources/{storage_path}"
+                headers = {
+                    "apikey": self.supabase_key,
+                    "Authorization": f"Bearer {self.supabase_key}",
+                    "Content-Type": content_type or "application/octet-stream",
+                    "x-upsert": "true"
+                }
+                upload_res = self.session.post(upload_endpoint, headers=headers, data=file_bytes, timeout=30)
+                if upload_res.ok:
+                    return {
+                        "status": "success",
+                        "url": download_url,
+                        "storage_path": storage_path,
+                        "filename": filename,
+                        "size": len(file_bytes),
+                        "content_type": content_type,
+                        "storage": "supabase"
+                    }
+                else:
+                    print(f"[Supabase Storage] Assignment asset upload HTTP {upload_res.status_code}: {upload_res.text}")
+            except Exception as e:
+                print(f"[Supabase Storage] upload_assignment_asset exception: {e}")
+
+        # Local fallback if Supabase Storage is not reachable
+        from backend.config import Config
+        fallback_dir = Config.CHUNKS_DIR / "assignment_assets"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        local_filename = f"{int(time.time())}_{clean_name}"
+        local_path = fallback_dir / local_filename
+        with open(local_path, "wb") as f:
+            f.write(file_bytes)
+        local_url = f"/api/assignments/assets/{local_filename}"
+        return {
+            "status": "success",
+            "url": local_url,
+            "storage_path": str(local_path),
+            "filename": filename,
+            "size": len(file_bytes),
+            "content_type": content_type,
+            "storage": "local"
+        }
 
     def get_course_resources(self, course_id: str) -> List[Dict[str, Any]]:
         """Retrieves all resources, notes, assignments for a course directly from Supabase."""
@@ -1493,7 +1559,7 @@ class DBAdapter:
         return store.get("assignments", {}).get(assignment_id)
 
     def get_assignment_by_lesson(self, lesson_id: str, status: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Retrieves latest assignment for a lesson from Supabase course_assignments."""
+        """Retrieves latest assignment for a lesson from Supabase course_assignments with graceful course fallback."""
         if self.supabase_url and self.supabase_key:
             try:
                 headers = self._get_headers()
@@ -1505,11 +1571,18 @@ class DBAdapter:
                 url += "order=created_at.desc&limit=20"
                 res = self.session.get(url, headers=headers, timeout=6)
                 if res.ok and res.json():
+                    first_course_match = None
                     for row in res.json():
                         deserialized = self._deserialize_assignment_from_supabase(row)
+                        is_status_ok = (status is None or deserialized.get("status") == status)
+                        if is_status_ok and not first_course_match:
+                            first_course_match = deserialized
                         if deserialized.get("lesson_id") == lesson_id:
-                            if status is None or deserialized.get("status") == status:
+                            if is_status_ok:
                                 return deserialized
+                    # Graceful fallback: return the latest published assignment for this course
+                    if first_course_match:
+                        return first_course_match
             except Exception as e:
                 print(f"[Supabase] get_assignment_by_lesson notice: {e}")
 
@@ -1518,7 +1591,18 @@ class DBAdapter:
         matching = [a for a in assignments if a.get("lesson_id") == lesson_id]
         if status:
             matching = [a for a in matching if a.get("status") == status]
-        return matching[-1] if matching else None
+        if matching:
+            return matching[-1]
+        # Local fallback by course
+        if lesson_id:
+            lesson = self.get_lesson(lesson_id)
+            if lesson and lesson.get("course_id"):
+                c_matches = [a for a in assignments if a.get("course_id") == lesson["course_id"]]
+                if status:
+                    c_matches = [a for a in c_matches if a.get("status") == status]
+                if c_matches:
+                    return c_matches[-1]
+        return None
 
     def update_assignment_status(self, assignment_id: str, status: str) -> bool:
         """Updates assignment status (draft, published, archived)."""
@@ -1838,6 +1922,147 @@ class DBAdapter:
                 print(f"[Supabase] save_quiz_attempt notice: {e}")
         return False
 
+    def schedule_live_session(
+        self,
+        course_id: str,
+        title: str,
+        description: str,
+        scheduled_at: str,
+        host_name: str = "Faculty"
+    ) -> Dict[str, Any]:
+        """Schedules a new live class session."""
+        session_id = str(uuid.uuid4())
+        safe_course = "".join(c for c in course_id if c.isalnum() or c == "_")
+        agora_channel = f"climbup_{safe_course}_{session_id[:8]}"
+        
+        session_data = {
+            "id": session_id,
+            "course_id": course_id,
+            "title": title,
+            "description": description or "",
+            "scheduled_at": scheduled_at,
+            "status": "scheduled",
+            "agora_channel": agora_channel,
+            "host_name": host_name,
+            "recording_url": None,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                headers["Prefer"] = "return=representation"
+                res = self.session.post(
+                    f"{self.supabase_url}/rest/v1/live_sessions",
+                    headers=headers,
+                    json=session_data,
+                    timeout=5
+                )
+                if res.ok and res.json():
+                    return res.json()[0]
+                else:
+                    print(f"[Supabase] schedule_live_session notice ({res.status_code}): {res.text[:120]}")
+            except Exception as e:
+                print(f"[Supabase] schedule_live_session error: {e}")
+                
+        with self._store_lock:
+            store = self._read_local_store()
+            if "live_sessions" not in store:
+                store["live_sessions"] = {}
+            store["live_sessions"][session_id] = session_data
+            self._write_local_store(store)
+            
+        return session_data
 
+    def get_live_sessions(
+        self,
+        course_id: Optional[str] = None,
+        status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Lists live sessions filtered by course and/or status."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/live_sessions?select=*"
+                if course_id:
+                    url += f"&course_id=eq.{course_id}"
+                if status:
+                    url += f"&status=eq.{status}"
+                url += "&order=scheduled_at.asc"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok:
+                    return res.json()
+            except Exception as e:
+                print(f"[Supabase] get_live_sessions notice: {e}")
+                
+        store = self._read_local_store()
+        sessions = list(store.get("live_sessions", {}).values())
+        if course_id:
+            sessions = [s for s in sessions if s.get("course_id") == course_id]
+        if status:
+            sessions = [s for s in sessions if s.get("status") == status]
+        return sorted(sessions, key=lambda s: s.get("scheduled_at", ""))
 
+    def get_live_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Gets a live session by ID."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/live_sessions?id=eq.{session_id}&select=*"
+                res = self.session.get(url, headers=headers, timeout=5)
+                if res.ok and res.json():
+                    return res.json()[0]
+            except Exception as e:
+                print(f"[Supabase] get_live_session_by_id notice: {e}")
+                
+        store = self._read_local_store()
+        return store.get("live_sessions", {}).get(session_id)
 
+    def update_live_session_status(
+        self,
+        session_id: str,
+        status: str,
+        recording_url: Optional[str] = None
+    ) -> bool:
+        """Updates live session status ('scheduled', 'live', 'completed', 'cancelled') and optional recording_url."""
+        updates: Dict[str, Any] = {"status": status, "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        if recording_url is not None:
+            updates["recording_url"] = recording_url
+            
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/live_sessions?id=eq.{session_id}"
+                res = self.session.patch(url, headers=headers, json=updates, timeout=5)
+                if res.ok:
+                    return True
+            except Exception as e:
+                print(f"[Supabase] update_live_session_status notice: {e}")
+                
+        with self._store_lock:
+            store = self._read_local_store()
+            if "live_sessions" in store and session_id in store["live_sessions"]:
+                store["live_sessions"][session_id].update(updates)
+                self._write_local_store(store)
+                return True
+        return False
+
+    def delete_live_session(self, session_id: str) -> bool:
+        """Deletes a live session."""
+        if self.supabase_url and self.supabase_key:
+            try:
+                headers = self._get_headers()
+                url = f"{self.supabase_url}/rest/v1/live_sessions?id=eq.{session_id}"
+                res = self.session.delete(url, headers=headers, timeout=5)
+                if res.ok:
+                    return True
+            except Exception as e:
+                print(f"[Supabase] delete_live_session notice: {e}")
+                
+        with self._store_lock:
+            store = self._read_local_store()
+            if "live_sessions" in store and session_id in store["live_sessions"]:
+                del store["live_sessions"][session_id]
+                self._write_local_store(store)
+                return True
+        return False
