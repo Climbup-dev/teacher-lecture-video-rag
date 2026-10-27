@@ -74,6 +74,18 @@ class GoogleDriveManager:
         token = getattr(Config, "GOOGLE_OAUTH_ACCESS_TOKEN", "")
         if not token:
             token = cls.refresh_access_token()
+        if not token and getattr(Config, "GOOGLE_CREDENTIALS_JSON", ""):
+            try:
+                raw_creds = Config.GOOGLE_CREDENTIALS_JSON
+                info = raw_creds if isinstance(raw_creds, dict) else json.loads(raw_creds)
+                creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+                import google.auth.transport.requests
+                creds.refresh(google.auth.transport.requests.Request())
+                token = creds.token or ""
+                if token:
+                    Config.GOOGLE_OAUTH_ACCESS_TOKEN = token
+            except Exception as e:
+                print(f"[GoogleDrive Service Account Token Notice]: {e}")
         return token
 
     def is_configured(self) -> bool:
