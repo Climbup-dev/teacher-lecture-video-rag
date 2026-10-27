@@ -29,7 +29,7 @@ COPY frontend/ ./frontend/
 COPY data/ ./data/
 
 # Create application data directories and assign permissions to non-root user
-RUN mkdir -p /app/data/uploads /app/data/chunks && \
+RUN mkdir -p /app/data/uploads /app/data/chunks/hls && \
     chown -R appuser:appgroup /app
 
 # Switch to non-root user

@@ -22,6 +22,8 @@ data/uploads/*.mp4
 data/uploads/*.wav
 data/uploads/*.mp3
 data/uploads/*.m4a
+data/uploads/*.tmp
+*.tmp
 !data/uploads/.gitkeep
 
 # Operating System & IDE

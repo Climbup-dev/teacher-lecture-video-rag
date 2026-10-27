@@ -136,6 +136,10 @@ def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, A
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
     playlist_file = hls_dir / "master.m3u8"
     if playlist_file.exists():
+        from backend.r2_storage import get_r2_storage
+        r2 = get_r2_storage()
+        if r2.is_configured() and not r2.has_hls_package(lesson_id):
+            threading.Thread(target=r2.upload_hls_package, args=(lesson_id, hls_dir), daemon=True).start()
         return True
 
     # 1. Ultra-Fast R2 Check: If already packaged in Cloudflare R2, avoid Google Drive download!
@@ -750,9 +754,12 @@ async def stream_lesson_video(
             )
             raise he
 
-    # Enforce Anti-Piracy: Disable raw progressive MP4 stream for non-player / non-token downloads
+    # Enforce Anti-Piracy: Disable raw progressive MP4 stream for any client without verified in-app player signature
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
-    if ((hls_dir / "master.m3u8").exists() or HLSTranscoder.is_ffmpeg_available()) and not is_authorized_player(request) and not st:
+    from backend.r2_storage import get_r2_storage
+    r2 = get_r2_storage()
+    has_hls = (hls_dir / "master.m3u8").exists() or (r2.is_configured() and r2.has_hls_package(lesson_id)) or HLSTranscoder.is_ffmpeg_available()
+    if has_hls and not is_authorized_player(request):
         raise HTTPException(
             status_code=403,
             detail="Direct progressive MP4 streaming is disabled for this protected lesson. Playback is strictly enforced via encrypted HLS."

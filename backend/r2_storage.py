@@ -57,10 +57,11 @@ class CloudflareR2Storage:
             self.bucket_name
         )
 
-    def upload_hls_package(self, lesson_id: str, local_hls_dir: Path, max_workers: int = 8) -> bool:
+    def upload_hls_package(self, lesson_id: str, local_hls_dir: Path, max_workers: int = 12) -> bool:
         """
         Uploads all encrypted HLS files (master.m3u8, segment_*.ts, enc.key)
         from local_hls_dir to Cloudflare R2 in parallel with automatic retries.
+        Skips files that are already present in R2 for fast resume and idempotency.
         """
         if not self._client or not local_hls_dir.exists():
             return False
@@ -70,7 +71,22 @@ class CloudflareR2Storage:
             if not files:
                 return False
 
-            logger.info(f"[R2 Storage] Parallel uploading {len(files)} HLS files for {lesson_id} to R2 ({max_workers} threads)...")
+            # Query existing keys in R2 for fast resume/idempotency
+            existing_keys = set()
+            try:
+                paginator = self._client.get_paginator("list_objects_v2")
+                for page in paginator.paginate(Bucket=self.bucket_name, Prefix=f"hls/{lesson_id}/"):
+                    for obj in page.get("Contents", []):
+                        existing_keys.add(Path(obj["Key"]).name)
+            except Exception:
+                pass
+
+            files_to_upload = [f for f in files if f.name not in existing_keys or f.name.endswith(".m3u8")]
+            if not files_to_upload:
+                logger.info(f"[R2 Storage] All {len(files)} files for {lesson_id} already exist in R2.")
+                return True
+
+            logger.info(f"[R2 Storage] Parallel uploading {len(files_to_upload)}/{len(files)} HLS files for {lesson_id} to R2 ({max_workers} threads)...")
 
             def _upload_single_file(f: Path):
                 r2_key = f"hls/{lesson_id}/{f.name}"
@@ -97,10 +113,10 @@ class CloudflareR2Storage:
 
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(_upload_single_file, files))
+                results = list(executor.map(_upload_single_file, files_to_upload))
 
             success = all(results)
-            logger.info(f"[R2 Storage] Synced lesson {lesson_id} to Cloudflare R2: {sum(results)}/{len(files)} files uploaded.")
+            logger.info(f"[R2 Storage] Synced lesson {lesson_id} to Cloudflare R2: {sum(results)}/{len(files_to_upload)} new files uploaded.")
             return success
         except Exception as e:
             logger.error(f"[R2 Storage] Error uploading HLS package for {lesson_id}: {e}")
