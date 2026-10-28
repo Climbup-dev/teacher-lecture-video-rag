@@ -15,6 +15,10 @@ class VectorEmbedder:
         if not gemini_api_key:
             raise ValueError("Gemini API Key is required for embeddings.")
         self.api_key = gemini_api_key
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=1)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={self.api_key}"
         self.batch_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key={self.api_key}"
 
@@ -42,7 +46,7 @@ class VectorEmbedder:
         norm_emb = None
         for attempt in range(3):
             try:
-                response = requests.post(self.endpoint, json=payload, timeout=30)
+                response = self.session.post(self.endpoint, json=payload, timeout=20)
                 if response.status_code == 200:
                     data = response.json()
                     embedding = data.get("embedding", {}).get("values", [])
@@ -90,7 +94,7 @@ class VectorEmbedder:
             payload = {"requests": sub_requests}
             for attempt in range(3):
                 try:
-                    response = requests.post(self.batch_endpoint, json=payload, timeout=45)
+                    response = self.session.post(self.batch_endpoint, json=payload, timeout=30)
                     if response.status_code == 200:
                         data = response.json()
                         embs = data.get("embeddings", [])

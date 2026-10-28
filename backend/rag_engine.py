@@ -21,6 +21,10 @@ class RAGEngine:
         self.api_key = gemini_api_key
         self.db = db_adapter
         self.embedder = VectorEmbedder(gemini_api_key)
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=1)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self.generation_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
         self.groq = GroqIntelligence(api_key=groq_api_key, model=groq_model)
         self.openrouter_api_key = (openrouter_api_key or "").strip()
@@ -144,10 +148,10 @@ class RAGEngine:
         tokens = re.findall(r'\b[a-zA-Z_]{3,}\b', (text or "").lower())
         return [t for t in tokens if t not in self.STOP_WORDS]
 
-    def _generate_pedagogical_answer(self, system_instructions: str, safe_query: str) -> str:
+    def _generate_pedagogical_answer(self, system_instructions: str, safe_query: str, max_tokens: int = 550) -> str:
         """
         Dual-Engine High-Speed Generation:
-        1. Ultra-fast Groq Qwen 27B (~1.2s response time) for instant student feedback.
+        1. Ultra-fast Groq Qwen/GPT (~0.6-1.0s response time) for instant student feedback.
         2. High-precision Gemini 2.5 Flash as robust secondary fallback.
         """
         # --- TIER 1: Ultra-Fast Groq Engine (~0.8s) ---
@@ -158,7 +162,7 @@ class RAGEngine:
                 "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json"
             }
-            models = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+            models = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile"]
             for gm in models:
                 try:
                     payload = {
@@ -168,9 +172,9 @@ class RAGEngine:
                             {"role": "user", "content": safe_query}
                         ],
                         "temperature": 0.2,
-                        "max_tokens": 1024
+                        "max_tokens": max_tokens
                     }
-                    r = requests.post(groq_endpoint, headers=headers, json=payload, timeout=8)
+                    r = self.session.post(groq_endpoint, headers=headers, json=payload, timeout=7)
                     if r.status_code == 200:
                         choices = r.json().get("choices", [])
                         if choices and choices[0].get("message", {}).get("content"):
@@ -200,9 +204,9 @@ class RAGEngine:
                             {"role": "user", "content": safe_query}
                         ],
                         "temperature": 0.2,
-                        "max_tokens": 1024
+                        "max_tokens": max_tokens
                     }
-                    r = requests.post(openrouter_endpoint, headers=or_headers, json=payload, timeout=10)
+                    r = self.session.post(openrouter_endpoint, headers=or_headers, json=payload, timeout=8)
                     if r.status_code == 200:
                         choices = r.json().get("choices", [])
                         if choices and choices[0].get("message", {}).get("content"):
@@ -210,25 +214,24 @@ class RAGEngine:
                 except Exception:
                     continue
 
-        # --- TIER 3: Gemini Enterprise Fallback (Preserved primarily for video processing) ---
+        # --- TIER 3: Gemini Enterprise Fallback ---
         payload = {
             "contents": [{"parts": [{"text": f"{system_instructions}\n\nSTUDENT QUESTION:\n{safe_query}"}]}],
             "generationConfig": {
                 "temperature": 0.2,
                 "topP": 0.9,
-                "maxOutputTokens": 2048
+                "maxOutputTokens": max_tokens
             }
         }
         models_to_try = [
             "gemini-2.5-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-flash-latest"
+            "gemini-1.5-flash",
+            "gemini-2.0-flash"
         ]
         for model_name in models_to_try:
             endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
             try:
-                res = requests.post(endpoint, json=payload, timeout=25)
+                res = self.session.post(endpoint, json=payload, timeout=15)
                 if res.status_code == 200:
                     data = res.json()
                     candidates = data.get("candidates", [])
@@ -299,7 +302,22 @@ class RAGEngine:
                     last_student_msg = h.get("message", "").strip()
 
         history_summary = "\n".join(history_msgs) if history_msgs else "New conversation session (no previous messages)."
-        safe_query = re.sub(r'[\r\n]+', ' ', (query or "").strip())[:1000]
+
+        # Length & Spam Guard (Protects against 50,000-word spam while keeping 100-200 word queries clean)
+        raw_clean_q = (query or "").strip()
+        words = raw_clean_q.split()
+        if len(words) > 350:
+            return {
+                "answer": "⚠️ **Question Too Long (Bohat Bada Question):**\n\nPlease ask your question concisely within **100 to 200 words** so that I can give you an accurate, focused answer based on the lecture video.\n*(Kripya apna doubt 100 se 200 shabdon ke andar puchein taaki video ke according seedha point to point samjhaya ja sake).*",
+                "retrieved_evidence": [],
+                "video_timestamps": []
+            }
+
+        # Truncate cleanly if between 200 and 350 words
+        if len(words) > 200:
+            raw_clean_q = " ".join(words[:200])
+
+        safe_query = re.sub(r'[\r\n]+', ' ', raw_clean_q)[:1200]
 
         # Follow-up query resolution: augment query with prior topic if pronoun/reference detected
         search_query = safe_query
@@ -307,6 +325,15 @@ class RAGEngine:
         has_followup_marker = bool(q_tokens.intersection(self.FOLLOW_UP_INDICATORS))
         if has_followup_marker and last_student_msg:
             search_query = f"{last_student_msg} {safe_query}"
+
+        # Conciseness vs Detailed Explanation Detection
+        detail_keywords = [
+            "in detail", "detailed", "deep dive", "pura samjhao", "poora samjhao",
+            "step by step detail", "comprehensive", "explain everything", "in depth",
+            "vistar se", "detail me", "detail mein", "thoroughly", "complete explanation",
+            "sari cheezein", "saari cheeze"
+        ]
+        is_detail_requested = any(dk in safe_query.lower() for dk in detail_keywords)
 
         # -------------------------------------------------------------
         # DURATION-ADAPTIVE RETRIEVAL STRATEGY:
@@ -590,10 +617,23 @@ Use the course chapter outline below to provide a structured, chronological road
 {roadmap_str}
 """
 
+        conciseness_instruction = (
+            "CONCISENESS DIRECTIVE (CRITICAL - AVOID LONG ESSAYS / WALLS OF TEXT):\n"
+            "- Answer the student's exact doubt directly in the very first 1-2 sentences.\n"
+            "- Provide 2 to 3 crisp, well-structured bullet points highlighting the core mechanism, code logic, or concept as taught in the video.\n"
+            "- Keep total response length compact and punchy (around 100 to 220 words max).\n"
+            "- End with 1 to 2 exact video jump points [MM:SS]."
+            if not is_detail_requested else
+            "DETAILED EXPLANATION DIRECTIVE:\n"
+            "- The student explicitly requested a detailed breakdown. Provide a thorough, step-by-step conceptual explanation with mechanisms and code/diagram hints strictly grounded in the video.\n"
+            "- Include exact video jump points [MM:SS]."
+        )
+
         # 4. Prompt for Elite Pedagogical Teaching & Mentoring
-        system_instructions = f"""You are the Elite AI Professor, Dedicated Mentor & Personal Tutor for the university course lecture: "{lesson_title}".
+        system_instructions = f"""You are the Elite AI Professor & Mentor for the course lecture: "{lesson_title}".
 Course Video Profile: ~{duration_mins} Minutes ({duration_tier.replace('_', ' ').title()} - {total_chunks} Total Segments)
-A student has asked a doubt. Your mission is to DEEPLY UNDERSTAND their exact question, explain it with CRYSTAL CLARITY, guide them step-by-step, and provide practical insights strictly grounded in the lecture.
+
+{conciseness_instruction}
 
 {mode_instruction}
 
@@ -603,34 +643,35 @@ RECENT CONVERSATION CONTEXT:
 LECTURE TRANSCRIPT EVIDENCE (From {duration_mins}-Minute Video):
 {context_str}
 
-PEDAGOGICAL TEACHING & FORMATTING GUIDELINES:
+PEDAGOGICAL GUIDELINES:
 1. 🎯 IMMEDIATE DIRECT ANSWER (Zero AI Filler):
    - Answer the student's exact doubt directly in the very first sentence.
-   - NEVER start with generic pleasantries like "That is an excellent question!", "Sure!", "Certainly!", or "I would be happy to help".
+   - Do NOT start with generic pleasantries like "That is an excellent question!", "Sure!", or "Certainly!".
    - Start immediately with the core concept definition or explanation.
 
 2. 💡 SIMPLE EXPLANATION & INTUITIVE ANALOGY:
-   - Break down complex architectural/technical terms into simple, relatable concepts.
-   - Use an intuitive real-world analogy (e.g., hotel receptionist, traffic police, restaurant waiter, security guard) to make the concept stick.
+   - Break down complex terms into simple, relatable concepts.
+   - Use an intuitive real-world analogy where helpful.
 
 3. 🛠️ ACTIONABLE MECHANISM & HOW IT WORKS:
-   - Present 2 to 4 clean, structured bullet points or steps explaining how it works or how to implement it as taught in the lecture.
-   - If code or query syntax is relevant, provide a clean, minimal code block with syntax highlighting and clear comments.
+   - Present 2 to 3 clean, structured bullet points explaining how it works or how to implement it as taught in the lecture.
+   - If code or query syntax is relevant, provide a clean, minimal code block with syntax highlighting.
 
 4. 🌐 MATCH STUDENT'S LANGUAGE & TONE NATURALLY:
    - If the student asks in **Hindi / Hinglish**: Respond in natural, warm, friendly, clear developer Hinglish (e.g., "Dekho, simple shabdon mein...", "Basically yahan par teacher ne samjhaya hai ki...").
    - If the student asks in **English**: Respond in crisp, well-structured, professional English.
 
 5. ⏱️ CLICKABLE VIDEO JUMP POINTS:
-   - Conclude with 1 to 3 exact video jump points referencing where the teacher discussed or demonstrated the topic:
+   - Conclude with 1 to 3 exact video jump points referencing where the teacher discussed the topic:
      ### ⏱️ Video Jump Points
      * ⏱️ [MM:SS] - Concept or demonstration label
 
 6. 💡 PRO TIP / KEY TAKEAWAY:
-   - End with a single crisp "💡 Pro Tip" or "Key Insight" to help the student remember this for interviews or practical projects.
+   - End with a single crisp "💡 Pro Tip" to help the student remember this for interviews or practical projects.
 """
 
-        raw_answer = self._generate_pedagogical_answer(system_instructions, safe_query)
+        max_tokens_to_gen = 900 if is_detail_requested else 550
+        raw_answer = self._generate_pedagogical_answer(system_instructions, safe_query, max_tokens=max_tokens_to_gen)
 
         # Extract timestamps for video jump badges
         extracted = re.findall(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]', raw_answer)

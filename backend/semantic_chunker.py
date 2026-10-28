@@ -7,6 +7,10 @@ class SemanticChunker:
         if not gemini_api_key:
             raise ValueError("Gemini API Key is required.")
         self.api_key = gemini_api_key
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=1)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
 
     def chunk_and_enrich(
@@ -154,16 +158,15 @@ Output strictly valid JSON with this exact schema:
         }
 
         models_to_try = [
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-flash-lite-latest",
-            "gemini-3-flash-preview"
+            "gemini-2.5-flash",
+            "gemini-1.5-flash",
+            "gemini-2.0-flash"
         ]
 
         for model_name in models_to_try:
             endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
             try:
-                res = requests.post(endpoint, json=payload, timeout=45)
+                res = self.session.post(endpoint, json=payload, timeout=15)
                 if res.status_code == 200:
                     data = res.json()
                     text_out = data["candidates"][0]["content"]["parts"][0]["text"]

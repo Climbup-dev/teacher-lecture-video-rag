@@ -1,10 +1,12 @@
 import os
 import sys
+import gc
 import uuid
 import time
 import logging
+import threading
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 from concurrent.futures import ThreadPoolExecutor
 
 from backend.config import Config, reload_config
@@ -23,16 +25,21 @@ class IngestionJobManager:
     Durable Background Ingestion Engine.
     Executes multi-stage lecture RAG pipeline asynchronously with:
     - Bounded concurrency (2 workers) for 1 GB RAM Cloud Run safety.
+    - Dedicated auxiliary worker pool for background sync & assessment synthesis.
+    - Serialized FFmpeg semaphore to prevent container OOM spikes.
     - Incremental checkpoint persistence to avoid re-billing Deepgram/Gemini.
-    - Idempotency & deduplication.
+    - Throttled database progress reporting to eliminate redundant API updates.
     - Full terminal state management (QUEUED, IN_PROGRESS, COMPLETED, FAILED, CANCELLED).
+    - Defensive temp file tracking and garbage collection.
     """
 
     def __init__(self, db_adapter: Optional[DBAdapter] = None, max_workers: int = 2):
         self.db = db_adapter or DBAdapter()
         self.max_workers = max_workers
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="rag_ingest_worker")
-        logger.info(f"IngestionJobManager initialized with {self.max_workers} worker threads.")
+        self.aux_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag_aux_worker")
+        self._ffmpeg_semaphore = threading.Semaphore(1)
+        logger.info(f"IngestionJobManager initialized with {self.max_workers} worker threads and auxiliary pool.")
 
     def submit_job(
         self,
@@ -129,6 +136,9 @@ class IngestionJobManager:
         enriched_chunks = checkpoints.get("enriched_chunks")
         video_url = checkpoints.get("video_url", "")
 
+        # Track all temporary files created for safe cleanup in finally
+        temp_files_to_clean: Set[Path] = set()
+
         try:
             # -----------------------------------------------------------------
             # STAGE 1: VERIFYING_SOURCE (10%)
@@ -178,18 +188,19 @@ class IngestionJobManager:
 
             # Check if audio was already extracted in a prior run
             if clean_audio_path and Path(clean_audio_path).exists():
-                # If existing audio is oversized (>50MB), compress it to 16kHz mono to prevent Deepgram 504 Gateway Timeout
                 try:
                     old_fpath = Path(clean_audio_path)
                     if old_fpath.stat().st_size > 50 * 1024 * 1024:
                         logger.info(f"Existing audio is {old_fpath.stat().st_size / (1024*1024):.1f}MB (>50MB). Compressing to compact 16kHz mono...")
-                        compact_path = extract_and_clean_audio(str(old_fpath))
+                        with self._ffmpeg_semaphore:
+                            compact_path = extract_and_clean_audio(str(old_fpath))
                         if compact_path and Path(compact_path).exists() and compact_path != str(old_fpath):
                             try:
                                 old_fpath.unlink()
                             except Exception:
                                 pass
                             clean_audio_path = compact_path
+                            temp_files_to_clean.add(Path(clean_audio_path))
                             self.db.update_job_stage(
                                 job_id,
                                 stage="AUDIO_EXTRACTION",
@@ -211,6 +222,7 @@ class IngestionJobManager:
                 # Download from Drive if needed
                 if file_id and not temp_media_path:
                     temp_media_path = Config.UPLOADS_DIR / f"temp_stream_{lesson_id}.tmp"
+                    temp_files_to_clean.add(temp_media_path)
                     logger.info(f"Downloading Google Drive file {file_id} to {temp_media_path}...")
                     success = gdm.download_file(file_id, temp_media_path)
                     if not success or not temp_media_path.exists():
@@ -219,8 +231,11 @@ class IngestionJobManager:
                 if not temp_media_path or not temp_media_path.exists():
                     raise RuntimeError("Source media file is missing or inaccessible.")
 
-                # Run bounded FFmpeg audio extraction
-                clean_audio_path = extract_and_clean_audio(str(temp_media_path))
+                # Run bounded FFmpeg audio extraction with semaphore lock
+                with self._ffmpeg_semaphore:
+                    clean_audio_path = extract_and_clean_audio(str(temp_media_path))
+                if clean_audio_path:
+                    temp_files_to_clean.add(Path(clean_audio_path))
 
                 # Package into AES-128 Encrypted HLS stream if FFmpeg is available
                 hls_packaged = False
@@ -228,21 +243,21 @@ class IngestionJobManager:
                     hls_output_dir = Config.CHUNKS_DIR / "hls" / lesson_id
                     if not (hls_output_dir / "master.m3u8").exists() and HLSTranscoder.is_ffmpeg_available():
                         logger.info(f"[HLS Ingestion] Packaging {lesson_id} into AES-128 encrypted HLS segments...")
-                        res = HLSTranscoder.package_video_to_encrypted_hls(
-                            lesson_id=lesson_id,
-                            input_file_path=temp_media_path,
-                            output_hls_dir=hls_output_dir,
-                            segment_duration=6
-                        )
+                        with self._ffmpeg_semaphore:
+                            res = HLSTranscoder.package_video_to_encrypted_hls(
+                                lesson_id=lesson_id,
+                                input_file_path=temp_media_path,
+                                output_hls_dir=hls_output_dir,
+                                segment_duration=6
+                            )
                         hls_packaged = bool(res and res.get("total_segments", 0) > 0)
                         if hls_packaged:
                             try:
                                 from backend.r2_storage import get_r2_storage
                                 r2 = get_r2_storage()
                                 if r2.is_configured():
-                                    import threading
-                                    threading.Thread(target=r2.upload_hls_package, args=(lesson_id, hls_output_dir), daemon=True).start()
-                                    threading.Thread(target=r2.evict_oldest_lessons_if_needed, daemon=True).start()
+                                    self.aux_executor.submit(r2.upload_hls_package, lesson_id, hls_output_dir)
+                                    self.aux_executor.submit(r2.evict_oldest_lessons_if_needed)
                             except Exception as r2_e:
                                 logger.warning(f"[HLS Ingestion] Notice on R2 sync: {r2_e}")
                 except Exception as hls_err:
@@ -252,9 +267,13 @@ class IngestionJobManager:
                 if temp_media_path and temp_media_path.exists() and "temp_stream_" in temp_media_path.name:
                     try:
                         temp_media_path.unlink()
+                        temp_files_to_clean.discard(temp_media_path)
                         logger.info(f"Purged temporary media {temp_media_path} to conserve container memory.")
                     except Exception as e:
                         logger.warning(f"Notice on deleting temp video: {e}")
+
+                # Immediate memory collection
+                gc.collect()
 
                 self.db.update_job_stage(
                     job_id,
@@ -282,25 +301,36 @@ class IngestionJobManager:
 
                 transcriber = DeepgramTranscriber(Config.DEEPGRAM_API_KEY)
 
+                # Progress throttling state to eliminate spamming DB
+                last_progress = [time.time(), 45]
+
                 def _on_transcription_progress(completed: int, total: int):
                     if total > 1:
                         pct = 45 + int((completed / total) * 15)
-                        self.db.update_job_stage(
-                            job_id,
-                            stage="TRANSCRIPTION",
-                            progress_percent=pct,
-                            stage_message=f"Deepgram Nova-2: Transcribed section {completed}/{total} (Diarization & Timestamps)..."
-                        )
+                        now = time.time()
+                        if (pct - last_progress[1] >= 3) or (now - last_progress[0] >= 2.5):
+                            last_progress[0] = now
+                            last_progress[1] = pct
+                            self.db.update_job_stage(
+                                job_id,
+                                stage="TRANSCRIPTION",
+                                progress_percent=pct,
+                                stage_message=f"Deepgram Nova-2: Transcribed section {completed}/{total} (Diarization & Timestamps)..."
+                            )
 
                 transcription_result = transcriber.transcribe_file(clean_audio_path, progress_callback=_on_transcription_progress)
 
                 # Free the temporary clean audio file immediately after successful transcription!
                 if clean_audio_path and Path(clean_audio_path).exists():
                     try:
-                        Path(clean_audio_path).unlink()
+                        p = Path(clean_audio_path)
+                        p.unlink()
+                        temp_files_to_clean.discard(p)
                         logger.info(f"Purged temporary audio {clean_audio_path} after transcription.")
                     except Exception as e:
                         logger.warning(f"Notice on deleting clean audio: {e}")
+
+                gc.collect()
 
                 self.db.update_job_stage(
                     job_id,
@@ -343,6 +373,8 @@ class IngestionJobManager:
                     subject_name=title
                 )
 
+                gc.collect()
+
                 self.db.update_job_stage(
                     job_id,
                     stage="SEMANTIC_PROCESSING",
@@ -356,7 +388,6 @@ class IngestionJobManager:
             # -----------------------------------------------------------------
             if self._is_cancelled(job_id): return
 
-            # Check if vectors are already generated
             needs_embedding = any("embedding" not in c or not c["embedding"] for c in enriched_chunks)
             if needs_embedding:
                 self.db.update_job_stage(
@@ -373,6 +404,8 @@ class IngestionJobManager:
                 for idx, emb in enumerate(embeddings):
                     if idx < len(enriched_chunks):
                         enriched_chunks[idx]["embedding"] = emb
+
+                gc.collect()
 
                 self.db.update_job_stage(
                     job_id,
@@ -413,7 +446,7 @@ class IngestionJobManager:
                 chunks=enriched_chunks
             )
 
-            # Auto-synthesize initial MCQ assessment bank in background so student quizzes are instantly ready
+            # Auto-synthesize initial MCQ assessment bank in background pool
             try:
                 def _bg_generate_mcqs():
                     try:
@@ -423,7 +456,7 @@ class IngestionJobManager:
                         logger.info(f"Auto-generated practice MCQ bank for new lecture {lesson_id}")
                     except Exception as mcq_err:
                         logger.warning(f"Background MCQ synthesis notice: {mcq_err}")
-                threading.Thread(target=_bg_generate_mcqs, daemon=True).start()
+                self.aux_executor.submit(_bg_generate_mcqs)
             except Exception as e:
                 logger.warning(f"Could not dispatch background MCQ generator: {e}")
 
@@ -439,7 +472,7 @@ class IngestionJobManager:
             )
             logger.info(f"Job {job_id} for lecture '{title}' COMPLETED successfully in background!")
 
-            # Trigger pracTQ Mentor Studio Email Notification to all mentors
+            # Trigger pracTQ Mentor Studio Email Notification in aux pool
             try:
                 from backend.email_notifier import EmailNotifier
                 course_name = "Course"
@@ -449,7 +482,8 @@ class IngestionJobManager:
                     if matching:
                         course_name = matching
 
-                EmailNotifier.notify_mentors_async(
+                self.aux_executor.submit(
+                    EmailNotifier.notify_mentors_async,
                     db=self.db,
                     lesson_id=lesson_id,
                     title=title,
@@ -457,36 +491,36 @@ class IngestionJobManager:
                     duration_seconds=duration_seconds,
                     total_chunks=len(enriched_chunks)
                 )
-                logger.info(f"[pracTQ Mentor Studio] Mentor completion notification triggered for '{title}'.")
+                logger.info(f"[pracTQ Mentor Studio] Mentor completion notification queued for '{title}'.")
             except Exception as notify_err:
                 logger.warning(f"[pracTQ Mentor Studio] Could not dispatch mentor notification: {notify_err}")
 
         except Exception as e:
             logger.exception(f"Job {job_id} failed during execution: {e}")
             error_msg = str(e)
-            # Sanitize error message for UI display
             if "API key" in error_msg.lower():
                 error_msg = "Provider API key configuration error."
             self.db.fail_job(job_id, error_message=error_msg)
 
         finally:
             # Defensive memory and tmpfs cleanup
-            if temp_media_path and Path(temp_media_path).exists() and "temp_stream_" in str(temp_media_path):
+            for temp_f in temp_files_to_clean:
                 try:
-                    Path(temp_media_path).unlink()
+                    p = Path(temp_f)
+                    if p.exists() and p.is_file():
+                        p.unlink()
                 except Exception:
                     pass
-            if clean_audio_path and Path(clean_audio_path).exists() and "clean_16k" in str(clean_audio_path):
-                try:
-                    Path(clean_audio_path).unlink()
-                except Exception:
-                    pass
+            gc.collect()
 
 # Singleton instance
 _job_manager_instance: Optional[IngestionJobManager] = None
+_job_init_lock = threading.Lock()
 
 def get_job_manager() -> IngestionJobManager:
     global _job_manager_instance
     if _job_manager_instance is None:
-        _job_manager_instance = IngestionJobManager()
+        with _job_init_lock:
+            if _job_manager_instance is None:
+                _job_manager_instance = IngestionJobManager()
     return _job_manager_instance

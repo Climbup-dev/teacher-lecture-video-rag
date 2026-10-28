@@ -19,13 +19,12 @@ class DeepgramTranscriber:
         self.session.mount("http://", adapter)
 
     def _get_audio_duration(self, audio_path: Path) -> float:
-        """Probes exact audio duration in seconds using FFmpeg/imageio."""
+        """Probes exact audio duration in seconds using cached FFmpeg."""
         try:
             import subprocess
-            import shutil
-            import imageio_ffmpeg
-            ffmpeg_bin = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
-            cmd = [ffmpeg_bin, "-i", str(audio_path)]
+            from backend.audio_extractor import get_ffmpeg_binary
+            ffmpeg_bin = get_ffmpeg_binary()
+            cmd = [ffmpeg_bin, "-nostdin", "-loglevel", "error", "-i", str(audio_path)]
             res = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
             for line in res.stderr.splitlines():
                 if "Duration:" in line:
@@ -110,8 +109,8 @@ class DeepgramTranscriber:
         # Long lecture detected: Concurrent chunked transcription with timestamp preservation
         import subprocess
         import shutil
-        import imageio_ffmpeg
-        ffmpeg_bin = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
+        from backend.audio_extractor import get_ffmpeg_binary
+        ffmpeg_bin = get_ffmpeg_binary()
 
         total_chunks = int((duration + CHUNK_DURATION - 1) // CHUNK_DURATION)
         chunk_dir = path.parent / f"chunks_{path.stem}"
@@ -128,7 +127,7 @@ class DeepgramTranscriber:
 
                 chunk_file = chunk_dir / f"chunk_{idx}{path.suffix}"
                 cmd = [
-                    ffmpeg_bin, "-y",
+                    ffmpeg_bin, "-y", "-nostdin", "-loglevel", "error",
                     "-ss", str(start_s),
                     "-t", str(seg_dur),
                     "-i", str(path),
@@ -223,7 +222,7 @@ class DeepgramTranscriber:
             "Content-Type": "application/json"
         }
 
-        response = requests.post(
+        response = self.session.post(
             self.base_url,
             params=params,
             headers=headers,

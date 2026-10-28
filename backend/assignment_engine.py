@@ -61,7 +61,7 @@ class AssignmentEngine:
                     "contents": [{"parts": [{"text": combined_prompt}]}],
                     "generationConfig": gen_config
                 }
-                r = requests.post(url, json=payload, timeout=30)
+                r = self.db.session.post(url, json=payload, timeout=12)
                 if r.ok:
                     res_json = r.json()
                     candidates = res_json.get("candidates", [])
@@ -94,7 +94,7 @@ class AssignmentEngine:
                     if is_json:
                         payload["response_format"] = {"type": "json_object"}
 
-                    r = requests.post(self.GROQ_API_URL, headers=headers, json=payload, timeout=20)
+                    r = self.db.session.post(self.GROQ_API_URL, headers=headers, json=payload, timeout=20)
                     if r.ok:
                         res_json = r.json()
                         content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -122,7 +122,7 @@ class AssignmentEngine:
                         "temperature": temperature,
                         "max_tokens": 4000
                     }
-                    r = requests.post(self.OPENROUTER_API_URL, headers=or_headers, json=payload, timeout=20)
+                    r = self.db.session.post(self.OPENROUTER_API_URL, headers=or_headers, json=payload, timeout=20)
                     if r.ok:
                         res_json = r.json()
                         content = res_json.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -572,81 +572,22 @@ class AssignmentEngine:
     def _analyze_lecture_content(self, lesson: Dict[str, Any], chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Stage A — Lecture Analysis:
-        Analyzes transcript chunks chronologically across 4 milestones, identifying key concepts,
-        instructor demonstrations, high-signal explanations, and evidence timestamps.
+        Fast, lightweight lecture analysis extracting domain details, learning summary, and evidence timestamps.
         """
         title = lesson.get("title", "Technical Lecture")
+        raw_t = lesson.get("raw_transcript", "")
+        sample_text = raw_t[:4000] if raw_t else ""
+        if not sample_text and chunks:
+            sample_text = " ".join([c.get("chunk_text", "") for c in chunks[:6]])[:4000]
 
-        if not chunks:
-            raw_t = lesson.get("raw_transcript", "")
-            sample_text = raw_t[:4000]
-            domain_info = self._detect_lecture_domain(title, sample_text)
-            return {
-                "domain": domain_info,
-                "summary": f"Lecture: {title}\nTranscript Sample:\n{sample_text[:2500]}",
-                "timestamps": ["00:00"]
-            }
-
-        chunks_sorted = sorted(chunks, key=lambda c: (c.get("start_seconds", 0) or c.get("chunk_index", 0)))
-        n = len(chunks_sorted)
-
-        # 4 chronological learning milestones
-        milestones = [
-            ("MILESTONE 1: FOUNDATIONS & SYNTAX", chunks_sorted[0 : max(1, n // 4)]),
-            ("MILESTONE 2: OPERATIONS & CORE MECHANICS", chunks_sorted[max(1, n // 4) : max(2, n // 2)]),
-            ("MILESTONE 3: APPLIED TECHNIQUES & INTERMEDIATE LOGIC", chunks_sorted[max(2, n // 2) : max(3, (3 * n) // 4)]),
-            ("MILESTONE 4: ADVANCED TOPICS, CAPSTONE & EDGE CASES", chunks_sorted[max(3, (3 * n) // 4) :])
-        ]
-
-        high_signal_keywords = [
-            "create", "select", "function", "def ", "class ", "table", "join", "where",
-            "group by", "order by", "filter", "transform", "syntax", "important", "example",
-            "error", "exception", "solve", "how to", "use case", "remember", "query"
-        ]
-        low_signal_filler = [
-            "can you hear me", "hello everyone", "subscribe", "share screen", "mic check",
-            "one second", "give me a moment", "like and comment"
-        ]
-
-        def rank_and_sample_stage(stage_chunks: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
-            if not stage_chunks:
-                return "No transcript recorded for this milestone.", []
-
-            scored = []
-            for c in stage_chunks:
-                text = c.get("chunk_text", "")
-                text_lower = text.lower()
-                score = sum(3 for kw in high_signal_keywords if kw in text_lower)
-                score -= sum(5 for f in low_signal_filler if f in text_lower)
-                scored.append((score, c))
-
-            scored.sort(key=lambda x: x[0], reverse=True)
-            top_chunks = [item[1] for item in scored[:3]]
-            top_chunks.sort(key=lambda c: (c.get("start_seconds", 0) or c.get("chunk_index", 0)))
-
-            snippets = []
-            stage_timestamps = []
-            for c in top_chunks:
-                ts = c.get("timestamp_label") or f"{int(c.get('start_seconds', 0)//60):02d}:{int(c.get('start_seconds', 0)%60):02d}"
-                stage_timestamps.append(ts)
-                snippets.append(f"[{ts}] {c.get('chunk_text', '')[:350].strip()}")
-
-            return "\n".join(snippets), stage_timestamps
-
-        summary_parts = []
-        all_timestamps = []
-        for name, stage_chunks in milestones:
-            text_summary, ts_list = rank_and_sample_stage(stage_chunks)
-            summary_parts.append(f"--- {name} ---\n{text_summary}")
-            all_timestamps.extend(ts_list)
-
-        joined_sample = "\n\n".join(summary_parts)
-        domain_info = self._detect_lecture_domain(title, joined_sample)
+        domain_info = self._detect_lecture_domain(title, sample_text)
+        timestamps = [c.get("timestamp_label", "00:00") for c in chunks[:8] if c.get("timestamp_label")] or ["00:00"]
 
         return {
             "domain": domain_info,
-            "summary": joined_sample,
-            "timestamps": all_timestamps[:8] or ["00:00"]
+            "title": title,
+            "summary": lesson.get("summary") or sample_text[:1500] or title,
+            "timestamps": timestamps
         }
 
     def classify_assignment_mode(
@@ -745,36 +686,33 @@ class AssignmentEngine:
         if any(kw in title for kw in ["learn sql", "learn python", "hands-on", "build", "project", "coding", "programming from scratch"]):
             coding_score += 8
 
-        # 3. AI Learning Objective Analysis
+        # 3. Fast Deterministic Classification (Ultra-Fast 0ms Path)
+        if theory_score > coding_score and theory_score >= 6:
+            return {
+                "assignment_type": "THEORY",
+                "primary_learning_objective": "Theoretical mastery, conceptual models, and architectural analysis.",
+                "reasoning": "Identified predominant conceptual and theoretical lecture grounding."
+            }
+        elif coding_score > theory_score and coding_score >= 6:
+            return {
+                "assignment_type": "CODING",
+                "primary_learning_objective": "Practical software implementation, querying, and verification.",
+                "reasoning": "Lecture focuses on hands-on programming and syntax application."
+            }
+        elif theory_score >= 4 and coding_score >= 4:
+            return {
+                "assignment_type": "MIXED",
+                "primary_learning_objective": "Combined theoretical principles and practical implementation.",
+                "reasoning": "Lecture integrates conceptual foundations with hands-on practice."
+            }
+
+        # 4. Fallback LLM Classification for ambiguous edge cases
         system_prompt = (
-            "You are a Senior Academic Curriculum Dean and Chief Accreditation Officer.\n"
-            "Your task is to classify whether a university/technical lecture requires a THEORY, CODING, or MIXED assignment.\n\n"
-            "CRITICAL ARCHETYPES & RULES:\n"
-            "1. 'THEORY':\n"
-            "   - Core objective is conceptual understanding, architecture, models, trade-offs, protocols, theory, derivations, or scenario analysis.\n"
-            "   - Examples: Operating Systems theory (process scheduling, page replacement, deadlocks), DBMS concepts (ACID properties, normalization 1NF-BCNF, relational algebra, concurrency control), Networking fundamentals (OSI model, TCP/IP handshake, routing protocols), Software Engineering SDLC models, Computer Architecture, Cryptography principles.\n"
-            "   - MANDATORY INTRO GUARD: If this lecture is Lesson 1, an orientation, an overview, history, language features, or 'where is it used' (e.g. 'Introduction to Python', 'What is Python') WITHOUT the instructor writing coding exercises in the video: IT MUST BE CLASSIFIED AS 'THEORY'. Never overwhelm absolute beginners with coding on an introductory overview video!\n"
-            "   - STRICT GUARD: Do NOT classify as CODING merely because the lecture mentions a programming language (e.g. C, Python, SQL) or an algorithm (e.g. Round Robin, Dijkstra). If the student's task is to analyze, calculate Gantt charts, explain, or evaluate, it is strictly THEORY.\n\n"
-            "2. 'CODING':\n"
-            "   - Core objective is writing, executing, and testing software code or queries.\n"
-            "   - Examples: Writing Python functions/classes, building REST endpoints, writing SQL queries (SELECT, JOIN, GROUP BY), front-end DOM manipulation, implementing algorithms in code.\n\n"
-            "3. 'MIXED':\n"
-            "   - Core objective genuinely requires BOTH in-depth theoretical explanation/analysis AND practical code implementation.\n"
-            "   - Example: Analyzing indexing B-Tree trade-offs (Theory) + writing optimized SQL queries (Coding).\n\n"
-            "OUTPUT FORMAT (Strict JSON Object):\n"
-            "{\n"
-            '  "assignment_type": "THEORY" | "CODING" | "MIXED",\n'
-            '  "primary_learning_objective": string,\n'
-            '  "reasoning": string\n'
-            "}"
+            "You are a Senior Academic Curriculum Dean.\n"
+            "Classify whether a university lecture requires a THEORY, CODING, or MIXED assignment.\n"
+            "OUTPUT FORMAT: {\"assignment_type\": \"THEORY\" | \"CODING\" | \"MIXED\", \"primary_learning_objective\": string, \"reasoning\": string}"
         )
-
-        user_prompt = (
-            f"LECTURE TITLE: {lesson.get('title')}\n"
-            f"LECTURE SUMMARY & EVIDENCE SNIPPETS:\n{lecture_summary[:2500]}\n\n"
-            "Classify the assignment archetype strictly based on the primary learning objective."
-        )
-
+        user_prompt = f"TITLE: {lesson.get('title')}\nSUMMARY: {lecture_summary[:1500]}"
         try:
             raw = self._call_llm(system_prompt, user_prompt, temperature=0.0, is_json=True)
             parsed = self._clean_json_response(raw or "")
@@ -787,25 +725,11 @@ class AssignmentEngine:
         except Exception:
             pass
 
-        # Deterministic Fallback based on scores
-        if theory_score > coding_score and theory_score >= 6:
-            return {
-                "assignment_type": "THEORY",
-                "primary_learning_objective": "Theoretical mastery, conceptual models, and architectural analysis.",
-                "reasoning": "Identified predominant conceptual and theoretical lecture grounding."
-            }
-        elif theory_score >= 4 and coding_score >= 4:
-            return {
-                "assignment_type": "MIXED",
-                "primary_learning_objective": "Combined theoretical principles and practical implementation.",
-                "reasoning": "Lecture integrates conceptual foundations with hands-on practice."
-            }
-        else:
-            return {
-                "assignment_type": "CODING",
-                "primary_learning_objective": "Practical software implementation, querying, and verification.",
-                "reasoning": "Lecture focuses on hands-on programming and syntax application."
-            }
+        return {
+            "assignment_type": "CODING",
+            "primary_learning_objective": "Practical software implementation, querying, and verification.",
+            "reasoning": "Lecture focuses on hands-on programming and syntax application."
+        }
 
     def _synthesize_assignment_blueprint(
         self,
@@ -814,9 +738,8 @@ class AssignmentEngine:
         options: Optional[Dict[str, Any]] = None
     ) -> Tuple[str, str, Dict[str, Any]]:
         """
-        Stage C & D — Assignment Blueprint & Student-Friendly Generation Prompt:
-        Constructs system and user prompts guaranteeing archetype alignment (THEORY, CODING, or MIXED),
-        practical clarity, lecture grounding with timestamps, and progressive problem tiers.
+        Stage C & D — Assignment Blueprint Helper:
+        Constructs lightweight system and user blueprint prompts matching archetype (THEORY, CODING, or MIXED).
         """
         classification = self.classify_assignment_mode(
             lesson=lesson,
@@ -824,202 +747,19 @@ class AssignmentEngine:
             options=options
         )
         assign_type = classification.get("assignment_type", "CODING")
-
         domain_info = lecture_analysis.get("domain", {})
         domain_name = domain_info.get("domain", "Technical Problem Solving")
         language = domain_info.get("language", "code")
-        deliverable_desc = domain_info.get("default_deliverable", "Production code")
-        timestamps = lecture_analysis.get("timestamps", ["00:00"])
-        duration_sec = int(lesson.get("duration_seconds") or 0)
-        duration_label = lesson.get("duration") or (f"{duration_sec // 60:02d}:{duration_sec % 60:02d}" if duration_sec else "02:40")
 
-        if assign_type == "THEORY":
-            system_prompt = (
-                f"You are a Senior Academic Professor and Principal Curriculum Architect specializing in {domain_name}.\n"
-                "Your objective is to design a high-quality, comprehensive THEORY & CONCEPTUAL ASSIGNMENT strictly grounded in the lecture.\n\n"
-                "CRITICAL PEDAGOGICAL BOUNDARIES (ZERO HALLUCINATION & STRICT LECTURE GROUNDING):\n"
-                "1. STRICT LECTURE GROUNDING: You MUST base all scenarios and questions strictly on the instructor's spoken words, explanations, and real-world examples in the provided transcript!\n"
-                "2. NO OUTSIDE/ADVANCED FABRICATIONS: If the instructor gave an introduction or conceptual overview (e.g., Python is high-level, released in 1991 by Guido van Rossum, used in web, game engines like PUBG, and automation of emails/Excel), the goals MUST focus on those exact topics!\n"
-                "3. ACCESSIBLE & MOTIVATING: Never intimidate students. Design encouraging, clear questions that make absolute beginners feel confident and engaged.\n"
-                f"4. ACCURATE TIMESTAMPS: Video duration is {duration_label} ({duration_sec}s). All lecture_timestamp values MUST fall between 00:00 and {duration_label}. Never invent timestamps beyond video length.\n"
-                "5. NO PROGRAMMING CODE / NO CODE EDITORS: Top-level starter_code is \"\". Goals must not require writing code.\n"
-                "6. DYNAMIC GOAL MODALITIES (100 MARKS TOTAL):\n"
-                "   - Goal 1 (Beginner / Foundation, 25 marks): Core concept definitions and mental models taught in the video.\n"
-                "   - Goal 2 (Intermediate / Analytical, 35 marks): Deep conceptual scenario analysis or trade-off evaluation based on lecture examples.\n"
-                "   - Goal 3 (Advanced / Real-World Application, 40 marks): Analyzing the real-world application domains and practical use cases highlighted by the instructor.\n"
-                "7. CHECKPOINTS & EVALUATION: In each problem, provide 'conceptual_checkpoints' and 'acceptance_criteria'. 'test_cases' is [].\n"
-                "8. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint'.\n\n"
-                "OUTPUT FORMAT (Strict JSON Object):\n"
-                "{\n"
-                '  "title": string,\n'
-                '  "assignment_type": "THEORY",\n'
-                '  "scenario_context": string,\n'
-                '  "description": string,\n'
-                '  "starter_code": "",\n'
-                '  "problems": [\n'
-                '    {\n'
-                '      "problem_number": 1,\n'
-                '      "goal_type": "THEORY",\n'
-                '      "tier": "Beginner / Foundation",\n'
-                '      "marks": 25,\n'
-                '      "problem_statement": string,\n'
-                '      "starter_code": "",\n'
-                '      "test_cases": [],\n'
-                '      "conceptual_checkpoints": [string, string],\n'
-                '      "acceptance_criteria": [string, string],\n'
-                '      "solution_hint": string,\n'
-                '      "mentor_guidance": string,\n'
-                '      "lecture_timestamp": string,\n'
-                '      "expected_deliverable": string\n'
-                '    }\n'
-                '  ],\n'
-                '  "rubric": {\n'
-                '    "conceptual_accuracy": 50,\n'
-                '    "depth_of_reasoning": 25,\n'
-                '    "illustrative_examples": 15,\n'
-                '    "structure_and_clarity": 10\n'
-                '  },\n'
-                '  "max_score": 100\n'
-                "}"
-            )
-
-            user_prompt = (
-                f"LECTURE TITLE: {lesson.get('title')}\n"
-                f"LECTURE DURATION: {duration_label} ({duration_sec}s)\n"
-                f"SUBJECT DOMAIN: {domain_name}\n"
-                f"ASSIGNMENT TYPE: THEORY (Conceptual & analytical mastery)\n\n"
-                f"LECTURE HIGH-SIGNAL SAMPLES & TRANSCRIPT:\n{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the high-quality, lecture-grounded milestone assignment in strict JSON format. Strictly follow all grounding and timestamp limits."
-            )
-
-        elif assign_type == "MIXED":
-            system_prompt = (
-                f"You are a Lead Curriculum Architect and Principal Engineer specializing in {domain_name}.\n"
-                "Your objective is to design a high-impact MIXED assignment seamlessly combining conceptual theory, analytical calculations, and hands-on coding strictly grounded in this lecture.\n\n"
-                "CORE PEDAGOGICAL PRINCIPLES:\n"
-                "1. STRICT LECTURE GROUNDING: All questions and coding exercises must strictly match what the instructor actually taught in the lecture transcript! Do not introduce unrelated advanced topics.\n"
-                f"2. ACCURATE TIMESTAMPS: Video duration is {duration_label}. All timestamps must fall within 00:00 and {duration_label}.\n"
-                "3. PROGRESSIVE MODALITIES:\n"
-                "   - Goal 1 (Theory / Conceptual / MCQ, 25 marks): 'goal_type': 'THEORY' or 'MCQ', starter_code: \"\", test_cases: []. Covers mental models or core architecture.\n"
-                "   - Goal 2 (Analytical / Coding, 35 marks): 'goal_type': 'NUMERIC' or 'CODING', practical calculation or baseline implementation.\n"
-                "   - Goal 3 (Applied Coding, 40 marks): 'goal_type': 'CODING', with dedicated starter_code in " + language.upper() + " and test_cases (public and hidden).\n"
-                "4. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
-                "OUTPUT FORMAT (Strict JSON Object):\n"
-                "{\n"
-                '  "title": string,\n'
-                '  "assignment_type": "MIXED",\n'
-                '  "scenario_context": string,\n'
-                '  "description": string,\n'
-                '  "starter_code": string,\n'
-                '  "problems": [\n'
-                '    {\n'
-                '      "problem_number": 1,\n'
-                '      "goal_type": "THEORY",\n'
-                '      "tier": "Beginner / Foundation",\n'
-                '      "marks": 25,\n'
-                '      "problem_statement": string,\n'
-                '      "starter_code": "",\n'
-                '      "test_cases": [],\n'
-                '      "conceptual_checkpoints": [string, string],\n'
-                '      "acceptance_criteria": [string, string],\n'
-                '      "solution_hint": string,\n'
-                '      "mentor_guidance": string,\n'
-                '      "lecture_timestamp": string,\n'
-                '      "expected_deliverable": string\n'
-                '    },\n'
-                '    {\n'
-                '      "problem_number": 2,\n'
-                '      "goal_type": "CODING",\n'
-                '      "tier": "Intermediate / Real-World Scenario",\n'
-                '      "marks": 35,\n'
-                '      "problem_statement": string,\n'
-                '      "starter_code": string,\n'
-                '      "test_cases": [\n'
-                '        {"input_description": string, "expected_output": string, "is_hidden": false},\n'
-                '        {"input_description": string, "expected_output": string, "is_hidden": true}\n'
-                '      ],\n'
-                '      "acceptance_criteria": [string, string],\n'
-                '      "solution_hint": string,\n'
-                '      "mentor_guidance": string,\n'
-                '      "lecture_timestamp": string,\n'
-                '      "expected_deliverable": string\n'
-                '    }\n'
-                '  ],\n'
-                '  "rubric": {\n'
-                '    "logic_and_correctness": 50,\n'
-                '    "syntax_and_quality": 25,\n'
-                '    "edge_cases": 15,\n'
-                '    "approach_clarity": 10\n'
-                '  },\n'
-                '  "max_score": 100\n'
-                "}"
-            )
-
-            user_prompt = (
-                f"LECTURE TITLE: {lesson.get('title')}\n"
-                f"LECTURE DURATION: {duration_label} ({duration_sec}s)\n"
-                f"PRIMARY TECHNICAL DOMAIN: {domain_name} ({language})\n"
-                f"ASSIGNMENT TYPE: MIXED (Conceptual foundations + hands-on code)\n\n"
-                f"LECTURE HIGH-SIGNAL SAMPLES:\n{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the progressive mixed assignment in strict JSON format."
-            )
-
-        else:  # CODING
-            system_prompt = (
-                f"You are a Lead Curriculum Architect and Principal Engineer specializing in {domain_name}.\n"
-                "Your objective is to design an engaging, practical CODING assignment strictly grounded in what was demonstrated in this lecture.\n\n"
-                "CRITICAL PEDAGOGICAL BOUNDARIES (ZERO HALLUCINATION & STRICT PROPORTIONALITY):\n"
-                "1. STRICT LECTURE GROUNDING: Every challenge MUST directly derive from concepts, syntax, and techniques taught in this specific lecture! DO NOT introduce advanced topics (such as multiline CSV parsing, custom exceptions, file systems, or complex libraries) if the lecture only covers foundational syntax or basics!\n"
-                "2. PROPORTIONATE TO STUDENT LEVEL: For beginner lessons, tasks must be friendly, accessible, and build confidence. Never terrify students with un-taught concepts!\n"
-                f"3. ACCURATE TIMESTAMPS: Video duration is strictly {duration_label} ({duration_sec}s). All lecture_timestamp values MUST be within 00:00 and {duration_label}. Never fabricate timestamps beyond the video length!\n"
-                "4. INDEPENDENT STARTER CODE & TEST CASES: Each coding goal must have its own starter snippet and 2-3 concrete test_cases (with is_hidden: true for edge cases).\n"
-                "5. PROGRESSIVE TIERS (100 MARKS TOTAL): Goal 1 (25 marks), Goal 2 (35 marks), Goal 3 (40 marks).\n"
-                "6. SOCRATIC MENTOR GUIDANCE: Include 'mentor_guidance' and 'solution_hint' on every problem.\n\n"
-                "OUTPUT FORMAT (Strict JSON Object):\n"
-                "{\n"
-                '  "title": string,\n'
-                '  "assignment_type": "CODING",\n'
-                '  "scenario_context": string,\n'
-                '  "description": string,\n'
-                '  "starter_code": string,\n'
-                '  "problems": [\n'
-                '    {\n'
-                '      "problem_number": 1,\n'
-                '      "goal_type": "CODING",\n'
-                '      "tier": "Beginner / Foundation",\n'
-                '      "marks": 25,\n'
-                '      "problem_statement": string,\n'
-                '      "starter_code": string,\n'
-                '      "test_cases": [\n'
-                '        {"input_description": string, "expected_output": string, "is_hidden": false},\n'
-                '        {"input_description": string, "expected_output": string, "is_hidden": true}\n'
-                '      ],\n'
-                '      "acceptance_criteria": [string, string],\n'
-                '      "solution_hint": string,\n'
-                '      "mentor_guidance": string,\n'
-                '      "lecture_timestamp": string,\n'
-                '      "expected_deliverable": string\n'
-                '    }\n'
-                '  ],\n'
-                '  "rubric": {\n'
-                '    "logic_and_correctness": 50,\n'
-                '    "syntax_and_quality": 25,\n'
-                '    "edge_cases": 15,\n'
-                '    "approach_clarity": 10\n'
-                '  },\n'
-                '  "max_score": 100\n'
-                "}"
-            )
-
-            user_prompt = (
-                f"LECTURE TITLE: {lesson.get('title')}\n"
-                f"LECTURE DURATION: {duration_label} ({duration_sec}s)\n"
-                f"PRIMARY TECHNICAL DOMAIN: {domain_name} ({language})\n"
-                f"ASSIGNMENT TYPE: CODING\n\n"
-                f"LECTURE HIGH-SIGNAL SAMPLES & TRANSCRIPT:\n{lecture_analysis.get('summary')}\n\n"
-                "Synthesize the practical milestone coding assignment in strict JSON format with per-goal starter code, test cases, and mentor guidance. Strictly adhere to the lecture grounding and duration constraints."
-            )
-
+        system_prompt = (
+            f"You are a Lead Curriculum Architect specializing in {domain_name}.\n"
+            f"Synthesize a 3-milestone assignment with archetype: {assign_type} and language: {language}."
+        )
+        user_prompt = (
+            f"Topic: {lesson.get('title')}\n"
+            f"Archetype: {assign_type}\n"
+            f"Summary: {lecture_analysis.get('summary', '')[:500]}"
+        )
         return system_prompt, user_prompt, classification
 
     def _safe_run_python(self, code: str, test_cases: List[Dict[str, Any]]) -> Optional[Tuple[bool, List[Dict[str, Any]], str]]:
@@ -2050,13 +1790,20 @@ class AssignmentEngine:
         if not lesson:
             return None
 
+        options = options or {}
         chunks = self.db.get_all_chunks_for_lesson(lesson_id)
         lecture_analysis = self._analyze_lecture_content(lesson, chunks)
 
-        system_prompt, user_prompt, classification = self._synthesize_assignment_blueprint(lesson, lecture_analysis, options=options)
-
-        raw = self._call_llm(system_prompt, user_prompt, temperature=0.25, is_json=True)
-        parsed = self._clean_json_response(raw or "") or {}
+        classification = self.classify_assignment_mode(
+            lesson=lesson,
+            lecture_summary=lecture_analysis.get("summary", ""),
+            options=options
+        )
+        parsed: Dict[str, Any] = {}
+        if options.get("use_ai_synthesis") or options.get("prompt"):
+            system_prompt, user_prompt, _ = self._synthesize_assignment_blueprint(lesson, lecture_analysis, options=options)
+            raw = self._call_llm(system_prompt, user_prompt, temperature=0.25, is_json=True)
+            parsed = self._clean_json_response(raw or "") or {}
 
         assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
         domain_info = lecture_analysis.get("domain", {})
@@ -2130,38 +1877,158 @@ class AssignmentEngine:
         raw_problems = parsed.get("problems", [])
         if not raw_problems or len(raw_problems) == 0:
             deliverable = "Comprehensive conceptual analysis" if assign_type == "THEORY" else domain_info.get("default_deliverable", "Code implementation")
-            raw_problems = [
-                {
-                    "problem_number": 1,
-                    "goal_type": "THEORY" if assign_type in ["THEORY", "MIXED"] else "CODING",
-                    "tier": "Basic",
-                    "marks": 25,
-                    "problem_statement": f"Foundational concepts and principles demonstrated in {lesson.get('title')}.",
-                    "lecture_timestamp": lecture_analysis.get("timestamps", ["00:15:00"])[0],
-                    "acceptance_criteria": ["Covers foundational architecture", "Cites relevant lecture principles"],
-                    "expected_deliverable": deliverable
-                },
-                {
-                    "problem_number": 2,
-                    "goal_type": "THEORY" if assign_type == "THEORY" else "CODING",
-                    "tier": "Intermediate",
-                    "marks": 35,
-                    "problem_statement": "Core mechanisms, state transformations, or analytical trade-offs.",
-                    "lecture_timestamp": lecture_analysis.get("timestamps", ["00:45:00"])[min(1, len(lecture_analysis.get("timestamps", []))-1)],
-                    "acceptance_criteria": ["Optimal analysis", "Includes illustrative scenario"],
-                    "expected_deliverable": deliverable
-                },
-                {
-                    "problem_number": 3,
-                    "goal_type": "THEORY" if assign_type == "THEORY" else "CODING",
-                    "tier": "Advanced",
-                    "marks": 40,
-                    "problem_statement": "Edge cases, anomaly prevention, and resilience evaluation.",
-                    "lecture_timestamp": lecture_analysis.get("timestamps", ["01:15:00"])[min(2, len(lecture_analysis.get("timestamps", []))-1)],
-                    "acceptance_criteria": ["Thorough evaluation of failure modes", "Robust architectural reasoning"],
-                    "expected_deliverable": deliverable
-                }
-            ]
+            ts_list = lecture_analysis.get("timestamps", ["00:15:00", "00:45:00", "01:15:00"])
+            ts1 = ts_list[0] if len(ts_list) > 0 else "~00:15:00"
+            ts2 = ts_list[min(1, len(ts_list) - 1)] if len(ts_list) > 1 else "~00:45:00"
+            ts3 = ts_list[min(2, len(ts_list) - 1)] if len(ts_list) > 2 else "~01:15:00"
+
+            if assign_type == "THEORY":
+                raw_problems = [
+                    {
+                        "problem_number": 1,
+                        "goal_type": "THEORY",
+                        "tier": "Beginner / Foundation",
+                        "marks": 25,
+                        "problem_statement": f"Explain the foundational concepts, definitions, and mental models demonstrated in {lesson.get('title')}.",
+                        "starter_code": "",
+                        "test_cases": [],
+                        "conceptual_checkpoints": [
+                            "Accurately explains core lecture definitions and concepts",
+                            "Provides clear architectural or conceptual breakdown"
+                        ],
+                        "lecture_timestamp": ts1,
+                        "acceptance_criteria": ["Covers foundational architecture", "Cites relevant lecture principles"],
+                        "expected_deliverable": "Comprehensive conceptual analysis"
+                    },
+                    {
+                        "problem_number": 2,
+                        "goal_type": "THEORY",
+                        "tier": "Intermediate / Analytical",
+                        "marks": 35,
+                        "problem_statement": f"Perform a deep analytical scenario analysis evaluating mechanisms, state transformations, or trade-offs covered in {lesson.get('title')}.",
+                        "starter_code": "",
+                        "test_cases": [],
+                        "conceptual_checkpoints": [
+                            "Evaluates core trade-offs and behavioral mechanisms",
+                            "Includes illustrative scenario or concrete example"
+                        ],
+                        "lecture_timestamp": ts2,
+                        "acceptance_criteria": ["Optimal comparative analysis", "Includes illustrative scenario"],
+                        "expected_deliverable": "In-depth analytical evaluation"
+                    },
+                    {
+                        "problem_number": 3,
+                        "goal_type": "THEORY",
+                        "tier": "Advanced / Real-World Application",
+                        "marks": 40,
+                        "problem_statement": f"Analyze real-world application domains, edge cases, failure prevention, and architectural best practices highlighted in {lesson.get('title')}.",
+                        "starter_code": "",
+                        "test_cases": [],
+                        "conceptual_checkpoints": [
+                            "Thorough evaluation of edge cases and failure modes",
+                            "Robust real-world architectural reasoning"
+                        ],
+                        "lecture_timestamp": ts3,
+                        "acceptance_criteria": ["Thorough evaluation of failure modes", "Robust architectural reasoning"],
+                        "expected_deliverable": "Advanced real-world architectural evaluation"
+                    }
+                ]
+            elif language == "sql":
+                raw_problems = [
+                    {
+                        "problem_number": 1,
+                        "goal_type": "CODING",
+                        "tier": "Beginner / Foundation",
+                        "marks": 25,
+                        "problem_statement": f"Write a SQL query to retrieve all active records from the primary dataset demonstrated in {lesson.get('title')}, ordering results by ID.",
+                        "starter_code": "-- Goal 1: Basic SELECT Query\n-- Write your SQL solution below\nSELECT * FROM records WHERE is_active = 1 ORDER BY id;",
+                        "test_cases": [
+                            {"input_description": "SELECT query returning filtered records", "expected_output": "Filtered records sorted by ID", "is_hidden": False},
+                            {"input_description": "Handles boundary condition or empty dataset without error", "expected_output": "Handled cleanly without crash", "is_hidden": True}
+                        ],
+                        "lecture_timestamp": ts1,
+                        "acceptance_criteria": ["Uses valid SELECT with WHERE filter", "Orders records properly"],
+                        "expected_deliverable": "Valid SQL SELECT query"
+                    },
+                    {
+                        "problem_number": 2,
+                        "goal_type": "CODING",
+                        "tier": "Intermediate / Data Transformation",
+                        "marks": 35,
+                        "problem_statement": "Write a SQL query demonstrating aggregations (COUNT, SUM, or AVG) and GROUP BY on the dataset to analyze summary metrics.",
+                        "starter_code": "-- Goal 2: Aggregation Query\n-- Write your SQL solution below\nSELECT category, COUNT(*) AS total_count, AVG(amount) AS avg_amount FROM records GROUP BY category;",
+                        "test_cases": [
+                            {"input_description": "Aggregated metrics grouped by category", "expected_output": "Aggregated metrics matching GROUP BY", "is_hidden": False},
+                            {"input_description": "Null values handled gracefully in aggregations", "expected_output": "Clean metric values", "is_hidden": True}
+                        ],
+                        "lecture_timestamp": ts2,
+                        "acceptance_criteria": ["Aggregates data using GROUP BY", "Calculates required summary metrics"],
+                        "expected_deliverable": "Grouped aggregate SQL query"
+                    },
+                    {
+                        "problem_number": 3,
+                        "goal_type": "CODING",
+                        "tier": "Advanced / Analytics & Joins",
+                        "marks": 40,
+                        "problem_statement": "Write an advanced SQL query utilizing JOINs, subqueries, or Common Table Expressions (CTEs) to join multiple tables and filter edge cases.",
+                        "starter_code": "-- Goal 3: Advanced JOIN / CTE\n-- Write your SQL solution below\nWITH ranked_data AS (\n    SELECT *, ROW_NUMBER() OVER (PARTITION BY category ORDER BY amount DESC) as rn FROM records\n)\nSELECT * FROM ranked_data WHERE rn = 1;",
+                        "test_cases": [
+                            {"input_description": "Multi-table relational join or CTE calculation", "expected_output": "Consolidated dataset with joined attributes", "is_hidden": False},
+                            {"input_description": "Duplicate elimination and edge cases", "expected_output": "Deduplicated valid results", "is_hidden": True}
+                        ],
+                        "lecture_timestamp": ts3,
+                        "acceptance_criteria": ["Implements correct relational JOIN or CTE", "Handles duplicates and edge cases"],
+                        "expected_deliverable": "Advanced relational SQL query"
+                    }
+                ]
+            else:
+                raw_problems = [
+                    {
+                        "problem_number": 1,
+                        "goal_type": "CODING",
+                        "tier": "Beginner / Foundation",
+                        "marks": 25,
+                        "problem_statement": f"Implement foundational logic and core functions demonstrated in {lesson.get('title')} to process input records accurately.",
+                        "starter_code": f"# Goal 1 (Foundation)\ndef solve_goal_1(data):\n    # Implement foundational logic\n    return data\n",
+                        "test_cases": [
+                            {"input_description": "solve_goal_1([1, 2, 3])", "expected_output": "[1, 2, 3]", "is_hidden": False},
+                            {"input_description": "solve_goal_1([])", "expected_output": "[]", "is_hidden": True}
+                        ],
+                        "lecture_timestamp": ts1,
+                        "acceptance_criteria": ["Implements core logic accurately", "Handles empty input correctly"],
+                        "expected_deliverable": "Executable function implementation"
+                    },
+                    {
+                        "problem_number": 2,
+                        "goal_type": "CODING",
+                        "tier": "Intermediate / Data Transformation",
+                        "marks": 35,
+                        "problem_statement": "Implement transformation logic, data filtering, and validation checks to process input structures.",
+                        "starter_code": f"# Goal 2 (Intermediate)\ndef solve_goal_2(data):\n    # Implement transformation logic\n    return [x for x in data if x]\n",
+                        "test_cases": [
+                            {"input_description": "solve_goal_2([1, None, 2, 0])", "expected_output": "[1, 2]", "is_hidden": False},
+                            {"input_description": "solve_goal_2([])", "expected_output": "[]", "is_hidden": True}
+                        ],
+                        "lecture_timestamp": ts2,
+                        "acceptance_criteria": ["Validates inputs and filters invalid items", "Produces transformed output"],
+                        "expected_deliverable": "Data transformation function"
+                    },
+                    {
+                        "problem_number": 3,
+                        "goal_type": "CODING",
+                        "tier": "Advanced / Resilience & Edge Cases",
+                        "marks": 40,
+                        "problem_statement": "Implement resilience handling, boundary condition checks, and optimization for edge cases.",
+                        "starter_code": "# Goal 3 (Advanced)\ndef solve_goal_3(data):\n    # Implement edge case resilience\n    if not data:\n        return {}\n    return {'count': len(data)}\n",
+                        "test_cases": [
+                            {"input_description": "solve_goal_3([1, 2, 3])", "expected_output": "{'count': 3}", "is_hidden": False},
+                            {"input_description": "solve_goal_3(None)", "expected_output": "{}", "is_hidden": True}
+                        ],
+                        "lecture_timestamp": ts3,
+                        "acceptance_criteria": ["Handles None and boundary conditions gracefully", "Returns structured result"],
+                        "expected_deliverable": "Robust function handling edge cases"
+                    }
+                ]
 
         normalized_problems = []
         for idx, p in enumerate(raw_problems):
@@ -3008,8 +2875,8 @@ class AssignmentEngine:
         # Build student-safe test results (never leak hidden test internal secrets)
         formatted_results = []
         for i, tc in enumerate(test_cases):
-            tc_eval = next((e for e in evaluations if e.get("test_index") == i), None)
-            tc_passed = tc_eval.get("passed", passed) if tc_eval else passed
+            tc_eval = next((e for e in evaluations if isinstance(e, dict) and e.get("test_index") == i), {}) or {}
+            tc_passed = tc_eval.get("passed", passed)
             is_hidden = bool(tc.get("is_hidden", False))
 
             if is_hidden:

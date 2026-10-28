@@ -79,7 +79,28 @@ Config.DATA_DIR.mkdir(exist_ok=True, parents=True)
 Config.UPLOADS_DIR.mkdir(exist_ok=True, parents=True)
 Config.CHUNKS_DIR.mkdir(exist_ok=True, parents=True)
 
-def reload_config():
+_last_env_mtime = 0.0
+_last_sa_mtime = 0.0
+
+def reload_config(force: bool = False):
+    global _last_env_mtime, _last_sa_mtime
+    try:
+        current_env_mtime = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else 0.0
+    except Exception:
+        current_env_mtime = 0.0
+
+    sa_path = BASE_DIR / "service_account.json"
+    try:
+        current_sa_mtime = sa_path.stat().st_mtime if sa_path.exists() else 0.0
+    except Exception:
+        current_sa_mtime = 0.0
+
+    if not force and _last_env_mtime > 0 and current_env_mtime == _last_env_mtime and current_sa_mtime == _last_sa_mtime:
+        return
+
+    _last_env_mtime = current_env_mtime
+    _last_sa_mtime = current_sa_mtime
+
     load_dotenv(ENV_PATH, override=True)
     Config.DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
     Config.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -107,18 +128,18 @@ def reload_config():
     Config.ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
     Config.READONLY_CONFIG = os.getenv("READONLY_CONFIG", "false").lower() in ("true", "1", "yes")
     Config.CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
-    Config.MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
-    Config.MAX_RESOURCE_SIZE_MB = int(os.getenv("MAX_RESOURCE_SIZE_MB", "50"))
+    Config.MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "2500"))
+    Config.MAX_RESOURCE_SIZE_MB = int(os.getenv("MAX_RESOURCE_SIZE_MB", "100"))
     
     # pracTQ Mentor Studio Email Notification Config
-    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-    SMTP_USER = os.getenv("SMTP_USER", "")
-    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-    SMTP_FROM = os.getenv("SMTP_FROM", "pracTQ Mentor Studio <notifications@practq.com>")
-    MENTOR_EMAILS = [e.strip() for e in os.getenv("MENTOR_EMAILS", "amirshaikh320340@gmail.com").split(",") if e.strip()]
-    if not Config.GOOGLE_CREDENTIALS_JSON and (Config.BASE_DIR / "service_account.json").exists():
+    Config.SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    Config.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+    Config.SMTP_USER = os.getenv("SMTP_USER", "")
+    Config.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    Config.SMTP_FROM = os.getenv("SMTP_FROM", "pracTQ Mentor Studio <notifications@practq.com>")
+    Config.MENTOR_EMAILS = [e.strip() for e in os.getenv("MENTOR_EMAILS", "amirshaikh320340@gmail.com").split(",") if e.strip()]
+    if not Config.GOOGLE_CREDENTIALS_JSON and sa_path.exists():
         try:
-            Config.GOOGLE_CREDENTIALS_JSON = (Config.BASE_DIR / "service_account.json").read_text(encoding="utf-8")
+            Config.GOOGLE_CREDENTIALS_JSON = sa_path.read_text(encoding="utf-8")
         except Exception:
             pass

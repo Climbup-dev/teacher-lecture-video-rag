@@ -1,3 +1,4 @@
+import os
 import json
 import uuid
 import threading
@@ -84,15 +85,34 @@ class DBAdapter:
                 if seed_file.exists():
                     try:
                         with open(seed_file, "r", encoding="utf-8") as sf:
-                            return json.load(sf)
+                            seed = json.load(sf)
+                            if "jobs" not in seed or not isinstance(seed["jobs"], dict):
+                                seed["jobs"] = {}
+                            return seed
                     except Exception:
                         pass
                 return {"courses": {}, "lessons": {}, "chunks": [], "jobs": {}, "chat_sessions": {}, "chat_messages": []}
 
     def _write_local_store(self, data: Dict[str, Any]):
         with self._store_lock:
-            with open(self.storage_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+            if not isinstance(data, dict):
+                data = {}
+            if "jobs" not in data or not isinstance(data["jobs"], dict):
+                data["jobs"] = {}
+            if "lessons" not in data or not isinstance(data["lessons"], dict):
+                data["lessons"] = {}
+            # Atomic file write to avoid reading truncated JSON mid-write across threads
+            temp_path = self.storage_file.with_name(f"{self.storage_file.name}.{os.getpid()}.tmp")
+            try:
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(temp_path, self.storage_file)
+            except Exception:
+                try:
+                    with open(self.storage_file, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+                except Exception as e:
+                    print(f"[DBAdapter] Notice on writing local store: {e}")
 
     def ensure_course_exists(self, course_id: str, title: str = "Applied AI & GenAI"):
         """Ensures the parent course exists in Supabase to satisfy foreign key constraints."""
@@ -319,7 +339,8 @@ class DBAdapter:
                     "raw_transcript": (raw_transcript or "")[:25000],
                     "structured_notes": structured_notes or {},
                     "chapters": chapters or [],
-                    "processing_status": processing_status,
+                    # Supabase course_lessons constraint strictly validates allowed values ('ready')
+                    "processing_status": "ready",
                     "display_order": 1,
                     "is_free_preview": True
                 }

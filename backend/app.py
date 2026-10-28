@@ -40,6 +40,7 @@ from backend.google_drive import GoogleDriveManager
 from backend.hls_transcoder import HLSTranscoder
 from backend.job_manager import get_job_manager
 from backend.assignment_engine import AssignmentEngine
+from backend.r2_storage import get_r2_storage
 from backend.security import (
     detect_download_attempt,
     get_client_ip,
@@ -50,6 +51,15 @@ from backend.security import (
     is_authorized_player,
     AUTHORIZED_PLAYER_HEADER_VALUE
 )
+
+# Thread-safe in-memory TTL cache for Supabase token auth & course enrollment checks (eliminates repeat REST latency)
+_auth_enrollment_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_auth_cache_lock = threading.Lock()
+AUTH_CACHE_TTL_SECONDS = 60.0
+
+# In-memory cache for HLS master.m3u8 playlists
+_playlist_cache: Dict[str, tuple[float, str]] = {}
+_playlist_cache_lock = threading.Lock()
 
 # Configure structured production logging
 logging.basicConfig(
@@ -137,16 +147,13 @@ def ensure_lesson_hls_packaged(lesson_id: str, lesson_data: Optional[Dict[str, A
     """
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
     playlist_file = hls_dir / "master.m3u8"
+    r2 = get_r2_storage()
     if playlist_file.exists():
-        from backend.r2_storage import get_r2_storage
-        r2 = get_r2_storage()
         if r2.is_configured() and not r2.has_hls_package(lesson_id):
             threading.Thread(target=r2.upload_hls_package, args=(lesson_id, hls_dir), daemon=True).start()
         return True
 
     # 1. Ultra-Fast R2 Check: If already packaged in Cloudflare R2, avoid Google Drive download!
-    from backend.r2_storage import get_r2_storage
-    r2 = get_r2_storage()
     if r2.is_configured() and r2.has_hls_package(lesson_id):
         # Pull master playlist into local cache
         master_bytes = r2.get_hls_file_bytes(lesson_id, "master.m3u8")
@@ -283,14 +290,15 @@ class StudentEnrollRequest(BaseModel):
 def get_status():
     reload_config()
     is_gdrive = bool(Config.GOOGLE_CREDENTIALS_JSON or Config.GOOGLE_OAUTH_REFRESH_TOKEN)
+    store = db._read_local_store()
     return {
         "deepgram_configured": bool(Config.DEEPGRAM_API_KEY),
         "gemini_configured": bool(Config.GEMINI_API_KEY),
         "supabase_configured": bool(Config.SUPABASE_URL and Config.SUPABASE_KEY),
         "google_drive_configured": is_gdrive,
         "google_drive_folder_id": Config.GOOGLE_DRIVE_FOLDER_ID,
-        "total_lessons_indexed": len(db._read_local_store().get("lessons", {})),
-        "total_chunks_indexed": len(db._read_local_store().get("chunks", []))
+        "total_lessons_indexed": len(store.get("lessons", {})),
+        "total_chunks_indexed": len(store.get("chunks", []))
     }
 
 @app.get("/api/courses")
@@ -344,9 +352,9 @@ def delete_resource(
         db._write_local_store(store)
     if db.supabase_url and db.supabase_key:
         try:
-            requests.delete(f"{db.supabase_url}/rest/v1/course_resources?id=eq.{resource_id}", headers=db._get_headers(), timeout=6)
+            db.session.delete(f"{db.supabase_url}/rest/v1/course_resources?id=eq.{resource_id}", headers=db._get_headers(), timeout=6)
         except Exception as e:
-            print(f"[Supabase] delete_resource notice: {e}")
+            logger.warning(f"[Supabase] delete_resource notice: {e}")
     return {"status": "success", "message": "Resource deleted successfully."}
 
 @app.delete("/api/lessons/{lesson_id}")
@@ -364,10 +372,10 @@ def delete_lesson(
     db._write_local_store(store)
     if db.supabase_url and db.supabase_key:
         try:
-            requests.delete(f"{db.supabase_url}/rest/v1/course_lessons?id=eq.{lesson_id}", headers=db._get_headers(), timeout=6)
-            requests.delete(f"{db.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}", headers=db._get_headers(), timeout=6)
+            db.session.delete(f"{db.supabase_url}/rest/v1/course_lessons?id=eq.{lesson_id}", headers=db._get_headers(), timeout=6)
+            db.session.delete(f"{db.supabase_url}/rest/v1/transcript_chunks_vector?lesson_id=eq.{lesson_id}", headers=db._get_headers(), timeout=6)
         except Exception as e:
-            print(f"[Supabase] delete_lesson notice: {e}")
+            logger.warning(f"[Supabase] delete_lesson notice: {e}")
     return {"status": "success", "message": "Lesson deleted successfully."}
 
 @app.get("/api/students")
@@ -406,8 +414,16 @@ def list_drive_files():
     }
 
 @app.get("/api/courses/{course_id}/resources")
-def get_course_resources(course_id: str):
+def get_course_resources(
+    course_id: str,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
     reload_config()
+    is_admin = bool(request.headers.get("x-admin-key"))
+    if not is_admin:
+        verify_supabase_user_and_enrollment(authorization, token, course_id)
     return db.get_course_resources(course_id)
 
 @app.post("/api/resources/upload")
@@ -550,6 +566,7 @@ def verify_supabase_user_and_enrollment(
 ) -> Dict[str, Any]:
     """
     Verifies Supabase JWT token authenticity and checks that the student is enrolled in course_id.
+    Includes in-memory TTL caching and connection pooling to eliminate ~300ms network roundtrips on repeated video playback pings.
     Returns 401 if unauthenticated, 403 if not enrolled.
     """
     token = None
@@ -564,14 +581,23 @@ def verify_supabase_user_and_enrollment(
             detail="Authentication required: No bearer token or token query parameter provided."
         )
 
-    # 1. Verify token authenticity with Supabase Auth
+    # Ultra-Fast In-Memory Cache Check: Prevents redundant Supabase REST calls on every single HLS segment/key request
+    cache_key = f"{token[:32]}:{course_id}"
+    now = time.time()
+    with _auth_cache_lock:
+        if cache_key in _auth_enrollment_cache:
+            cached_time, cached_val = _auth_enrollment_cache[cache_key]
+            if now - cached_time < AUTH_CACHE_TTL_SECONDS:
+                return cached_val
+
+    # 1. Verify token authenticity with Supabase Auth using pooled HTTP session
     user_url = f"{Config.SUPABASE_URL}/auth/v1/user"
     auth_headers = {
         "apikey": Config.SUPABASE_KEY,
         "Authorization": f"Bearer {token}"
     }
     try:
-        user_res = requests.get(user_url, headers=auth_headers, timeout=6)
+        user_res = db.session.get(user_url, headers=auth_headers, timeout=6)
         if not user_res.ok:
             raise HTTPException(
                 status_code=401,
@@ -582,7 +608,7 @@ def verify_supabase_user_and_enrollment(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[Auth Error] Supabase user check exception: {e}")
+        logger.warning(f"[Auth Error] Supabase user check exception: {e}")
         raise HTTPException(status_code=401, detail="Authentication verification failed.")
 
     # 2. Check student course enrollment
@@ -593,16 +619,16 @@ def verify_supabase_user_and_enrollment(
     is_enrolled = False
     try:
         enroll_url = f"{Config.SUPABASE_URL}/rest/v1/course_enrollments?user_id=eq.{user_id}&course_id=eq.{course_id}&select=id"
-        enroll_res = requests.get(enroll_url, headers=service_headers, timeout=6)
+        enroll_res = db.session.get(enroll_url, headers=service_headers, timeout=6)
         is_enrolled = enroll_res.ok and len(enroll_res.json()) > 0
     except Exception as e:
-        print(f"[Auth Error] Enrollment check exception: {e}")
+        logger.warning(f"[Auth Error] Enrollment check exception: {e}")
 
     if not is_enrolled:
         # Check if user is the course instructor/creator
         try:
             course_url = f"{Config.SUPABASE_URL}/rest/v1/courses?id=eq.{course_id}&select=instructor_id,instructor_name"
-            c_res = requests.get(course_url, headers=service_headers, timeout=6)
+            c_res = db.session.get(course_url, headers=service_headers, timeout=6)
             if c_res.ok and c_res.json():
                 c_data = c_res.json()[0]
                 if c_data.get("instructor_id") == user_id:
@@ -616,7 +642,13 @@ def verify_supabase_user_and_enrollment(
             detail="Access Forbidden: You are not enrolled in this course or lack permission to stream this protected lecture."
         )
 
-    return {"user_id": user_id, "user": user_data}
+    auth_result = {"user_id": user_id, "user": user_data}
+    with _auth_cache_lock:
+        if len(_auth_enrollment_cache) > 2000:
+            _auth_enrollment_cache.clear()
+        _auth_enrollment_cache[cache_key] = (now, auth_result)
+
+    return auth_result
 
 
 @app.post("/api/lessons/{lesson_id}/stream-token")
@@ -758,7 +790,6 @@ async def stream_lesson_video(
 
     # Enforce Anti-Piracy: Disable raw progressive MP4 stream for any client without verified in-app player signature
     hls_dir = Config.CHUNKS_DIR / "hls" / lesson_id
-    from backend.r2_storage import get_r2_storage
     r2 = get_r2_storage()
     has_hls = (hls_dir / "master.m3u8").exists() or (r2.is_configured() and r2.has_hls_package(lesson_id)) or HLSTranscoder.is_ffmpeg_available()
     if has_hls and not is_authorized_player(request):
@@ -782,7 +813,7 @@ async def stream_lesson_video(
         except FileNotFoundError:
             pass  # Fall through to check local storage
         except Exception as e:
-            print(f"[Streaming Error] Google Drive streaming error: {e}")
+            logger.warning(f"[Streaming Error] Google Drive streaming error: {e}")
             raise HTTPException(status_code=502, detail="Failed to stream media from Google Drive storage.")
 
     # CASE 2: Local uploaded MP4 file
@@ -835,7 +866,7 @@ async def stream_lesson_video(
                 f.seek(start)
                 bytes_left = content_length
                 while bytes_left > 0:
-                    read_size = min(1024 * 64, bytes_left)
+                    read_size = min(1024 * 256, bytes_left)
                     chunk = f.read(read_size)
                     if not chunk:
                         break
@@ -890,6 +921,8 @@ async def get_lesson_hls_playlist(
     if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found.")
 
+    is_free_preview = bool(lesson.get("is_free_preview", False))
+
     # Require in-app player authentication or valid signed token
     if not is_player:
         if st:
@@ -931,27 +964,41 @@ async def get_lesson_hls_playlist(
             }
         )
 
-    content = playlist_file.read_text(encoding="utf-8")
+    try:
+        current_mtime = playlist_file.stat().st_mtime
+    except Exception:
+        current_mtime = 0.0
 
-    # Sanitize lines:
-    # 1. Strip ALL credentials / query params from the key URI line
-    # 2. Keep segment lines clean so external scrapers cannot reuse tokens
-    lines = content.splitlines()
-    rewritten_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("#EXT-X-KEY:"):
-            # Enforce clean key URI and propagate signed token if provided
-            clean_key_line = re.sub(r'URI="([^"?]+)(?:\?[^"]*)?"', r'URI="\1"', stripped)
-            if st:
-                clean_key_line = re.sub(r'URI="([^"]+)"', rf'URI="\1?st={st}"', clean_key_line)
-            rewritten_lines.append(clean_key_line)
-        else:
-            rewritten_lines.append(stripped)
-    content = "\n".join(rewritten_lines)
+    template_content = None
+    with _playlist_cache_lock:
+        if lesson_id in _playlist_cache:
+            cached_mtime, cached_content = _playlist_cache[lesson_id]
+            if cached_mtime == current_mtime:
+                template_content = cached_content
+
+    if template_content is None:
+        raw_content = playlist_file.read_text(encoding="utf-8")
+        lines = raw_content.splitlines()
+        rewritten_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("#EXT-X-KEY:"):
+                clean_key_line = re.sub(r'URI="([^"?]+)(?:\?[^"]*)?"', r'URI="\1"', stripped)
+                rewritten_lines.append(clean_key_line)
+            else:
+                rewritten_lines.append(stripped)
+        template_content = "\n".join(rewritten_lines)
+        with _playlist_cache_lock:
+            if len(_playlist_cache) > 500:
+                _playlist_cache.clear()
+            _playlist_cache[lesson_id] = (current_mtime, template_content)
+
+    final_content = template_content
+    if st:
+        final_content = re.sub(r'(#EXT-X-KEY:[^"\n]*URI="[^"]+)"', rf'\1?st={st}"', final_content)
 
     return Response(
-        content=content,
+        content=final_content,
         media_type="application/vnd.apple.mpegurl",
         headers={
             "Cache-Control": "private, no-cache, no-store, must-revalidate",
@@ -1020,7 +1067,6 @@ async def get_lesson_hls_key(
 
     key_file = Config.CHUNKS_DIR / "hls" / lesson_id / "enc.key"
     if not key_file.exists():
-        from backend.r2_storage import get_r2_storage
         r2 = get_r2_storage()
         if r2.is_configured():
             r2_key_bytes = r2.get_hls_file_bytes(lesson_id, "enc.key")
@@ -1120,7 +1166,6 @@ async def get_lesson_hls_segment(
         )
 
     if not seg_file.exists():
-        from backend.r2_storage import get_r2_storage
         r2 = get_r2_storage()
         if r2.is_configured():
             r2_bytes = r2.get_hls_file_bytes(lesson_id, clean_seg)
@@ -1293,6 +1338,13 @@ async def get_lesson_mcq_quiz(
     if not allowed:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
 
+    lesson = db.get_lesson(lesson_id)
+    course_id = lesson.get("course_id") if lesson else None
+    is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+    is_admin = bool(request.headers.get("x-admin-key"))
+    if not is_free_preview and course_id and not is_admin:
+        verify_supabase_user_and_enrollment(authorization, token, course_id)
+
     res = assignment_engine.generate_mcq_quiz(lesson_id, count=5)
     if "error" in res and not res.get("questions"):
         raise HTTPException(status_code=400, detail=res["error"])
@@ -1303,7 +1355,9 @@ async def get_lesson_mcq_quiz(
 async def verify_lesson_mcq_quiz(
     lesson_id: str,
     body: MCQVerifyRequest,
-    request: Request
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
 ):
     """
     Verifies student's submitted answers against the server truth.
@@ -1313,6 +1367,13 @@ async def verify_lesson_mcq_quiz(
     allowed, remaining = check_rate_limit(client_ip, f"mcq_verify:{lesson_id}", max_requests=30, window_seconds=60)
     if not allowed:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded. Please wait {remaining} seconds.")
+
+    lesson = db.get_lesson(lesson_id)
+    course_id = lesson.get("course_id") if lesson else None
+    is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+    is_admin = bool(request.headers.get("x-admin-key"))
+    if not is_free_preview and course_id and not is_admin:
+        verify_supabase_user_and_enrollment(authorization, token, course_id)
 
     res = assignment_engine.verify_mcq_answers(lesson_id, body.answers, student_id=body.student_id)
     if "error" in res and "score" not in res:
@@ -1488,7 +1549,6 @@ async def upload_assignment_image(
 @app.get("/api/assignments/assets/{filename}")
 async def get_local_assignment_asset(filename: str):
     """Fallback handler for local assignment assets."""
-    from backend.config import Config
     clean_name = os.path.basename(filename)
     path = Config.CHUNKS_DIR / "assignment_assets" / clean_name
     if not path.exists():
@@ -1554,6 +1614,16 @@ async def get_lesson_assignment(
     Student endpoint: Fetches active published assignment for the lesson.
     If student_id is provided, attaches student's previous submission and report card.
     """
+    lesson = db.get_lesson(lesson_id)
+    course_id = lesson.get("course_id") if lesson else None
+    is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+    is_teacher_or_admin = bool(
+        request.headers.get("x-admin-key") or
+        request.query_params.get("include_draft") == "true"
+    )
+    if not is_free_preview and course_id and not is_teacher_or_admin:
+        verify_supabase_user_and_enrollment(authorization, token, course_id)
+
     assignment = db.get_assignment_by_lesson(lesson_id, status="published")
     if not assignment:
         is_teacher = bool(
@@ -1585,7 +1655,9 @@ async def get_lesson_assignment(
 async def submit_assignment(
     assignment_id: str,
     body: AssignmentSubmitRequest,
-    request: Request
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
 ):
     """
     Student endpoint: Submits solution code / text for automated AI evaluation.
@@ -1595,6 +1667,12 @@ async def submit_assignment(
     allowed, remaining = check_rate_limit(client_ip, f"assign_submit:{assignment_id}", max_requests=6, window_seconds=60)
     if not body.submission_content or len(body.submission_content.strip()) < 5:
         raise HTTPException(status_code=400, detail="Submission content must be at least 5 characters.")
+
+    assignment = db.get_assignment_by_id(assignment_id)
+    course_id = assignment.get("course_id") if assignment else None
+    is_admin = bool(request.headers.get("x-admin-key"))
+    if course_id and not is_admin:
+        verify_supabase_user_and_enrollment(authorization, token, course_id)
 
     # Enforce strict single-submission immutability (cannot re-submit once graded)
     existing_sub = db.get_submission(assignment_id, body.student_id)
@@ -1836,8 +1914,7 @@ async def init_drive_upload(req: InitDriveUploadRequest, request: Request):
     # Browser Origin header is strictly required by Google Drive to emit Access-Control-Allow-Origin on PUT response
     raw_origin = request.headers.get("origin") or request.headers.get("referer") or ""
     if raw_origin:
-        from urllib.parse import urlparse
-        p = urlparse(raw_origin)
+        p = urllib.parse.urlparse(raw_origin)
         headers['Origin'] = f"{p.scheme}://{p.netloc}"
     else:
         headers['Origin'] = "http://127.0.0.1:8000"
@@ -2088,7 +2165,12 @@ def cancel_job(job_id: str):
 
 
 @app.post("/api/chat")
-def chat_query(req: ChatRequest, request: Request):
+def chat_query(
+    req: ChatRequest,
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
     client_ip = get_client_ip(request)
     allowed, retry_after = check_rate_limit(client_ip, "chat", max_requests=30, window_seconds=60)
     if not allowed:
@@ -2096,6 +2178,14 @@ def chat_query(req: ChatRequest, request: Request):
     reload_config()
     if not Config.GEMINI_API_KEY:
         raise HTTPException(status_code=400, detail="Gemini API Key is not configured.")
+
+    if req.lesson_id:
+        lesson = db.get_lesson(req.lesson_id)
+        course_id = lesson.get("course_id") if lesson else None
+        is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+        is_admin = bool(request.headers.get("x-admin-key"))
+        if not is_free_preview and course_id and not is_admin:
+            verify_supabase_user_and_enrollment(authorization, token, course_id)
 
     try:
         engine = RAGEngine(
