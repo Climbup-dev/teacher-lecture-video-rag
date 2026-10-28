@@ -2429,6 +2429,7 @@ def verify_and_get_meet_url(req: JoinLiveSessionRequest):
         
     return {
         "status": "authorized",
+        "authorized": True,
         "session_id": session.get("id"),
         "title": session.get("title"),
         "host_name": session.get("host_name"),
