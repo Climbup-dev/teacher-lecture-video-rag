@@ -1012,13 +1012,14 @@ async def get_lesson_hls_playlist(
 async def get_lesson_hls_key(
     lesson_id: str,
     request: Request,
+    st: Optional[str] = Query(None),
     token: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None)
 ):
     """
     Guarded AES-128 decryption key endpoint.
     Only releases the 16-byte key to authorized, verified in-app student players.
-    Download extensions (FetchV, Stream Recorder, IDM) do not possess the in-app player signature and are blocked with 403.
+    Download extensions (FetchV, Stream Recorder, IDM, yt-dlp) and unauthorized sessions are blocked with 403.
     """
     client_ip = get_client_ip(request)
     threat = detect_download_attempt(request)
@@ -1034,17 +1035,32 @@ async def get_lesson_hls_key(
         )
         raise HTTPException(status_code=403, detail="Key access blocked for automated tools or downloader extensions.")
 
-    # 1. Require authorized in-app player header
-    # Downloader extensions running in background scripts cannot produce this header
-    player_header = request.headers.get("x-climbup-player", "").strip()
-    if player_header != AUTHORIZED_PLAYER_HEADER_VALUE:
+    # 1. Verify Authorization: Either authorized in-app player header, valid signed stream token (st), or valid enrollment
+    is_authorized = is_authorized_player(request)
+    if not is_authorized and st:
+        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
+        if is_valid:
+            is_authorized = True
+        else:
+            raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
+
+    if not is_authorized and (token or authorization):
+        lesson = db.get_lesson(lesson_id)
+        is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
+        if is_free_preview:
+            is_authorized = True
+        else:
+            verify_supabase_user_and_enrollment(authorization, token, lesson.get("course_id") if lesson else None)
+            is_authorized = True
+
+    if not is_authorized:
         db.log_security_threat(
             lesson_id=lesson_id,
             lesson_title="Target Lesson Key",
-            threat_type="UNAUTHORIZED_KEY_GRABBER_EXTENSION",
+            threat_type="UNAUTHORIZED_KEY_EXTRACTION",
             ip_address=client_ip,
             user_agent=request.headers.get("user-agent", ""),
-            details="Downloader extension attempted to download AES-128 key without player signature."
+            details="Unauthorized attempt to extract AES-128 key without player signature or valid signed token."
         )
         raise HTTPException(
             status_code=403,
@@ -1056,8 +1072,8 @@ async def get_lesson_hls_key(
     if referer and not any(d in referer for d in ["practq45.online", "myclimbup.xyz", "localhost", "127.0.0.1", "web.app", "run.app"]):
         raise HTTPException(status_code=403, detail="Direct key extraction from unauthorized domain/tool blocked.")
 
-    # 3. Rate limit key requests: Normal playback only needs 1-2 keys per lesson!
-    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=10, window_seconds=60)
+    # 3. Rate limit key requests: Allow up to 60/min for rapid scrubbing and buffer restarts
+    key_allowed, retry_after = check_rate_limit(client_ip, f"key_{lesson_id}", max_requests=60, window_seconds=60)
     if not key_allowed:
         raise HTTPException(status_code=429, detail=f"Key request rate limit reached. Please wait {retry_after}s.")
 

@@ -133,23 +133,31 @@ class TestHLSEncryptedStreamingSecurity(unittest.TestCase):
         )
         self.assertEqual(res_forged.status_code, 403)
 
-        # 3. Legitimate in-app browser playback (requires authorized player header)
-        res_allowed = self.client.get(
+        # 3. Legitimate in-app browser playback with signed stream token
+        res_allowed_token = self.client.get(
             f"/api/lessons/{self.test_lesson_id}/hls/key?st={valid_st}",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+        )
+        self.assertEqual(res_allowed_token.status_code, 200)
+        self.assertEqual(len(res_allowed_token.content), 16)
+
+        # 4. Legitimate playback with player handshake header
+        res_allowed_header = self.client.get(
+            f"/api/lessons/{self.test_lesson_id}/hls/key",
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
                 "X-Climbup-Player": "amirshaikh320340"
             }
         )
-        self.assertEqual(res_allowed.status_code, 200)
-        self.assertEqual(len(res_allowed.content), 16)
+        self.assertEqual(res_allowed_header.status_code, 200)
+        self.assertEqual(len(res_allowed_header.content), 16)
 
-        # 4. Downloader without player handshake header is blocked
-        res_no_header = self.client.get(
-            f"/api/lessons/{self.test_lesson_id}/hls/key?st={valid_st}",
+        # 5. Direct request without token and without player handshake header is blocked
+        res_no_auth = self.client.get(
+            f"/api/lessons/{self.test_lesson_id}/hls/key",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
         )
-        self.assertEqual(res_no_header.status_code, 403)
+        self.assertEqual(res_no_auth.status_code, 403)
 
     def test_06_segment_scraper_protection(self):
         """Verify that segments block automated scrapers."""
