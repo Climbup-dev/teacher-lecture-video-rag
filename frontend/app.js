@@ -6452,6 +6452,53 @@ function setupLiveClassesManager() {
     });
   }
 
+  const btnAutoCalendarMeet = document.getElementById("btn-auto-calendar-meet");
+  if (btnAutoCalendarMeet) {
+    btnAutoCalendarMeet.addEventListener("click", async () => {
+      const courseId = liveCourseSelect?.value;
+      if (!courseId) {
+        alert("Please select a course first so we can auto-attach its enrolled students.");
+        liveCourseSelect?.focus();
+        return;
+      }
+      const title = document.getElementById("live-title-input")?.value?.trim() || "ClimbUP Live Lecture Masterclass";
+      const scheduledAt = document.getElementById("live-datetime-input")?.value;
+      const description = document.getElementById("live-desc-input")?.value?.trim() || "";
+
+      const origText = btnAutoCalendarMeet.innerHTML;
+      btnAutoCalendarMeet.disabled = true;
+      btnAutoCalendarMeet.innerHTML = "⏳ Generating...";
+
+      try {
+        const res = await fetch("/api/live/generate-calendar-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            course_id: courseId,
+            title: title,
+            description: description,
+            scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.calendar_url) {
+          if (data.invite_string) {
+            navigator.clipboard.writeText(data.invite_string).catch(() => {});
+          }
+          window.open(data.calendar_url, "_blank");
+          alert(`🎉 Google Calendar opened with ${data.enrolled_count || 0} enrolled students pre-filled as invited guests!\n\n1. In Google Calendar, click "Save" (and "Send" invites).\n2. Copy the generated Google Meet link.\n3. Paste the link into the "Google Meet Link" box here and click "Save & Publish".\n\n🛡️ Zero-Admit Active: Enrolled students enter directly. Uninvited strangers are rejected automatically by Google Meet without prompting the teacher!`);
+        } else {
+          alert("Failed to generate calendar link: " + (data.detail || "Server error"));
+        }
+      } catch (err) {
+        alert("Error: " + err.message);
+      } finally {
+        btnAutoCalendarMeet.disabled = false;
+        btnAutoCalendarMeet.innerHTML = origText;
+      }
+    });
+  }
+
   if (scheduleLiveForm) {
     scheduleLiveForm.addEventListener("submit", async (e) => {
       e.preventDefault();

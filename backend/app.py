@@ -19,6 +19,8 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 import time
+import datetime
+import urllib.parse
 import threading
 import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response, Header, Query
@@ -2369,6 +2371,53 @@ def get_course_enrolled_emails_endpoint(course_id: str):
     except Exception as e:
         logger.exception("Error fetching course enrolled emails: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/live/generate-calendar-link")
+def generate_calendar_link(req: Dict[str, Any]):
+    """
+    Auto-populates a Google Calendar template URL with:
+    - Session Title & Description
+    - Start and End Times
+    - ALL enrolled student emails in the 'add' guest parameter.
+    When saved with 'Restricted' mode, Google Meet strictly admits invited students
+    and auto-rejects uninvited strangers without interrupting the teacher!
+    """
+    course_id = req.get("course_id", "")
+    title = req.get("title") or "ClimbUP Live Lecture"
+    description = req.get("description") or "Live Lecture Session for enrolled students."
+    scheduled_at = req.get("scheduled_at")
+    
+    enrolled_emails = db.get_course_enrolled_emails(course_id) if course_id else []
+    
+    start_dt = None
+    if scheduled_at:
+        try:
+            start_dt = datetime.datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
+        except Exception:
+            pass
+    if not start_dt:
+        start_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+        
+    end_dt = start_dt + datetime.timedelta(hours=1)
+    dates_str = f"{start_dt.strftime('%Y%m%dT%H%M%SZ')}/{end_dt.strftime('%Y%m%dT%H%M%SZ')}"
+    
+    params = {
+        "action": "TEMPLATE",
+        "text": title,
+        "details": f"{description}\n\n[ClimbUP Zero-Admit Live Class]\nEnrolled Guests: {len(enrolled_emails)} students.",
+        "dates": dates_str
+    }
+    if enrolled_emails:
+        params["add"] = ",".join(enrolled_emails)
+        
+    cal_url = f"https://calendar.google.com/calendar/render?{urllib.parse.urlencode(params)}"
+    return {
+        "status": "success",
+        "calendar_url": cal_url,
+        "enrolled_count": len(enrolled_emails),
+        "emails": enrolled_emails,
+        "invite_string": ", ".join(enrolled_emails)
+    }
 
 @app.post("/api/live/schedule")
 def schedule_live_session(req: ScheduleLiveSessionRequest):

@@ -419,11 +419,16 @@
               </div>
 
               <div class="form-group">
-                <label for="live-meet-url-input" class="form-label">Google Meet Link *</label>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <label for="live-meet-url-input" class="form-label" style="margin-bottom: 0;">Google Meet Link *</label>
+                  <button type="button" id="btn-auto-calendar-meet" class="btn btn-xs" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; font-weight: 600; padding: 5px 12px; border-radius: 6px; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);">
+                    ✨ 1-Click Auto-Create Meet with Guests
+                  </button>
+                </div>
                 <input type="url" id="live-meet-url-input" class="form-control" placeholder="https://meet.google.com/xxx-yyyy-zzz" required />
-                <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
-                  💡 Pro-tip: Create a meeting on <a href="https://meet.google.com" target="_blank" style="color: #60a5fa;">meet.google.com</a> or Google Calendar and paste the link here.
-                </span>
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 6px; background: rgba(30, 41, 59, 0.6); padding: 8px 10px; border-radius: 6px; border-left: 3px solid #10b981;">
+                  🛡️ <strong>Zero-Admit Security:</strong> Click the blue button above. Google Calendar opens with <strong>all enrolled students already added as guests</strong>. Only they can join directly. Any unauthorized link copy-pasters are <strong>rejected automatically by Google</strong> without prompting the teacher!
+                </div>
               </div>
 
               <div class="form-group">
@@ -1288,7 +1293,7 @@
 
   </div>
 
-  <script src="app.js?v=20261028_live_sessions_escape_fix"></script>
+  <script src="app.js?v=20261028_zero_admit_calendar_sync"></script>
 
   <!-- ========== CREATE COURSE MODAL (POPUP DIALOG) ========== -->
   <style id="cc-modal-critical-styles">
