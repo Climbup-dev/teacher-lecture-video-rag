@@ -280,14 +280,14 @@ class StudentEnrollRequest(BaseModel):
 @app.get("/api/status")
 def get_status():
     reload_config()
-    gdm = GoogleDriveManager()
+    is_gdrive = bool(Config.GOOGLE_CREDENTIALS_JSON or Config.GOOGLE_OAUTH_REFRESH_TOKEN)
     return {
         "deepgram_configured": bool(Config.DEEPGRAM_API_KEY),
         "gemini_configured": bool(Config.GEMINI_API_KEY),
         "supabase_configured": bool(Config.SUPABASE_URL and Config.SUPABASE_KEY),
-        "google_drive_configured": gdm.is_configured(),
+        "google_drive_configured": is_gdrive,
         "google_drive_folder_id": Config.GOOGLE_DRIVE_FOLDER_ID,
-        "total_lessons_indexed": len(db.list_lessons()),
+        "total_lessons_indexed": len(db._read_local_store().get("lessons", {})),
         "total_chunks_indexed": len(db._read_local_store().get("chunks", []))
     }
 
@@ -2292,6 +2292,169 @@ def load_sample_lecture():
         "lesson_id": lesson_id,
         "title": title
     }
+
+# ========================================================
+# Google Meet Live Sessions & Invite-Only Gatekeeper APIs
+# ========================================================
+
+class ScheduleLiveSessionRequest(BaseModel):
+    course_id: str
+    title: str
+    description: Optional[str] = ""
+    scheduled_at: str
+    meet_url: str
+    host_name: Optional[str] = "Faculty"
+
+class JoinLiveSessionRequest(BaseModel):
+    session_id: str
+    student_email: Optional[str] = ""
+    user_id: Optional[str] = ""
+
+class UpdateLiveSessionStatusRequest(BaseModel):
+    status: str
+    recording_url: Optional[str] = None
+
+@app.get("/api/live/sessions")
+def list_live_sessions(course_id: Optional[str] = None, status: Optional[str] = None):
+    """
+    Fetches list of live sessions filtered by course and status.
+    Security: The raw meet_url is omitted from public response to prevent leakage.
+    """
+    try:
+        raw_sessions = db.get_live_sessions(course_id=course_id, status=status)
+        sanitized = []
+        for s in raw_sessions:
+            sanitized.append({
+                "id": s.get("id"),
+                "course_id": s.get("course_id"),
+                "title": s.get("title"),
+                "description": s.get("description"),
+                "scheduled_at": s.get("scheduled_at"),
+                "status": s.get("status"),
+                "host_name": s.get("host_name", "Faculty"),
+                "has_meet_url": bool(s.get("meet_url")),
+                "recording_url": s.get("recording_url"),
+                "created_at": s.get("created_at")
+            })
+        return {"status": "success", "sessions": sanitized, "count": len(sanitized)}
+    except Exception as e:
+        logger.exception("Error fetching live sessions: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/live/admin/sessions")
+def list_admin_live_sessions(course_id: Optional[str] = None):
+    """Admin view: fetches full session details including meet_url."""
+    try:
+        sessions = db.get_live_sessions(course_id=course_id)
+        return {"status": "success", "sessions": sessions, "count": len(sessions)}
+    except Exception as e:
+        logger.exception("Error fetching admin live sessions: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/live/courses/{course_id}/enrolled-emails")
+def get_course_enrolled_emails_endpoint(course_id: str):
+    """
+    Returns all enrolled student emails for a course.
+    Includes comma-separated string for 1-click Google Calendar / Meet invite paste.
+    """
+    try:
+        emails = db.get_course_enrolled_emails(course_id=course_id)
+        return {
+            "status": "success",
+            "course_id": course_id,
+            "count": len(emails),
+            "emails": emails,
+            "invite_string": ", ".join(emails)
+        }
+    except Exception as e:
+        logger.exception("Error fetching course enrolled emails: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/live/schedule")
+def schedule_live_session(req: ScheduleLiveSessionRequest):
+    """Schedules a new Google Meet live lecture session."""
+    if not req.course_id or not req.title or not req.scheduled_at:
+        raise HTTPException(status_code=400, detail="course_id, title, and scheduled_at are required.")
+    
+    clean_meet_url = req.meet_url.strip()
+    if clean_meet_url and not clean_meet_url.startswith("http"):
+        clean_meet_url = f"https://{clean_meet_url}"
+        
+    try:
+        session = db.schedule_live_session(
+            course_id=req.course_id,
+            title=req.title,
+            description=req.description or "",
+            scheduled_at=req.scheduled_at,
+            meet_url=clean_meet_url,
+            host_name=req.host_name or "Faculty"
+        )
+        return {
+            "status": "success",
+            "session": session,
+            "message": "Live lecture scheduled successfully"
+        }
+    except Exception as e:
+        logger.exception("Error scheduling live session: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/live/join-meet")
+def verify_and_get_meet_url(req: JoinLiveSessionRequest):
+    """
+    STRICT SECURITY GATEKEEPER:
+    Validates that the requesting student is actively enrolled in the course.
+    Only authorized enrolled students receive the real Google Meet link.
+    """
+    session = db.get_live_session_by_id(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Live lecture session not found.")
+        
+    course_id = session.get("course_id")
+    meet_url = session.get("meet_url")
+    if not meet_url:
+        raise HTTPException(status_code=400, detail="Google Meet link has not been set by instructor.")
+        
+    # Strict Enrollment Check
+    is_enrolled = db.is_student_enrolled(
+        course_id=course_id,
+        email=req.student_email or "",
+        user_id=req.user_id or ""
+    )
+    
+    if not is_enrolled:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Only students enrolled in this course can join the live lecture."
+        )
+        
+    return {
+        "status": "authorized",
+        "session_id": session.get("id"),
+        "title": session.get("title"),
+        "host_name": session.get("host_name"),
+        "meet_url": meet_url,
+        "student_email": req.student_email,
+        "message": f"Access granted for {req.student_email}. Join using this email account."
+    }
+
+@app.patch("/api/live/sessions/{session_id}/status")
+def update_live_session_status(session_id: str, req: UpdateLiveSessionStatusRequest):
+    """Updates live session status ('scheduled', 'live', 'completed', 'cancelled')."""
+    valid_statuses = ["scheduled", "live", "completed", "cancelled"]
+    if req.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of {valid_statuses}")
+    success = db.update_live_session_status(session_id, req.status, req.recording_url)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or update failed.")
+    return {"status": "success", "message": f"Session status updated to {req.status}"}
+
+@app.delete("/api/live/sessions/{session_id}")
+def delete_live_session(session_id: str):
+    """Deletes a live session."""
+    success = db.delete_live_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or delete failed.")
+    return {"status": "success", "message": "Session deleted successfully"}
 
 # Mount uploads directory for fallback video streaming
 uploads_path = Config.UPLOADS_DIR

@@ -108,6 +108,15 @@
           <span>Students</span>
           <span class="tab-badge" id="tab-students-count">0</span>
         </button>
+
+        <button class="nav-tab" data-view="live-classes" id="tab-btn-live-classes" title="Google Meet Live Lectures">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+          </svg>
+          <span>Live Classes</span>
+          <span class="tab-badge" id="tab-live-count" style="background: rgba(239, 68, 68, 0.2); color: #ef4444;">0</span>
+        </button>
       </nav>
 
       <!-- Nav Right: Settings & Account -->
@@ -340,6 +349,130 @@
                 <tr>
                   <td colspan="7" style="text-align: center; padding: 36px; color: var(--text-muted);">
                     Loading students...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================== -->
+      <!-- TAB 3: GOOGLE MEET LIVE SESSIONS           -->
+      <!-- ========================================== -->
+      <section class="view-panel" id="view-live-classes">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">Google Meet Live Lectures</h2>
+            <p class="view-subtitle">Schedule HD 2-way interactive live sessions, enforce invite-only enrollment security, and launch Google Meet.</p>
+          </div>
+          <div class="view-actions">
+            <button class="btn btn-primary" id="btn-show-schedule-live" style="background: linear-gradient(135deg, #10b981, #059669); border: none;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="16"></line>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+              </svg>
+              Schedule Live Class
+            </button>
+          </div>
+        </div>
+
+        <!-- Schedule Live Class Modal / Form -->
+        <div class="modal-backdrop" id="schedule-live-modal" style="display: none;">
+          <div class="modal-card glass-panel" style="max-width: 580px;">
+            <div class="modal-header">
+              <h3>Schedule Google Meet Lecture</h3>
+              <button class="btn-close" id="btn-close-schedule-live">&times;</button>
+            </div>
+            <form id="schedule-live-form" class="modal-body" style="display: flex; flex-direction: column; gap: 16px;">
+              <div class="form-group">
+                <label for="live-course-select" class="form-label">Course *</label>
+                <select id="live-course-select" class="form-control" required style="background: #0f172a; color: #fff;">
+                  <option value="">Select a Course...</option>
+                </select>
+              </div>
+
+              <!-- Enrolled Students Auto-Sync Box -->
+              <div id="enrolled-students-preview-box" style="display: none; background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 12px 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="font-size: 13px; font-weight: 600; color: #93c5fd;">
+                    👥 <span id="live-enrolled-count">0</span> Enrolled Students (Invite List)
+                  </span>
+                  <button type="button" class="btn btn-xs" id="btn-copy-enrolled-emails" style="background: #2563eb; color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;">
+                    📋 Copy Emails for Google Meet
+                  </button>
+                </div>
+                <p style="font-size: 11px; color: #94a3b8; margin: 0;">
+                  Click above to copy comma-separated emails, then paste directly into your Google Calendar / Meet event guest box to auto-admit them!
+                </p>
+              </div>
+
+              <div class="form-group">
+                <label for="live-title-input" class="form-label">Session Topic / Title *</label>
+                <input type="text" id="live-title-input" class="form-control" placeholder="e.g. Live Q&A: System Design & Project Architecture" required />
+              </div>
+
+              <div class="form-group">
+                <label for="live-datetime-input" class="form-label">Date & Time *</label>
+                <input type="datetime-local" id="live-datetime-input" class="form-control" required style="color-scheme: dark;" />
+              </div>
+
+              <div class="form-group">
+                <label for="live-meet-url-input" class="form-label">Google Meet Link *</label>
+                <input type="url" id="live-meet-url-input" class="form-control" placeholder="https://meet.google.com/xxx-yyyy-zzz" required />
+                <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">
+                  💡 Pro-tip: Create a meeting on <a href="https://meet.google.com" target="_blank" style="color: #60a5fa;">meet.google.com</a> or Google Calendar and paste the link here.
+                </span>
+              </div>
+
+              <div class="form-group">
+                <label for="live-host-name-input" class="form-label">Instructor Name</label>
+                <input type="text" id="live-host-name-input" class="form-control" placeholder="Amir Shaikh" value="Amir Shaikh" />
+              </div>
+
+              <div class="form-group">
+                <label for="live-desc-input" class="form-label">Description / Instructions (Optional)</label>
+                <textarea id="live-desc-input" class="form-control" rows="2" placeholder="Topics to cover, prerequisites, setup instructions..."></textarea>
+              </div>
+
+              <div id="schedule-live-feedback" style="display: none; padding: 10px; border-radius: 6px; font-size: 13px;"></div>
+
+              <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-schedule-live">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="btn-submit-schedule-live">Save & Publish Schedule</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Live Sessions List Table -->
+        <div class="glass-panel" style="padding: 24px; border-radius: 14px; margin-top: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 12px;">
+            <h3 style="font-size: 1.1rem; font-weight: 700; margin: 0;">Scheduled & Active Lectures</h3>
+            <div style="display: flex; gap: 10px;">
+              <button class="btn btn-sm btn-secondary" id="btn-refresh-live-sessions">
+                🔄 Refresh
+              </button>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="data-table" style="width: 100%;">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Topic & Details</th>
+                  <th>Course</th>
+                  <th>Date & Time</th>
+                  <th>Instructor</th>
+                  <th style="text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="live-sessions-table-body">
+                <tr>
+                  <td colspan="6" style="text-align: center; padding: 36px; color: var(--text-muted);">
+                    Loading live sessions...
                   </td>
                 </tr>
               </tbody>
@@ -1155,7 +1288,7 @@
 
   </div>
 
-  <script src="app.js?v=20261027_mcq_zero_error_calibrator"></script>
+  <script src="app.js?v=20261028_live_sessions_escape_fix"></script>
 
   <!-- ========== CREATE COURSE MODAL (POPUP DIALOG) ========== -->
   <style id="cc-modal-critical-styles">

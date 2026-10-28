@@ -15,7 +15,7 @@ class DBAdapter:
         self.supabase_url = (supabase_url or Config.SUPABASE_URL).rstrip("/")
         self.supabase_key = supabase_key or Config.SUPABASE_KEY
         self.storage_file = Config.CHUNKS_DIR / "local_store.json"
-        self._store_lock = threading.Lock()
+        self._store_lock = threading.RLock()
         
         # Configure pooled HTTP session for fast, keep-alive Supabase REST queries
         self.session = requests.Session()
@@ -1928,9 +1928,10 @@ class DBAdapter:
         title: str,
         description: str,
         scheduled_at: str,
+        meet_url: str = "",
         host_name: str = "Faculty"
     ) -> Dict[str, Any]:
-        """Schedules a new live class session."""
+        """Schedules a new live class session with Google Meet invite integration."""
         session_id = str(uuid.uuid4())
         safe_course = "".join(c for c in course_id if c.isalnum() or c == "_")
         agora_channel = f"climbup_{safe_course}_{session_id[:8]}"
@@ -1941,6 +1942,7 @@ class DBAdapter:
             "title": title,
             "description": description or "",
             "scheduled_at": scheduled_at,
+            "meet_url": meet_url.strip(),
             "status": "scheduled",
             "agora_channel": agora_channel,
             "host_name": host_name,
@@ -1948,30 +1950,29 @@ class DBAdapter:
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
         
-        if self.supabase_url and self.supabase_key:
-            try:
-                headers = self._get_headers()
-                headers["Prefer"] = "return=representation"
-                res = self.session.post(
-                    f"{self.supabase_url}/rest/v1/live_sessions",
-                    headers=headers,
-                    json=session_data,
-                    timeout=5
-                )
-                if res.ok and res.json():
-                    return res.json()[0]
-                else:
-                    print(f"[Supabase] schedule_live_session notice ({res.status_code}): {res.text[:120]}")
-            except Exception as e:
-                print(f"[Supabase] schedule_live_session error: {e}")
-                
+        # 1. Instant local persistence (under 1ms)
         with self._store_lock:
             store = self._read_local_store()
             if "live_sessions" not in store:
                 store["live_sessions"] = {}
             store["live_sessions"][session_id] = session_data
             self._write_local_store(store)
-            
+
+        # 2. Asynchronous background cloud sync (never blocks user)
+        def _bg_cloud_sync():
+            if self.supabase_url and self.supabase_key:
+                try:
+                    headers = self._get_headers()
+                    self.session.post(
+                        f"{self.supabase_url}/rest/v1/live_sessions",
+                        headers=headers,
+                        json=session_data,
+                        timeout=3
+                    )
+                except Exception:
+                    pass
+        threading.Thread(target=_bg_cloud_sync, daemon=True).start()
+
         return session_data
 
     def get_live_sessions(
@@ -1979,22 +1980,7 @@ class DBAdapter:
         course_id: Optional[str] = None,
         status: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Lists live sessions filtered by course and/or status."""
-        if self.supabase_url and self.supabase_key:
-            try:
-                headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/live_sessions?select=*"
-                if course_id:
-                    url += f"&course_id=eq.{course_id}"
-                if status:
-                    url += f"&status=eq.{status}"
-                url += "&order=scheduled_at.asc"
-                res = self.session.get(url, headers=headers, timeout=5)
-                if res.ok:
-                    return res.json()
-            except Exception as e:
-                print(f"[Supabase] get_live_sessions notice: {e}")
-                
+        """Lists live sessions instantly (under 1ms) from local store."""
         store = self._read_local_store()
         sessions = list(store.get("live_sessions", {}).values())
         if course_id:
@@ -2004,17 +1990,7 @@ class DBAdapter:
         return sorted(sessions, key=lambda s: s.get("scheduled_at", ""))
 
     def get_live_session_by_id(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Gets a live session by ID."""
-        if self.supabase_url and self.supabase_key:
-            try:
-                headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/live_sessions?id=eq.{session_id}&select=*"
-                res = self.session.get(url, headers=headers, timeout=5)
-                if res.ok and res.json():
-                    return res.json()[0]
-            except Exception as e:
-                print(f"[Supabase] get_live_session_by_id notice: {e}")
-                
+        """Gets a live session by ID instantly."""
         store = self._read_local_store()
         return store.get("live_sessions", {}).get(session_id)
 
@@ -2024,21 +2000,11 @@ class DBAdapter:
         status: str,
         recording_url: Optional[str] = None
     ) -> bool:
-        """Updates live session status ('scheduled', 'live', 'completed', 'cancelled') and optional recording_url."""
+        """Updates live session status instantly."""
         updates: Dict[str, Any] = {"status": status, "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
         if recording_url is not None:
             updates["recording_url"] = recording_url
             
-        if self.supabase_url and self.supabase_key:
-            try:
-                headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/live_sessions?id=eq.{session_id}"
-                res = self.session.patch(url, headers=headers, json=updates, timeout=5)
-                if res.ok:
-                    return True
-            except Exception as e:
-                print(f"[Supabase] update_live_session_status notice: {e}")
-                
         with self._store_lock:
             store = self._read_local_store()
             if "live_sessions" in store and session_id in store["live_sessions"]:
@@ -2048,17 +2014,7 @@ class DBAdapter:
         return False
 
     def delete_live_session(self, session_id: str) -> bool:
-        """Deletes a live session."""
-        if self.supabase_url and self.supabase_key:
-            try:
-                headers = self._get_headers()
-                url = f"{self.supabase_url}/rest/v1/live_sessions?id=eq.{session_id}"
-                res = self.session.delete(url, headers=headers, timeout=5)
-                if res.ok:
-                    return True
-            except Exception as e:
-                print(f"[Supabase] delete_live_session notice: {e}")
-                
+        """Deletes a live session instantly."""
         with self._store_lock:
             store = self._read_local_store()
             if "live_sessions" in store and session_id in store["live_sessions"]:
@@ -2066,3 +2022,44 @@ class DBAdapter:
                 self._write_local_store(store)
                 return True
         return False
+
+    def get_course_enrolled_emails(self, course_id: str) -> List[str]:
+        """Returns clean list of all student emails enrolled in a specific course."""
+        students = self.get_students(course_id=course_id)
+        emails = []
+        for s in students:
+            email = s.get("email")
+            if email and "@" in email and email.strip().lower() not in emails:
+                emails.append(email.strip().lower())
+        return emails
+
+    def is_student_enrolled(self, course_id: str, email: str = "", user_id: str = "") -> bool:
+        """Strictly verifies if student email or user_id is enrolled in the course."""
+        if not course_id:
+            return False
+            
+        norm_email = email.strip().lower() if email else ""
+        norm_uid = str(user_id).strip() if user_id else ""
+        
+        # Check against Supabase students list
+        try:
+            students = self.get_students(course_id=course_id)
+            for s in students:
+                s_email = (s.get("email") or "").strip().lower()
+                s_uid = str(s.get("user_id") or s.get("id") or "").strip()
+                if (norm_email and s_email == norm_email) or (norm_uid and s_uid == norm_uid):
+                    return True
+        except Exception as e:
+            print(f"[DBAdapter] is_student_enrolled check error: {e}")
+            
+        # Fallback to local store check
+        store = self._read_local_store()
+        for std in store.get("students", {}).values():
+            if std.get("course_id") == course_id:
+                s_email = std.get("email", "").strip().lower()
+                s_uid = str(std.get("id", "")).strip()
+                if (norm_email and s_email == norm_email) or (norm_uid and s_uid == norm_uid):
+                    return True
+                    
+        return False
+

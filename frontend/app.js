@@ -2863,6 +2863,14 @@ document.addEventListener("DOMContentLoaded", () => {
   // 9. INITIAL BOOT
   // ==========================================
   async function init() {
+    // Load courses, lessons, students and live sessions immediately in parallel
+    loadCourses();
+    loadAllLessons();
+    loadStudents();
+    if (typeof window.loadLiveSessions === "function") {
+      window.loadLiveSessions();
+    }
+
     try {
       const res = await fetch("/api/status");
       if (res.ok) {
@@ -2873,11 +2881,6 @@ document.addEventListener("DOMContentLoaded", () => {
       console.warn("Backend status check failed:", e);
     }
 
-    await loadCourses();
-    await loadAllLessons();
-    await loadStudents();
-
-    // Default to the first course or applied AI
     if (coursesCache.length > 0) {
       const defaultCourse = coursesCache.find(c => c.id === currentCourseId) || coursesCache[0];
       currentCourseId = defaultCourse.id;
@@ -6318,11 +6321,385 @@ function setupMcqManagerStudio() {
   }
 }
 
-// Auto-run Gatekeeper, Studio, Submissions & MCQs on DOM ready
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// ========================================================
+// GOOGLE MEET LIVE SESSIONS & INVITE GATEKEEPER MANAGER
+// ========================================================
+function setupLiveClassesManager() {
+  const tabBtnLiveClasses = document.getElementById("tab-btn-live-classes");
+  const tabLiveCount = document.getElementById("tab-live-count");
+  const btnShowScheduleLive = document.getElementById("btn-show-schedule-live");
+  const scheduleLiveModal = document.getElementById("schedule-live-modal");
+  const btnCloseScheduleLive = document.getElementById("btn-close-schedule-live");
+  const btnCancelScheduleLive = document.getElementById("btn-cancel-schedule-live");
+  const scheduleLiveForm = document.getElementById("schedule-live-form");
+  const liveCourseSelect = document.getElementById("live-course-select");
+  const enrolledPreviewBox = document.getElementById("enrolled-students-preview-box");
+  const liveEnrolledCount = document.getElementById("live-enrolled-count");
+  const btnCopyEnrolledEmails = document.getElementById("btn-copy-enrolled-emails");
+  const scheduleLiveFeedback = document.getElementById("schedule-live-feedback");
+  const liveSessionsTableBody = document.getElementById("live-sessions-table-body");
+  const btnRefreshLiveSessions = document.getElementById("btn-refresh-live-sessions");
+
+  let currentEnrolledEmailsString = "";
+
+  if (tabBtnLiveClasses) {
+    tabBtnLiveClasses.addEventListener("click", () => {
+      const viewPanels = document.querySelectorAll(".view-panel");
+      viewPanels.forEach(p => p.classList.remove("active"));
+      const p = document.getElementById("view-live-classes");
+      if (p) p.classList.add("active");
+
+      document.querySelectorAll(".nav-tab").forEach(t => t.classList.remove("active"));
+      tabBtnLiveClasses.classList.add("active");
+      loadLiveSessions();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  if (btnShowScheduleLive) {
+    btnShowScheduleLive.addEventListener("click", () => {
+      populateCourseSelect();
+      if (scheduleLiveModal) {
+        scheduleLiveModal.style.display = "flex";
+        document.body.style.overflow = "hidden";
+      }
+      const dtInput = document.getElementById("live-datetime-input");
+      if (dtInput) {
+        const now = new Date();
+        now.setHours(now.getHours() + 1);
+        now.setMinutes(0);
+        dtInput.value = now.toISOString().slice(0, 16);
+      }
+    });
+  }
+
+  function hideModal() {
+    if (scheduleLiveModal) scheduleLiveModal.style.display = "none";
+    document.body.style.overflow = "";
+    if (scheduleLiveFeedback) scheduleLiveFeedback.style.display = "none";
+  }
+
+  if (btnCloseScheduleLive) btnCloseScheduleLive.addEventListener("click", hideModal);
+  if (btnCancelScheduleLive) btnCancelScheduleLive.addEventListener("click", hideModal);
+
+  async function populateCourseSelect() {
+    if (!liveCourseSelect) return;
+    liveCourseSelect.innerHTML = '<option value="">Select a Course...</option>';
+    try {
+      const res = await fetch("/api/courses");
+      if (res.ok) {
+        const courses = await res.json();
+        if (Array.isArray(courses)) {
+          courses.forEach(c => {
+            const opt = document.createElement("option");
+            opt.value = c.id;
+            opt.textContent = `${c.title} (${c.id})`;
+            liveCourseSelect.appendChild(opt);
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch courses list:", e);
+    }
+  }
+
+  if (liveCourseSelect) {
+    liveCourseSelect.addEventListener("change", async () => {
+      const cid = liveCourseSelect.value;
+      if (!cid) {
+        if (enrolledPreviewBox) enrolledPreviewBox.style.display = "none";
+        return;
+      }
+      try {
+        const res = await fetch(`/api/live/courses/${encodeURIComponent(cid)}/enrolled-emails`);
+        if (res.ok) {
+          const data = await res.json();
+          currentEnrolledEmailsString = data.invite_string || "";
+          if (liveEnrolledCount) liveEnrolledCount.textContent = data.count || 0;
+          if (enrolledPreviewBox) enrolledPreviewBox.style.display = "block";
+        }
+      } catch (e) {
+        console.warn("Could not fetch course enrolled emails:", e);
+      }
+    });
+  }
+
+  if (btnCopyEnrolledEmails) {
+    btnCopyEnrolledEmails.addEventListener("click", () => {
+      if (!currentEnrolledEmailsString) {
+        alert("No enrolled students found for this course yet.");
+        return;
+      }
+      navigator.clipboard.writeText(currentEnrolledEmailsString).then(() => {
+        const prevText = btnCopyEnrolledEmails.innerHTML;
+        btnCopyEnrolledEmails.innerHTML = "✅ Copied to Clipboard!";
+        btnCopyEnrolledEmails.style.background = "#10b981";
+        setTimeout(() => {
+          btnCopyEnrolledEmails.innerHTML = prevText;
+          btnCopyEnrolledEmails.style.background = "#2563eb";
+        }, 3000);
+      });
+    });
+  }
+
+  if (scheduleLiveForm) {
+    scheduleLiveForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const courseId = liveCourseSelect.value;
+      const title = document.getElementById("live-title-input")?.value?.trim();
+      const scheduledAt = document.getElementById("live-datetime-input")?.value;
+      const meetUrl = document.getElementById("live-meet-url-input")?.value?.trim();
+      const hostName = document.getElementById("live-host-name-input")?.value?.trim() || "Faculty";
+      const description = document.getElementById("live-desc-input")?.value?.trim() || "";
+
+      if (!courseId || !title || !scheduledAt || !meetUrl) {
+        alert("Please fill in all required fields.");
+        return;
+      }
+
+      const submitBtn = document.getElementById("btn-submit-schedule-live");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Scheduling...";
+      }
+
+      try {
+        const res = await fetch("/api/live/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            course_id: courseId,
+            title: title,
+            description: description,
+            scheduled_at: new Date(scheduledAt).toISOString(),
+            meet_url: meetUrl,
+            host_name: hostName
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          hideModal();
+          scheduleLiveForm.reset();
+          loadLiveSessions();
+          alert(`🎉 Live Class Scheduled!\n\n${data.enrolled_count || 0} enrolled students can now see this in their classroom.\n\nDon't forget to paste student emails into Google Calendar / Meet event!`);
+        } else {
+          if (scheduleLiveFeedback) {
+            scheduleLiveFeedback.style.display = "block";
+            scheduleLiveFeedback.style.background = "rgba(239, 68, 68, 0.2)";
+            scheduleLiveFeedback.style.color = "#f87171";
+            scheduleLiveFeedback.textContent = data.detail || "Failed to schedule live class.";
+          }
+        }
+      } catch (err) {
+        alert("Error scheduling class: " + err.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Save & Publish Schedule";
+        }
+      }
+    });
+  }
+
+  if (btnRefreshLiveSessions) {
+    btnRefreshLiveSessions.addEventListener("click", loadLiveSessions);
+  }
+
+  async function loadLiveSessions() {
+    if (!liveSessionsTableBody) return;
+    liveSessionsTableBody.innerHTML = `
+      <tr>
+        <td colspan="6" style="text-align: center; padding: 36px; color: var(--text-muted);">
+          Fetching live sessions...
+        </td>
+      </tr>
+    `;
+
+    try {
+      const res = await fetch("/api/live/admin/sessions");
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      const sessions = data.sessions || [];
+
+      const activeCount = sessions.filter(s => s.status === "live" || s.status === "scheduled").length;
+      if (tabLiveCount) tabLiveCount.textContent = activeCount;
+
+      if (sessions.length === 0) {
+        liveSessionsTableBody.innerHTML = `
+          <tr>
+            <td colspan="6" style="text-align: center; padding: 48px; color: var(--text-muted);">
+              <div style="font-size: 32px; margin-bottom: 8px;">📅</div>
+              <div style="font-weight: 600; color: #fff; margin-bottom: 4px;">No Live Sessions Scheduled</div>
+              <p style="font-size: 13px; margin: 0 0 16px 0;">Schedule your first Google Meet live class with invite-only security.</p>
+              <button class="btn btn-sm btn-primary" onclick="document.getElementById('btn-show-schedule-live').click()">
+                + Schedule Live Lecture
+              </button>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      let rowsHtml = "";
+      sessions.forEach(s => {
+        const isLive = s.status === "live";
+        const isScheduled = s.status === "scheduled";
+        const isCompleted = s.status === "completed";
+
+        let statusBadge = "";
+        if (isLive) {
+          statusBadge = `<span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; background: rgba(239, 68, 68, 0.2); color: #f87171; font-weight: 700; font-size: 11px; border: 1px solid rgba(239, 68, 68, 0.4);">
+            <span style="width: 7px; height: 7px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 8px #ef4444;"></span>
+            LIVE NOW
+          </span>`;
+        } else if (isScheduled) {
+          statusBadge = `<span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; font-weight: 600; font-size: 11px; border: 1px solid rgba(59, 130, 246, 0.3);">
+            🕒 Scheduled
+          </span>`;
+        } else if (isCompleted) {
+          statusBadge = `<span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; background: rgba(16, 185, 129, 0.15); color: #34d399; font-weight: 600; font-size: 11px; border: 1px solid rgba(16, 185, 129, 0.3);">
+            ✓ Completed
+          </span>`;
+        } else {
+          statusBadge = `<span style="padding: 4px 10px; border-radius: 9999px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; font-size: 11px;">${s.status}</span>`;
+        }
+
+        const dateStr = s.scheduled_at ? new Date(s.scheduled_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "-";
+
+        rowsHtml += `
+          <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+            <td style="padding: 14px 16px;">${statusBadge}</td>
+            <td style="padding: 14px 16px;">
+              <div style="font-weight: 600; color: #fff; font-size: 14px;">${escapeHtml(s.title || "Live Lecture")}</div>
+              ${s.description ? `<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(s.description)}</div>` : ""}
+            </td>
+            <td style="padding: 14px 16px;">
+              <span style="font-size: 12px; font-family: monospace; color: #93c5fd; background: rgba(59, 130, 246, 0.1); padding: 2px 8px; border-radius: 4px;">
+                ${escapeHtml(s.course_id)}
+              </span>
+            </td>
+            <td style="padding: 14px 16px; font-size: 13px; color: #cbd5e1;">${dateStr}</td>
+            <td style="padding: 14px 16px; font-size: 13px; color: #cbd5e1;">${escapeHtml(s.host_name || "Faculty")}</td>
+            <td style="padding: 14px 16px; text-align: right;">
+              <div style="display: inline-flex; gap: 6px; align-items: center;">
+                ${isScheduled ? `
+                  <button class="btn btn-xs btn-primary" onclick="window.updateLiveSessionState('${s.id}', 'live')" style="background: #ef4444; border-color: #dc2626;" title="Start Lecture Now">
+                    🔴 Go Live
+                  </button>
+                ` : ""}
+                ${isLive ? `
+                  <button class="btn btn-xs btn-secondary" onclick="window.updateLiveSessionState('${s.id}', 'completed')" style="background: #059669; color: #fff;" title="End Class">
+                    ⏹️ End Class
+                  </button>
+                ` : ""}
+                ${s.meet_url ? `
+                  <a href="${s.meet_url}" target="_blank" class="btn btn-xs btn-outline" style="color: #60a5fa; border-color: #3b82f6; text-decoration: none;" title="Open Google Meet">
+                    🎥 Join
+                  </a>
+                ` : ""}
+                <button class="btn btn-xs btn-outline" onclick="window.copyCourseInvites('${s.course_id}')" style="color: #38bdf8; border-color: #0284c7;" title="Copy enrolled student emails">
+                  📋 Invites
+                </button>
+                <button class="btn btn-xs btn-danger" onclick="window.deleteLiveSessionEntry('${s.id}')" title="Delete">
+                  🗑️
+                </button>
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+
+      liveSessionsTableBody.innerHTML = rowsHtml;
+    } catch (e) {
+      console.error("Error loading live sessions:", e);
+      liveSessionsTableBody.innerHTML = `
+        <tr>
+          <td colspan="6" style="text-align: center; padding: 24px; color: #f87171;">
+            <div style="margin-bottom: 10px;">Failed to load live sessions. Please check server connection.</div>
+            <button class="btn btn-xs btn-primary" onclick="window.refreshLiveClasses()" style="padding: 6px 14px; font-weight: 600;">🔄 Click to Retry</button>
+          </td>
+        </tr>
+      `;
+    }
+  }
+
+  window.refreshLiveClasses = loadLiveSessions;
+  window.addEventListener("focus", () => {
+    const p = document.getElementById("view-live-classes");
+    if (p && p.classList.contains("active")) {
+      loadLiveSessions();
+    }
+  });
+
+  window.updateLiveSessionState = async (sessionId, newStatus) => {
+    try {
+      const res = await fetch(`/api/live/sessions/${sessionId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        loadLiveSessions();
+      } else {
+        alert("Failed to update status.");
+      }
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  };
+
+  window.deleteLiveSessionEntry = async (sessionId) => {
+    if (!confirm("Are you sure you want to delete this live session?")) return;
+    try {
+      const res = await fetch(`/api/live/sessions/${sessionId}`, { method: "DELETE" });
+      if (res.ok) {
+        loadLiveSessions();
+      } else {
+        alert("Failed to delete session.");
+      }
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  };
+
+  window.copyCourseInvites = async (courseId) => {
+    try {
+      const res = await fetch(`/api/live/courses/${encodeURIComponent(courseId)}/enrolled-emails`);
+      if (res.ok) {
+        const data = await res.json();
+        if (!data.invite_string) {
+          alert("No enrolled students found for this course yet.");
+          return;
+        }
+        await navigator.clipboard.writeText(data.invite_string);
+        alert(`📋 Copied ${data.count} enrolled student email(s) to clipboard!\n\nPaste them directly into your Google Calendar / Meet event guest box.`);
+      }
+    } catch (e) {
+      alert("Error fetching invites: " + e.message);
+    }
+  };
+
+  window.loadLiveSessions = loadLiveSessions;
+  loadLiveSessions();
+}
+
+// Auto-run Gatekeeper, Studio, Submissions, MCQs & Live Classes on DOM ready
 document.addEventListener("DOMContentLoaded", () => {
   checkStrictAdminAuth();
   setupGatekeeperListeners();
   setupAiAssignmentStudio();
   setupMcqManagerStudio();
+  setupLiveClassesManager();
 });
+
 
