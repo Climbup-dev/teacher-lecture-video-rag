@@ -623,14 +623,13 @@ Use the course chapter outline below to provide a structured, chronological road
             "- FIRST 1-2 SENTENCES: Give the direct, plain-language core definition or answer immediately. Zero filler or preamble.\n"
             "- 2 TO 3 SHORT BULLET POINTS: Explain the core mechanism or key takeaways using simple, intuitive language or a quick real-world analogy.\n"
             "- If relevant, provide a clean minimal 2-4 line code snippet.\n"
+            "- EXACT VIDEO JUMP (ONLY WHEN RELEVANT): If the teacher directly explains or demonstrates this concept, attach EXACTLY ONE key timestamp (e.g. '📍 **Watch in Lecture:** [MM:SS]'). Never spam multiple timestamps.\n"
             "- OPTIONAL: 1 short '💡 Pro Tip' at the end for practical/interview context.\n"
-            "- DO NOT include any 'Video Jump Points' list, timestamp reference, or match percentage text.\n"
-            "- Keep total response around 60 to 130 words. Clean, punchy, and zero fluff."
+            "- Keep total response around 70 to 140 words. Clean, punchy, and zero fluff."
             if not is_detail_requested else
             "DETAILED BUT CRISP EXPLANATION DIRECTIVE:\n"
             "- Provide a clear step-by-step conceptual breakdown with mechanisms and minimal clean code examples.\n"
-            "- Keep it highly structured with concise bullet points, avoiding repetitive filler.\n"
-            "- DO NOT append any 'Video Jump Points' list or timestamp section at the end."
+            "- Include at most 1 exact video timestamp [MM:SS] only for the primary demonstration moment."
         )
 
         # 4. Prompt for Elite Pedagogical Teaching & Mentoring
@@ -665,12 +664,18 @@ PEDAGOGICAL GUIDELINES:
    - If the student asks in **Hindi / Hinglish**: Respond in natural, warm, friendly, clear developer Hinglish (e.g., "Dekho, simple shabdon mein...", "Basically yahan par teacher ne samjhaya hai ki...").
    - If the student asks in **English**: Respond in crisp, well-structured, professional English.
 
-5. 💡 PRO TIP (Optional 1-liner):
+5. 📍 EXACT VIDEO JUMP (ONLY WHEN RELEVANT & IMPORTANT):
+   - If the teacher demonstrates or explains this topic in the video, include EXACTLY ONE timestamp at the end:
+     📍 **Watch in Lecture:** [MM:SS]
+   - Never provide a list of multiple timestamps. Only 1 exact, high-value jump point when genuinely useful.
+
+6. 💡 PRO TIP (Optional 1-liner):
    - End with a single crisp "💡 Pro Tip" to help the student remember this for interviews or practical projects.
 
-6. 🚫 STRICT PROHIBITIONS:
-   - Do NOT add any "Video Jump Points", "Timestamp Reference", or percentage match text.
-   - Do NOT add conversational fluff ("Hope this helps!", "Let me know if you need more info!").
+7. 🚫 STRICT PROHIBITIONS:
+   - Do NOT spam multiple timestamps or create 'Video Jump Points' lists.
+   - Do NOT mention percentage match, similarity scores, or internal metadata.
+   - Do NOT add conversational filler ("Hope this helps!", "Let me know if you have questions!").
 """
 
         max_tokens_to_gen = 500 if is_detail_requested else 280
