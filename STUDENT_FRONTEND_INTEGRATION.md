@@ -1,7 +1,7 @@
 # ClimbUP Student Frontend Integration Guide
 ## Connecting Student Chatbot to EduRAG Lecture Video RAG Server
 
-This document provides a step-by-step guide to seamlessly connect the **ClimbUP Student Frontend** (Next.js / React) with the live **EduRAG Backend Server** (`https://teacher-lecture-rag-28929614461.asia-south1.run.app` or local `http://127.0.0.1:8000`).
+This document provides a step-by-step guide to seamlessly connect the **ClimbUP Student Frontend** (Next.js / React) with the live **EduRAG Backend Server** (`https://teacher-lecture-video-rag.onrender.com` or local `http://127.0.0.1:8000`).
 
 ---
 
@@ -32,8 +32,8 @@ In your `climbup-nextjs/.env.local` file, add the backend server URL:
 # Local Development
 NEXT_PUBLIC_RAG_SERVER_URL=http://127.0.0.1:8000
 
-# Production (Google Cloud Run)
-# NEXT_PUBLIC_RAG_SERVER_URL=https://teacher-lecture-rag-28929614461.asia-south1.run.app
+# Production (Render)
+# NEXT_PUBLIC_RAG_SERVER_URL=https://teacher-lecture-video-rag.onrender.com
 ```
 
 ---
