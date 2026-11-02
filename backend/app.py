@@ -996,6 +996,8 @@ async def get_lesson_hls_playlist(
     final_content = template_content
     if st:
         final_content = re.sub(r'(#EXT-X-KEY:[^"\n]*URI="[^"]+)"', rf'\1?st={st}"', final_content)
+        # Append signed token to all .ts segment lines so CDN/Vercel proxies never drop playback auth
+        final_content = re.sub(r'(^|\n)(segment_[^\r\n?#]+\.ts)', rf'\1\2?st={st}', final_content)
 
     return Response(
         content=final_content,
