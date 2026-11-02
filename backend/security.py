@@ -149,8 +149,8 @@ def detect_download_attempt(request: Request) -> Optional[Tuple[str, str]]:
         if indicator in origin or indicator in referer:
             return "BROWSER_EXTENSION_DOWNLOAD_INTERCEPT", f"Browser extension '{indicator}' direct media fetch blocked."
 
-    # Authorized in-app player with genuine player key or signed stream token
-    if is_authorized_player(request) or request.query_params.get("st"):
+    # Only authorized in-app player with genuine player key is permitted
+    if is_authorized_player(request):
         return None
 
     # 2. Check known scraper / downloader user agents

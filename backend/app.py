@@ -995,8 +995,9 @@ async def get_lesson_hls_playlist(
 
     final_content = template_content
     if st:
-        final_content = re.sub(r'(#EXT-X-KEY:[^"\n]*URI="[^"]+)"', rf'\1?st={st}"', final_content)
-        # Append signed token to all .ts segment lines so CDN/Vercel proxies never drop playback auth
+        # Keep #EXT-X-KEY clean without ?st= token so browser extensions (Stream Recorder, FetchV) cannot harvest the key!
+        # In-app player supplies X-Climbup-Player header to fetch the key.
+        # Append signed token ONLY to .ts segment lines so legitimate video buffering never drops playback auth.
         final_content = re.sub(r'(^|\n)(segment_[^\r\n?#]+\.ts)', rf'\1\2?st={st}', final_content)
 
     return Response(
@@ -1037,15 +1038,9 @@ async def get_lesson_hls_key(
         )
         raise HTTPException(status_code=403, detail="Key access blocked for automated tools or downloader extensions.")
 
-    # 1. Verify Authorization: Either authorized in-app player header, valid signed stream token (st), or valid enrollment
+    # 1. Anti-Piracy Guard: Decryption key is strictly locked to verified in-app player header or authorized student session.
+    # Third-party download extensions (Stream Recorder, FetchV, IDM, yt-dlp) do not possess player credentials and are blocked.
     is_authorized = is_authorized_player(request)
-    if not is_authorized and st:
-        is_valid, uid, err_reason = verify_signed_stream_token(st, lesson_id, client_ip)
-        if is_valid:
-            is_authorized = True
-        else:
-            raise HTTPException(status_code=403, detail=f"Signed key token invalid or expired: {err_reason}")
-
     if not is_authorized and (token or authorization):
         lesson = db.get_lesson(lesson_id)
         is_free_preview = bool(lesson.get("is_free_preview", False)) if lesson else False
@@ -1165,9 +1160,12 @@ async def get_lesson_hls_segment(
     # Allow initial pre-buffering and timeline scrubbing up to 60 segments per 6s for authorized players (15 for others).
     # Key by user identity/token to support 200+ students even if sharing the same campus/hostel Wi-Fi NAT IP
     is_player = is_authorized_player(request)
-    max_seg_reqs = 60 if is_player else 15
+    # Anti-chunk-dumping: Human playback consumes 1 segment every 6s. Allow generous buffer/scrub for in-app player (35 seg/10s),
+    # while strictly throttling automated downloader extensions to max 4 segments per 10s.
+    max_seg_reqs = 35 if is_player else 4
     rate_identity = authorization or token or st or client_ip
-    allowed, retry_after = check_rate_limit(rate_identity, f"chunk_dump_{lesson_id}", max_requests=max_seg_reqs, window_seconds=6)
+    limiter_key = f"chunk_dump_{'player' if is_player else 'ext'}_{lesson_id}"
+    allowed, retry_after = check_rate_limit(rate_identity, limiter_key, max_requests=max_seg_reqs, window_seconds=10)
     if not allowed:
         db.log_security_threat(
             lesson_id=lesson_id,
@@ -1175,7 +1173,7 @@ async def get_lesson_hls_segment(
             threat_type="BULK_CHUNK_DUMPING_DETECTED",
             ip_address=client_ip,
             user_agent=request.headers.get("user-agent", ""),
-            details=f"Automated segment dumping detected (exceeded {max_seg_reqs} segments in 6s). Throttled for {retry_after}s."
+            details=f"Automated segment dumping detected (exceeded {max_seg_reqs} segments in 10s). Throttled for {retry_after}s."
         )
         raise HTTPException(
             status_code=429,
