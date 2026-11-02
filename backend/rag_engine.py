@@ -618,15 +618,19 @@ Use the course chapter outline below to provide a structured, chronological road
 """
 
         conciseness_instruction = (
-            "CONCISENESS DIRECTIVE (CRITICAL - AVOID LONG ESSAYS / WALLS OF TEXT):\n"
-            "- Answer the student's exact doubt directly in the very first 1-2 sentences.\n"
-            "- Provide 2 to 3 crisp, well-structured bullet points highlighting the core mechanism, code logic, or concept as taught in the video.\n"
-            "- Keep total response length compact and punchy (around 100 to 220 words max).\n"
-            "- End with 1 to 2 exact video jump points [MM:SS]."
+            "STRICT CONCISENESS & HIGH-QUALITY DIRECTIVE:\n"
+            "- Deliver an ultra-clear, high-quality, short explanation that can be understood in 15 seconds.\n"
+            "- FIRST 1-2 SENTENCES: Give the direct, plain-language core definition or answer immediately. Zero filler or preamble.\n"
+            "- 2 TO 3 SHORT BULLET POINTS: Explain the core mechanism or key takeaways using simple, intuitive language or a quick real-world analogy.\n"
+            "- If relevant, provide a clean minimal 2-4 line code snippet.\n"
+            "- OPTIONAL: 1 short '💡 Pro Tip' at the end for practical/interview context.\n"
+            "- DO NOT include any 'Video Jump Points' list, timestamp reference, or match percentage text.\n"
+            "- Keep total response around 60 to 130 words. Clean, punchy, and zero fluff."
             if not is_detail_requested else
-            "DETAILED EXPLANATION DIRECTIVE:\n"
-            "- The student explicitly requested a detailed breakdown. Provide a thorough, step-by-step conceptual explanation with mechanisms and code/diagram hints strictly grounded in the video.\n"
-            "- Include exact video jump points [MM:SS]."
+            "DETAILED BUT CRISP EXPLANATION DIRECTIVE:\n"
+            "- Provide a clear step-by-step conceptual breakdown with mechanisms and minimal clean code examples.\n"
+            "- Keep it highly structured with concise bullet points, avoiding repetitive filler.\n"
+            "- DO NOT append any 'Video Jump Points' list or timestamp section at the end."
         )
 
         # 4. Prompt for Elite Pedagogical Teaching & Mentoring
@@ -661,16 +665,15 @@ PEDAGOGICAL GUIDELINES:
    - If the student asks in **Hindi / Hinglish**: Respond in natural, warm, friendly, clear developer Hinglish (e.g., "Dekho, simple shabdon mein...", "Basically yahan par teacher ne samjhaya hai ki...").
    - If the student asks in **English**: Respond in crisp, well-structured, professional English.
 
-5. ⏱️ CLICKABLE VIDEO JUMP POINTS:
-   - Conclude with 1 to 3 exact video jump points referencing where the teacher discussed the topic:
-     ### ⏱️ Video Jump Points
-     * ⏱️ [MM:SS] - Concept or demonstration label
-
-6. 💡 PRO TIP / KEY TAKEAWAY:
+5. 💡 PRO TIP (Optional 1-liner):
    - End with a single crisp "💡 Pro Tip" to help the student remember this for interviews or practical projects.
+
+6. 🚫 STRICT PROHIBITIONS:
+   - Do NOT add any "Video Jump Points", "Timestamp Reference", or percentage match text.
+   - Do NOT add conversational fluff ("Hope this helps!", "Let me know if you need more info!").
 """
 
-        max_tokens_to_gen = 900 if is_detail_requested else 550
+        max_tokens_to_gen = 500 if is_detail_requested else 280
         raw_answer = self._generate_pedagogical_answer(system_instructions, safe_query, max_tokens=max_tokens_to_gen)
 
         # Extract timestamps for video jump badges
@@ -712,7 +715,7 @@ PEDAGOGICAL GUIDELINES:
 
         return {
             "answer": raw_answer,
-            "retrieved_evidence": evidence_summary,
+            "retrieved_evidence": [],
             "video_timestamps": found_timestamps
         }
 
